@@ -1,0 +1,72 @@
+/**
+ * lcd_internal.h — cross-file glue for the lcd component (private to src/lcd_ui).
+ *
+ * Public API is lcd.h; the board HAL is lcd_board.h. This header wires the
+ * internal modules: core task (lcd.cpp), LVGL bring-up (lcd_lvgl.cpp), icon
+ * cache + loader (lcd_icons.cpp), launcher (lcd_launcher.cpp), status bar
+ * (lcd_statusbar.cpp). Everything here runs on the lcd task unless noted.
+ */
+#pragma once
+
+#include "lvgl.h"
+#include "lcd.h"
+#include "lcd_board.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+/* Opaque status bar height (px), reserved at the top of the screen. Program
+ * layers and the launcher live below it. */
+#define LCD_STATUSBAR_H 24
+
+/* ---- lcd.cpp ---- */
+/** The lcd task handle (for aux sends from other tasks / the loader). */
+extern TaskHandle_t lcdTaskHandle;
+/** Registered board HAL (lcdSetBoard), or nullptr if none. */
+const lcd_board_t* lcdBoard(void);
+
+/* ---- lcd_lvgl.cpp: display + input bring-up ---- */
+/** boardLcdInit + lv_init + display/flush/tick + (optional) touch indev.
+ *  Returns false on failure. */
+bool        lcdLvglInit(void);
+int         lcdScreenW(void);
+int         lcdScreenH(void);
+/** Focus group for non-pointer indevs (encoder/keypad). Launcher icons join
+ *  it so a trackball-only board navigates the same UI. */
+lv_group_t* lcdInputGroup(void);
+
+/* ---- lcd_icons.cpp: RAM cache + lv_fs driver + loader ---- */
+/** Register the in-RAM lv_fs driver ('D') and start the loader task. Call
+ *  after lv_init(). */
+void        lcdIconsInit(void);
+/** Resolve a basename to its LVGL src path at the current resolution, e.g.
+ *  "D:/fixed/lcd/icons/64x64/rns.bin". Returns out. */
+const char* lcdIconSrc(const char* basename, char* out, size_t outLen);
+/** True iff the current-resolution bytes for `basename` are already cached
+ *  (lcd-task-only). */
+bool        lcdIconReady(const char* basename);
+/** Ask the loader (off the lcd task) to fetch the current-resolution bytes
+ *  for `basename`. On completion the lcd task caches them and calls
+ *  lcdLauncherIconLoaded(basename). No-op if already cached. */
+void        lcdIconRequest(const char* basename);
+/** Current icon resolution bucket (e.g. "64x64"), from s.lcd.icon_res. */
+const char* lcdIconRes(void);
+/** Re-read s.lcd.icon_res; returns true if it changed (caller reloads). */
+bool        lcdIconResRefresh(void);
+
+/* ---- lcd_launcher.cpp ---- */
+void        lcdLauncherInit(lv_obj_t* screen);
+/** Add (or refresh) a program tile. Runs on the lcd task. */
+void        lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn);
+/** A basename's bytes just landed in the cache — set the real image. */
+void        lcdLauncherIconLoaded(const char* basename);
+/** Re-resolve every tile's icon src after an icon_res change. */
+void        lcdLauncherReload(void);
+/** Hide the current program layer and reveal the launcher. */
+void        lcdGoHomeInternal(void);
+
+/* ---- lcd_statusbar.cpp ---- */
+void        lcdStatusbarInit(void);
+
+/* ---- lcd_settings.cpp ---- */
+/** Register the built-in Settings (gear) program with the launcher. */
+void        lcdSettingsInit(void);
