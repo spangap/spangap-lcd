@@ -36,7 +36,7 @@ namespace {
 struct Blob { uint8_t* data = nullptr; size_t size = 0; };
 
 std::unordered_map<std::string, Blob> s_cache;   /* lcd task only; key = abs path */
-std::string  s_res = "64x64";                    /* lcd task only */
+std::string  s_res = "40x40";                    /* lcd task only */
 lv_fs_drv_t  s_drv;
 QueueHandle_t s_loadQ = nullptr;
 
@@ -137,8 +137,8 @@ void loaderFn(void*) {
 /* ---- internal API ---- */
 
 void lcdIconsInit(void) {
-    s_res = storageGetStr("s.lcd.icon_res", "64x64");
-    if (s_res.empty()) s_res = "64x64";
+    s_res = storageGetStr("s.lcd.icon_res", "40x40");
+    if (s_res.empty()) s_res = "40x40";
 
     lv_fs_drv_init(&s_drv);
     s_drv.letter   = 'D';
@@ -176,8 +176,8 @@ void lcdIconRequest(const char* basename) {
 const char* lcdIconRes(void) { return s_res.c_str(); }
 
 bool lcdIconResRefresh(void) {
-    std::string nr = storageGetStr("s.lcd.icon_res", "64x64");
-    if (nr.empty()) nr = "64x64";
+    std::string nr = storageGetStr("s.lcd.icon_res", "40x40");
+    if (nr.empty()) nr = "40x40";
     if (nr == s_res) return false;
     s_res = nr;
     return true;

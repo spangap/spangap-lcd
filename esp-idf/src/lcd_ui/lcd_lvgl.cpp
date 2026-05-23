@@ -32,10 +32,23 @@ static lv_display_t*          s_disp  = nullptr;
 static esp_lcd_touch_handle_t s_touch = nullptr;
 static lv_indev_t*            s_indev = nullptr;
 static lv_indev_t*            s_btnIndev = nullptr;   /* hardware Home/centre button */
-static lv_indev_t*            s_kbIndev = nullptr;    /* hardware QWERTY keyboard */
 static lv_group_t*            s_group = nullptr;
 static int                    s_w = 0, s_h = 0;
 static SemaphoreHandle_t      s_dmaDone = nullptr;   /* given when a strip's DMA completes */
+
+/* Event-mode input bookkeeping (all touched only on the lcd task). The indevs
+ * are LV_INDEV_MODE_EVENT, so they only read when lcdInputPoll() drives them. */
+static lv_timer_t*            s_touchTrack = nullptr; /* 10ms re-read while a finger is down */
+static lv_timer_t*            s_btnHold    = nullptr; /* 1s "hold = go home" one-shot */
+static bool                   s_btnLong    = false;   /* hold fired → suppress the release click */
+static bool                   s_inputAgain = false;   /* a read cb wants an immediate follow-up read */
+
+/* Trackball/mouse pointer (board->pointer_read). The board owns the position; we
+ * own the LVGL pointer indev, the cursor object, and its show-on-move/auto-hide. */
+static lv_indev_t*            s_ptrIndev   = nullptr;
+static lv_obj_t*              s_cursor     = nullptr;
+static lv_timer_t*            s_ptrHide    = nullptr; /* one-shot: hide the cursor after inactivity */
+static int                    s_ptrVisMs   = 2000;    /* <0 = always visible */
 
 /* Strip DMA completed (ISR context). Wakes the flush, which then drops the
  * shared-bus lock. */
@@ -63,15 +76,17 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     lv_display_flush_ready(disp);
 }
 
+/* Re-read the touch while a finger is down — the GT911 INT only guarantees the
+ * first edge, so this 10ms one keeps tracking smooth, then deletes itself on
+ * release (see touchReadCb). Runs on the lcd task inside lv_timer_handler. */
+static void touchTrackCb(lv_timer_t*) { if (s_indev) lv_indev_read(s_indev); }
+
 static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
     auto tp = static_cast<esp_lcd_touch_handle_t>(lv_indev_get_user_data(indev));
     esp_lcd_touch_point_data_t pt[1] = {};
     uint8_t cnt = 0;
     esp_lcd_touch_read_data(tp);
     esp_lcd_touch_get_data(tp, pt, &cnt, 1);
-    /* Poll fast (10ms) while a finger is down for smooth tracking/gestures;
-     * relax to ~30ms when up. */
-    lv_timer_set_period(lv_indev_get_read_timer(indev), cnt > 0 ? 10 : 30);
     static bool wasDown = false;   /* TEMP calib: log on the press edge only */
     if (cnt > 0) {
         /* GT911 reports raw native-portrait coords (esp_lcd_touch left identity).
@@ -84,68 +99,110 @@ static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
         data->point.x = x;
         data->point.y = y;
         data->state   = LV_INDEV_STATE_PRESSED;
-        if (!wasDown) info("touch raw=(%d,%d) -> (%d,%d)\n", pt[0].x, pt[0].y, x, y);
+        if (!wasDown) dbg("touch raw=(%d,%d) -> (%d,%d)\n", pt[0].x, pt[0].y, x, y);
         wasDown = true;
+        if (!s_touchTrack) s_touchTrack = lv_timer_create(touchTrackCb, 10, nullptr);
     } else {
         data->state   = LV_INDEV_STATE_RELEASED;
         wasDown = false;
+        if (s_touchTrack) { lv_timer_delete(s_touchTrack); s_touchTrack = nullptr; }
     }
 }
 
 /* Hardware Home/centre button as a keypad indev (board->button_read). It's also
  * the trackball's click, so we mustn't eat every press: a short press emits an
  * ENTER click on the focused item (synthesized as a press+release on two reads),
- * while a hold of >=1s returns to the launcher and is NOT clicked. All on the
- * lcd task — LVGL polls this from lv_timer_handler. */
+ * while a hold of >=1s returns to the launcher and is NOT clicked.
+ *
+ * Event-driven: the button INT wakes the press and release edges; the 1s hold is
+ * a one-shot lv_timer (s_btnHold) armed on press — so there is no per-frame
+ * polling during a hold, only a single deadline. All on the lcd task. */
+static void btnHoldCb(lv_timer_t*) {
+    s_btnHold = nullptr;            /* the one-shot deleted itself after this fire */
+    s_btnLong = true;              /* tell the release edge not to make it a click */
+    lcdGoHomeInternal();
+}
+
+/* The centre/Home button's click-vs-hold state machine, shared by the keypad
+ * button indev and the trackball pointer indev (whichever owns GPIO 0). It never
+ * reports the raw hold as a press: a short press is replayed as a synthesized
+ * press+release over two reads (driven by s_inputAgain), and a >=1 s hold fires
+ * Home via a one-shot lv_timer and is NOT clicked. Returns the press/release to
+ * emit this read, or BTN_NONE (caller reports released). */
+enum btn_action_t { BTN_NONE, BTN_PRESS, BTN_RELEASE };
+static btn_action_t centerButtonStep(bool down) {
+    static enum { IDLE, HELD, CLICK_PRESS, CLICK_RELEASE } phase = IDLE;
+
+    if (phase == CLICK_PRESS)   { phase = CLICK_RELEASE; s_inputAgain = true; return BTN_PRESS; }
+    if (phase == CLICK_RELEASE) { phase = IDLE;                                return BTN_RELEASE; }
+
+    if (down) {
+        if (phase == IDLE) {
+            phase = HELD;
+            s_btnLong = false;
+            s_btnHold = lv_timer_create(btnHoldCb, 1000, nullptr);
+            lv_timer_set_repeat_count(s_btnHold, 1);   /* one-shot: fires once, self-deletes */
+        }
+        return BTN_NONE;                          /* never report the raw hold */
+    }
+
+    if (s_btnHold) { lv_timer_delete(s_btnHold); s_btnHold = nullptr; }
+    if (phase == HELD && !s_btnLong) { phase = CLICK_PRESS; s_inputAgain = true; }  /* short press -> click */
+    else                              phase = IDLE;                                 /* hold already fired */
+    return BTN_NONE;
+}
+
 static void buttonReadCb(lv_indev_t*, lv_indev_data_t* data) {
     const lcd_board_t* board = lcdBoard();
     bool down = board && board->button_read && board->button_read();
-
-    static enum { IDLE, HELD, LONG_FIRED, CLICK_PRESS, CLICK_RELEASE } phase = IDLE;
-    static uint32_t pressedAt = 0;
-
-    data->key = LV_KEY_ENTER;
-
-    /* Replay a synthesized short click across two reads. */
-    if (phase == CLICK_PRESS)   { data->state = LV_INDEV_STATE_PRESSED;  phase = CLICK_RELEASE; return; }
-    if (phase == CLICK_RELEASE) { data->state = LV_INDEV_STATE_RELEASED; phase = IDLE;          return; }
-
-    if (down) {
-        if (phase == IDLE) { phase = HELD; pressedAt = lv_tick_get(); }
-        if (phase == HELD && lv_tick_elaps(pressedAt) >= 1000) {
-            lcdGoHomeInternal();                 /* hold >=1s -> launcher */
-            phase = LONG_FIRED;
-        }
-        data->state = LV_INDEV_STATE_RELEASED;   /* never report the raw hold as a click */
-        return;
-    }
-
-    if (phase == HELD) phase = CLICK_PRESS;      /* released before 1s -> it was a click */
-    else               phase = IDLE;             /* released after a long press -> reset */
-    data->state = LV_INDEV_STATE_RELEASED;
+    data->key   = LV_KEY_ENTER;
+    data->state = (centerButtonStep(down) == BTN_PRESS) ? LV_INDEV_STATE_PRESSED
+                                                        : LV_INDEV_STATE_RELEASED;
 }
 
-/* Hardware QWERTY keyboard as a keypad indev. board->key_read returns the next
- * raw ASCII char (0 = none); we map a few control codes to LVGL keys and pass
- * printable ASCII through. Each char is emitted as a press+release over two
- * reads so the focused textarea registers exactly one keystroke. */
-static uint32_t mapAsciiKey(uint32_t b) {
-    switch (b) {
-        case 13: case 10:  return LV_KEY_ENTER;
-        case 8:  case 127: return LV_KEY_BACKSPACE;
-        case 27:           return LV_KEY_ESC;
-        default:           return (b >= 0x20 && b < 0x7F) ? b : 0;
-    }
+/* ---- trackball / mouse pointer ---- */
+
+static void cursorHideCb(lv_timer_t*) {
+    s_ptrHide = nullptr;
+    if (s_cursor) lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void keyboardReadCb(lv_indev_t*, lv_indev_data_t* data) {
-    static uint32_t held = 0;
-    if (held) { data->key = held; data->state = LV_INDEV_STATE_RELEASED; held = 0; return; }
+/* Show the cursor and (re)start the inactivity countdown. No-op when always-on. */
+static void cursorPoke(void) {
+    if (!s_cursor || s_ptrVisMs < 0) return;
+    lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+    if (s_ptrHide) { lv_timer_reset(s_ptrHide); return; }
+    s_ptrHide = lv_timer_create(cursorHideCb, s_ptrVisMs > 0 ? (uint32_t)s_ptrVisMs : 1, nullptr);
+    lv_timer_set_repeat_count(s_ptrHide, 1);
+}
+
+static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
     const lcd_board_t* board = lcdBoard();
-    uint32_t k = (board && board->key_read) ? mapAsciiKey(board->key_read()) : 0;
-    if (k) { data->key = k; data->state = LV_INDEV_STATE_PRESSED; held = k; }
-    else   { data->state = LV_INDEV_STATE_RELEASED; }
+    int x = 0, y = 0;
+    if (board && board->pointer_read && board->pointer_read(&x, &y)) cursorPoke();  /* moved */
+    data->point.x = x;
+    data->point.y = y;
+
+    bool down = board && board->button_read && board->button_read();
+    if (centerButtonStep(down) == BTN_PRESS) { cursorPoke(); data->state = LV_INDEV_STATE_PRESSED; }
+    else                                       data->state = LV_INDEV_STATE_RELEASED;
 }
+
+void lcdPointerSetVisibleMs(int ms) {
+    s_ptrVisMs = ms;
+    if (!s_cursor) return;
+    if (ms < 0) {                                          /* always visible */
+        if (s_ptrHide) { lv_timer_delete(s_ptrHide); s_ptrHide = nullptr; }
+        lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+    } else if (!lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+        cursorPoke();                                      /* re-time a currently-shown cursor */
+    }
+}
+
+/* The hardware keyboard, if any, is a CONSUMER concern (its quirks vary per
+ * board): the consumer creates its own keypad indev, joins it to lcdInputGroup(),
+ * and drives it via lcdRun(). The lcd component knows nothing about it. See
+ * reticulous/main/tdeck.cpp for the T-Deck implementation. */
 
 static void tickCb(void*) { lv_tick_inc(LCD_TICK_MS); }
 
@@ -194,6 +251,10 @@ bool lcdLvglInit(void) {
     /* Focus group for non-pointer input (populated by the launcher). */
     s_group = lv_group_create();
 
+    /* All indevs are EVENT-mode: LVGL never runs a read timer for them, so there
+     * is no input polling. The board's INT lines (via lcdInputISR) wake the lcd
+     * task, which calls lcdInputPoll() → lv_indev_read() only on a real edge. */
+
     /* Optional touch — pointer indev. Absent boards run without it. */
     s_touch = board->touch_init ? board->touch_init() : nullptr;
     if (s_touch) {
@@ -202,33 +263,80 @@ bool lcdLvglInit(void) {
         lv_indev_set_read_cb(s_indev, touchReadCb);
         lv_indev_set_user_data(s_indev, s_touch);
         lv_indev_set_display(s_indev, s_disp);
+        lv_indev_set_mode(s_indev, LV_INDEV_MODE_EVENT);
     } else {
         info("no touch panel — pointer indev disabled\n");
     }
 
-    /* Optional hardware button (T-Deck centre/Home). Keypad indev on the focus
-     * group: short press clicks the focused tile (the trackball's click), >=1s
-     * hold returns to the launcher. */
-    if (board->button_read) {
+    /* Optional cursor device (T-Deck trackball) — a second pointer indev with a
+     * visible, auto-hiding cursor. The board owns the position (pointer_read); we
+     * own the cursor and route the centre button to it as the click, so the
+     * keypad button indev below is skipped when a cursor device is present. */
+    if (board->pointer_read) {
+        s_cursor = lv_obj_create(lv_layer_sys());      /* above the status bar */
+        lv_obj_remove_style_all(s_cursor);
+        lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_CLICKABLE);   /* never a hit target */
+        lv_obj_set_size(s_cursor, 14, 14);
+        lv_obj_set_style_radius(s_cursor, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s_cursor, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(s_cursor, LV_OPA_50, 0);
+        lv_obj_set_style_border_color(s_cursor, lv_color_black(), 0);
+        lv_obj_set_style_border_width(s_cursor, 2, 0);
+        lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN); /* shown on motion / poke */
+
+        s_ptrIndev = lv_indev_create();
+        lv_indev_set_type(s_ptrIndev, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_read_cb(s_ptrIndev, pointerReadCb);
+        lv_indev_set_display(s_ptrIndev, s_disp);
+        lv_indev_set_cursor(s_ptrIndev, s_cursor);
+        lv_indev_set_mode(s_ptrIndev, LV_INDEV_MODE_EVENT);
+        lcdPointerSetVisibleMs(s_ptrVisMs);   /* apply dwell now the cursor exists
+                                                 (the owner may have set it earlier) */
+    }
+
+    /* Optional hardware button (T-Deck centre/Home), only when no cursor device
+     * claimed it. Keypad indev on the focus group: short press clicks the focused
+     * tile, >=1s hold returns to the launcher. */
+    if (board->button_read && !board->pointer_read) {
         s_btnIndev = lv_indev_create();
         lv_indev_set_type(s_btnIndev, LV_INDEV_TYPE_KEYPAD);
         lv_indev_set_read_cb(s_btnIndev, buttonReadCb);
         lv_indev_set_display(s_btnIndev, s_disp);
         lv_indev_set_group(s_btnIndev, s_group);
+        lv_indev_set_mode(s_btnIndev, LV_INDEV_MODE_EVENT);
     }
 
-    /* Optional hardware keyboard (T-Deck QWERTY). Keypad indev on the same group
-     * so a focused textarea takes its keystrokes; lcdSettingText suppresses the
-     * on-screen keyboard when this is present. */
-    if (board->key_read) {
-        s_kbIndev = lv_indev_create();
-        lv_indev_set_type(s_kbIndev, LV_INDEV_TYPE_KEYPAD);
-        lv_indev_set_read_cb(s_kbIndev, keyboardReadCb);
-        lv_indev_set_display(s_kbIndev, s_disp);
-        lv_indev_set_group(s_kbIndev, s_group);
-    }
+    /* A hardware keyboard, if present, is set up by the consumer (its own keypad
+     * indev joined to s_group via lcdInputGroup()) — see lcdSetHasKeyboard() and
+     * reticulous/main/tdeck.cpp. The lcd component creates no keyboard indev. */
 
     return true;
+}
+
+bool lcdInputPoll(void) {
+    s_inputAgain = false;
+    if (s_indev)    lv_indev_read(s_indev);
+    if (s_ptrIndev) lv_indev_read(s_ptrIndev);
+    if (s_btnIndev) lv_indev_read(s_btnIndev);
+    return s_inputAgain;
+}
+
+/* Pause the per-indev read timer LVGL keeps for its own press timing whenever the
+ * indev is released. LVGL resumes it on press (lv_indev.c) and is supposed to
+ * pause it on release; when that's missed the timer keeps auto-reading the indev
+ * at ~30 Hz, which for a pointer also repositions the cursor → redraws → idle CPU
+ * for no reason. diptych reads every indev manually (event mode) and handles its
+ * own press/hold timing, so these timers should never run when nothing is held. */
+void lcdPauseIdleInputTimers(void) {
+    lv_indev_t* devs[] = { s_indev, s_ptrIndev, s_btnIndev };
+    for (lv_indev_t* in : devs) {
+        if (!in || lv_indev_get_state(in) != LV_INDEV_STATE_RELEASED) continue;
+        lv_timer_t* rt = lv_indev_get_read_timer(in);
+        if (rt && !lv_timer_get_paused(rt)) {
+            lv_timer_pause(rt);
+            dbg("paused idle indev read-timer\n");   /* TEMP: confirm the quiescent-CPU fix */
+        }
+    }
 }
 
 int         lcdScreenW(void)     { return s_w; }

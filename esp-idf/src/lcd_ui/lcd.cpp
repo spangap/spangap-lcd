@@ -17,7 +17,8 @@
 #include "its.h"
 #include "log.h"
 #include "compat.h"
-#include "pm.h"
+
+#include "esp_attr.h"
 
 #include <cstdlib>
 
@@ -27,16 +28,34 @@ static constexpr uint16_t LCD_REG_PORT = 11;
 
 TaskHandle_t lcdTaskHandle = nullptr;
 
-/* Held while the backlight is on: light sleep would freeze the lcd task (no
- * touch polling, no LVGL refresh) and drop the USB-JTAG console. Released when
- * the backlight is 0 (screen off), so the device can still light-sleep dark. */
-static pm_lock_handle_t s_noLightSleep  = nullptr;
-static bool             s_lightLockHeld = false;
+/* Set by lcdInputISR (any input INT), cleared by the loop after it reads the
+ * indevs. The notify wakes itsPoll; this flag tells the loop *why* it woke so it
+ * only touches the input hardware on a real edge — never on a timer tick. */
+static volatile bool s_inputPending = false;
+
+/* The one input ISR, shared by every input INT line (the board attaches it to
+ * touch / button / keyboard). It only flags + wakes us — all reads happen on the
+ * lcd task. IRAM_ATTR + DRAM-only: the gpio ISR service is installed with
+ * ESP_INTR_FLAG_IRAM (LoRa's DIO1 path), so this may not reach flash/PSRAM. */
+extern "C" void IRAM_ATTR lcdInputISR(void* /*arg*/) {
+    s_inputPending = true;
+    if (!lcdTaskHandle) return;
+    BaseType_t hp = pdFALSE;
+    vTaskNotifyGiveFromISR(lcdTaskHandle, &hp);
+    portYIELD_FROM_ISR(hp);
+}
 
 /* Board HAL, registered by the consumer via lcdSetBoard() before diptychInit(). */
 static const lcd_board_t* s_board = nullptr;
 void lcdSetBoard(const lcd_board_t* board) { s_board = board; }
 const lcd_board_t* lcdBoard(void) { return s_board; }
+
+/* Whether the device has a real text keyboard. The lcd component owns no
+ * keyboard; a consumer (e.g. reticulous/main/tdeck.cpp) sets this so Settings text
+ * fields edit in place instead of popping the on-screen keyboard. */
+static bool s_hasKeyboard = false;
+void lcdSetHasKeyboard(bool present) { s_hasKeyboard = present; }
+bool lcdHasKeyboard(void) { return s_hasKeyboard; }
 
 /* ---- aux payloads (delivered on the lcd task) ---- */
 
@@ -90,6 +109,7 @@ void lcdGoHome(void) {
 
 static void lcdTaskFn(void*) {
     itsServerInit();                       /* inbox for aux + storage subs */
+    itsClientInit(2);                      /* client side: Log + CLI programs dial log:1/cli:1 */
     itsOnAux(LCD_RUN_PORT, onRunMsg);
     itsOnAux(LCD_REG_PORT, onRegMsg);
 
@@ -99,10 +119,13 @@ static void lcdTaskFn(void*) {
     lv_obj_t* scr = lv_screen_active();
     lcdLauncherInit(scr);                  /* bottom: program icons */
     lcdSettingsInit();                     /* built-in Settings (gear) tile */
+    lcdAppsInit();                          /* built-in Log + CLI program tiles */
     lcdStatusbarInit();                    /* top: opaque status bar (lv_layer_top) */
 
-    /* Keep the device awake while the screen is on (see s_noLightSleep). */
-    pmLockCreate(PM_NO_LIGHT_SLEEP, "lcd", &s_noLightSleep);
+    /* No NO_LIGHT_SLEEP lock: the panel holds its own GRAM, touch wakes the task
+     * via a GPIO wake source, and the board keeps the backlight PWM alive across
+     * light sleep (board HAL clocks it from RC_FAST with LEDC keep-alive). The
+     * device can light-sleep with the screen on. */
 
     /* Live config. Backlight applies on this task; icon_res change reloads the
      * launcher tiles (loader does the flash reads, never us). */
@@ -110,10 +133,6 @@ static void lcdTaskFn(void*) {
         int lvl = atoi(val);
         const lcd_board_t* b = lcdBoard();
         if (b && b->backlight) b->backlight((uint8_t)lvl);
-        if (s_noLightSleep) {
-            if (lvl > 0 && !s_lightLockHeld)      { pmLockAcquire(s_noLightSleep); s_lightLockHeld = true; }
-            else if (lvl == 0 && s_lightLockHeld) { pmLockRelease(s_noLightSleep); s_lightLockHeld = false; }
-        }
     });
     storageSubscribeChanges("s.lcd.icon_res", ON_CHANGE {
         if (lcdIconResRefresh()) lcdLauncherReload();
@@ -123,9 +142,22 @@ static void lcdTaskFn(void*) {
 
     for (;;) {
         while (itsPoll(0)) {}              /* drain aux / storage callbacks */
+        if (s_inputPending) {             /* woke on a touch/button/key edge */
+            s_inputPending = false;
+            while (lcdInputPoll()) {}      /* drain click / keystroke synthesis */
+        }
+        /* LVGL resumes a pointer indev's read timer on press (for its own
+         * long-press timing) and only pauses it on release — if that pause is
+         * missed, LVGL auto-reads the pointer at ~30 Hz forever (repositioning the
+         * cursor → redraws → quiescent CPU). diptych drives all input manually and
+         * doesn't use LVGL's input timers, so enforce it: pause any released
+         * indev's read timer. */
+        lcdPauseIdleInputTimers();
+        /* Event-mode indevs mean lv_timer_handler no longer polls input, so its
+         * idle return is honest: sleep until the next LVGL timer (animation,
+         * clock, touch-tracking) or an ISR/ITS wake — no more 30ms input poll. */
         uint32_t idle = lv_timer_handler();
-        if (idle == LV_NO_TIMER_READY || idle > 30) idle = 30;
-        itsPoll(pdMS_TO_TICKS(idle));      /* wake on next timer or a message */
+        itsPoll(idle == LV_NO_TIMER_READY ? portMAX_DELAY : pdMS_TO_TICKS(idle));
     }
 }
 
@@ -133,7 +165,7 @@ void lcdInit(void) {
     if (lcdTaskHandle) return;
 
     storageDefault("s.lcd.backlight",    200);
-    storageDefault("s.lcd.icon_res",     "64x64");
+    storageDefault("s.lcd.icon_res",     "40x40");
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
 
     /* PSRAM stack is fine: the lcd task never does flash I/O (the loader does).

@@ -39,7 +39,7 @@ void lcdRun(lcd_fn_t fn, void* arg = nullptr);
 
 /** Register a launcher program. `name` is the icon label; `iconBasename`
  *  names a file under /fixed/lcd/icons/<res>/<iconBasename>.bin (no extension,
- *  no size — lcd selects the bucket from s.lcd.icon_res, default "64x64", and
+ *  no size — lcd selects the bucket from s.lcd.icon_res, default "40x40", and
  *  reloads every icon when that key changes). `fn` runs on the lcd task with
  *  the program's layer (lv_obj_t*) the first time the icon is opened, or again
  *  if the layer was reclaimed. Safe to call from any task / any time. */
@@ -52,10 +52,23 @@ void lcdSetBacklight(uint8_t level);
  *  task; safe to call from a registered fn (e.g. a Back button). */
 void lcdGoHome(void);
 
-/** The shared keypad focus group that the hardware button/keyboard indevs
- *  target. Add focusable widgets you build in a program (e.g. a textarea) with
- *  lv_group_add_obj() so the physical keyboard can type into them. Lcd task. */
+/** The shared keypad focus group that hardware button / keyboard indevs target.
+ *  Add focusable widgets you build in a program (e.g. a textarea) with
+ *  lv_group_add_obj() so a physical keyboard can type into them. Lcd task. */
 lv_group_t* lcdInputGroup(void);
+
+/** Tell the lcd component whether the device has a real text keyboard. The lcd
+ *  component owns no keyboard itself (a consumer may provide one as its own
+ *  keypad indev joined to lcdInputGroup()); call this so the built-in Settings
+ *  text fields edit in place instead of popping an on-screen keyboard. Default
+ *  false (no keyboard → on-screen keyboard). Any task. */
+void lcdSetHasKeyboard(bool present);
+
+/** How long the cursor (driven by a board pointer device) stays visible after
+ *  activity, in milliseconds; <0 = always visible. lcd owns the cursor but not
+ *  this policy — the consumer that owns the pointing device sets it (e.g. from
+ *  its own config key). Runs on / hops to the lcd task. */
+void lcdPointerSetVisibleMs(int ms);
 
 /* ---- Settings ---- */
 

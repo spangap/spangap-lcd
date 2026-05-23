@@ -3,11 +3,15 @@
 lcd-icons.py — rasterize launcher icon sources into LVGL RGB565A8 .bin files.
 
 Invoked by the diptych_lcd_icons() CMake helper. For each *.svg / *.png source
-in --src and each WxH bucket in --sizes, render to that size and convert to the
-LVGL binary image format (RGB565A8: 16-bit colour + 8-bit alpha) via the
+in the --src dirs and each WxH bucket in --sizes, render to that size and convert
+to the LVGL binary image format (RGB565A8: 16-bit colour + 8-bit alpha) via the
 LVGLImage.py shipped with the lvgl component. Output:
 
     <out>/<WxH>/<name>.bin   ->   /fixed/lcd/icons/<WxH>/<name>.bin
+
+--src may be given more than once: dirs are merged by basename in the order
+listed, so a later (consumer) dir overrides an earlier (platform-default) one
+with the same icon name — the build-time analogue of the data/ merge.
 
 Best-effort by design: if an optional dependency is missing (Pillow for raster,
 cairosvg for SVG) or LVGLImage.py isn't found, it warns and skips so the
@@ -28,23 +32,29 @@ def warn(msg):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", required=True, help="icon source dir (*.svg/*.png)")
+    ap.add_argument("--src", action="append", default=[],
+                    help="icon source dir (*.svg/*.png); repeatable, later wins")
     ap.add_argument("--out", required=True, help="output root (.../lcd/icons)")
-    ap.add_argument("--sizes", required=True, help="comma list, e.g. 64x64,128x128")
+    ap.add_argument("--sizes", required=True, help="comma list, e.g. 40x40,64x64")
     ap.add_argument("--lvgl-image-py", required=True, help="path to LVGLImage.py")
     a = ap.parse_args()
 
-    if not os.path.isdir(a.src):
-        warn(f"no source dir {a.src} — skipping")
-        return 0
     if not os.path.isfile(a.lvgl_image_py):
         warn(f"LVGLImage.py not found ({a.lvgl_image_py}) — skipping")
         return 0
 
-    sources = [f for f in sorted(os.listdir(a.src))
-               if f.lower().endswith((".svg", ".png"))]
+    # Merge source dirs by basename, later dirs overriding earlier ones.
+    merged = {}  # filename -> absolute path
+    for d in a.src:
+        if not os.path.isdir(d):
+            warn(f"no source dir {d} — skipping it")
+            continue
+        for f in sorted(os.listdir(d)):
+            if f.lower().endswith((".svg", ".png")):
+                merged[f] = os.path.join(d, f)
+    sources = sorted(merged)
     if not sources:
-        warn(f"no .svg/.png in {a.src} — skipping")
+        warn("no .svg/.png in any --src dir — skipping")
         return 0
 
     try:
@@ -71,7 +81,7 @@ def main():
         os.makedirs(outdir, exist_ok=True)
         for fn in sources:
             stem = os.path.splitext(fn)[0]
-            src = os.path.join(a.src, fn)
+            src = merged[fn]
             with tempfile.TemporaryDirectory() as td:
                 png = os.path.join(td, stem + ".png")
                 if fn.lower().endswith(".svg"):

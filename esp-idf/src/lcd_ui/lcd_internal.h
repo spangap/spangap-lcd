@@ -23,6 +23,9 @@
 extern TaskHandle_t lcdTaskHandle;
 /** Registered board HAL (lcdSetBoard), or nullptr if none. */
 const lcd_board_t* lcdBoard(void);
+/** Whether a consumer reported a hardware text keyboard (lcdSetHasKeyboard).
+ *  Settings text fields edit in place when true, else use the on-screen kb. */
+bool lcdHasKeyboard(void);
 
 /* ---- lcd_lvgl.cpp: display + input bring-up ---- */
 /** boardLcdInit + lv_init + display/flush/tick + (optional) touch indev.
@@ -30,6 +33,15 @@ const lcd_board_t* lcdBoard(void);
 bool        lcdLvglInit(void);
 int         lcdScreenW(void);
 int         lcdScreenH(void);
+/** Read every event-mode indev once (touch / button / keyboard / pointer).
+ *  Called from the lcd loop when an input ISR has flagged a pending edge.
+ *  Returns true if a read callback wants an immediate follow-up read (mid-click
+ *  / keystroke drain), so the caller re-polls before sleeping. */
+bool        lcdInputPoll(void);
+/** Pause any released indev's LVGL read timer (LVGL resumes it on press for its
+ *  own timing and can miss the release-pause, leaving it auto-reading at ~30 Hz).
+ *  Called each lcd-loop pass; keeps the task idle when nothing is held. */
+void        lcdPauseIdleInputTimers(void);
 /** Focus group for non-pointer indevs (encoder/keypad). Launcher icons join
  *  it so a trackball-only board navigates the same UI. */
 lv_group_t* lcdInputGroup(void);
@@ -39,7 +51,7 @@ lv_group_t* lcdInputGroup(void);
  *  after lv_init(). */
 void        lcdIconsInit(void);
 /** Resolve a basename to its LVGL src path at the current resolution, e.g.
- *  "D:/fixed/lcd/icons/64x64/rns.bin". Returns out. */
+ *  "D:/fixed/lcd/icons/40x40/rns.bin". Returns out. */
 const char* lcdIconSrc(const char* basename, char* out, size_t outLen);
 /** True iff the current-resolution bytes for `basename` are already cached
  *  (lcd-task-only). */
@@ -48,7 +60,7 @@ bool        lcdIconReady(const char* basename);
  *  for `basename`. On completion the lcd task caches them and calls
  *  lcdLauncherIconLoaded(basename). No-op if already cached. */
 void        lcdIconRequest(const char* basename);
-/** Current icon resolution bucket (e.g. "64x64"), from s.lcd.icon_res. */
+/** Current icon resolution bucket (e.g. "40x40"), from s.lcd.icon_res. */
 const char* lcdIconRes(void);
 /** Re-read s.lcd.icon_res; returns true if it changed (caller reloads). */
 bool        lcdIconResRefresh(void);
@@ -70,3 +82,10 @@ void        lcdStatusbarInit(void);
 /* ---- lcd_settings.cpp ---- */
 /** Register the built-in Settings (gear) program with the launcher. */
 void        lcdSettingsInit(void);
+
+/* ---- lcd_apps.cpp: built-in Log + CLI programs ---- */
+/** Register the built-in Log + CLI programs. Call from the lcd task after the
+ *  launcher exists; needs itsClientInit() (the lcd task is an ITS client). */
+void        lcdAppsInit(void);
+/** Spleen 5x8 monospace bitmap font (generated lv_font_spleen_5x8.c). */
+extern const lv_font_t lv_font_spleen_5x8;

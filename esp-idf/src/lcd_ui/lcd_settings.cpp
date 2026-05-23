@@ -306,8 +306,7 @@ void onTextRow(lv_event_t* e) {
     lv_textarea_set_text(ta, storageGetStr(tr->key, "").c_str());
     s_ed.ta = ta;
 
-    const lcd_board_t* board = lcdBoard();
-    if (board && board->key_read) {
+    if (lcdHasKeyboard()) {
         /* Physical keyboard present: no on-screen keyboard. Type straight into
          * the textarea (the keyboard indev delivers keys to the focused object);
          * ENTER fires LV_EVENT_READY -> commit + close. */
@@ -416,7 +415,7 @@ lv_obj_t* lcdSettingSwitch(lv_obj_t* parent, const char* label, const char* key)
     lv_obj_set_style_bg_color(sw, lv_color_hex(0x3a4150), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sw, lv_color_white(), LV_PART_KNOB);
     lv_obj_set_style_bg_color(sw, lv_color_hex(0x2563a0),
-                              (lv_style_selector_t)(LV_PART_INDICATOR | LV_STATE_CHECKED));
+                              (lv_style_selector_t)LV_PART_INDICATOR | (lv_style_selector_t)LV_STATE_CHECKED);
     if (storageGetInt(key, 0)) lv_obj_add_state(sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(sw, onSwitch, LV_EVENT_VALUE_CHANGED, (void*)key);
     bindAttach(sw, key, BK_SWITCH);
@@ -440,8 +439,7 @@ lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, b
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
 
-    const lcd_board_t* board = lcdBoard();
-    if (board && board->key_read) {
+    if (lcdHasKeyboard()) {
         /* Physical keyboard: edit in place. The value is an inline one-line
          * textarea; focusing it (tap / trackball) types straight in, Enter or
          * moving away commits. No full-screen on-screen-keyboard pane. */
