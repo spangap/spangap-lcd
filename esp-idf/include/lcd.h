@@ -39,8 +39,8 @@ void lcdRun(lcd_fn_t fn, void* arg = nullptr);
 
 /** Register a launcher program. `name` is the icon label; `iconBasename`
  *  names a file under /fixed/lcd/icons/<res>/<iconBasename>.bin (no extension,
- *  no size — lcd selects the bucket from s.lcd.icon_res, default "40x40", and
- *  reloads every icon when that key changes). `fn` runs on the lcd task with
+ *  no size — <res> is fixed to the launcher tile size, "36x36"; icons render at
+ *  that native size). `fn` runs on the lcd task with
  *  the program's layer (lv_obj_t*) the first time the icon is opened, or again
  *  if the layer was reclaimed. Safe to call from any task / any time. */
 void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn);

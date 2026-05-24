@@ -31,12 +31,19 @@
 #define LCD_ICON_QUEUE_DEPTH 16
 #define LCD_ICON_MAX_BYTES   (256 * 1024)
 
+/* The launcher's only icon consumer renders tiles at a fixed size, so the icon
+ * resolution is tied to the tile (the lcd_launcher ICON layout), not a user
+ * setting. Using a fixed bucket also means a device that still has an old
+ * s.lcd.icon_res persisted in /state renders correctly without a factory reset.
+ * Must match a bucket built by diptych_lcd_icons() (see the consumer CMakeLists).*/
+#define LAUNCHER_ICON_RES "36x36"
+
 namespace {
 
 struct Blob { uint8_t* data = nullptr; size_t size = 0; };
 
 std::unordered_map<std::string, Blob> s_cache;   /* lcd task only; key = abs path */
-std::string  s_res = "40x40";                    /* lcd task only */
+std::string  s_res = LAUNCHER_ICON_RES;          /* lcd task only; fixed (see above) */
 lv_fs_drv_t  s_drv;
 QueueHandle_t s_loadQ = nullptr;
 
@@ -137,8 +144,7 @@ void loaderFn(void*) {
 /* ---- internal API ---- */
 
 void lcdIconsInit(void) {
-    s_res = storageGetStr("s.lcd.icon_res", "40x40");
-    if (s_res.empty()) s_res = "40x40";
+    s_res = LAUNCHER_ICON_RES;   /* fixed to the tile size; see LAUNCHER_ICON_RES */
 
     lv_fs_drv_init(&s_drv);
     s_drv.letter   = 'D';
@@ -176,9 +182,7 @@ void lcdIconRequest(const char* basename) {
 const char* lcdIconRes(void) { return s_res.c_str(); }
 
 bool lcdIconResRefresh(void) {
-    std::string nr = storageGetStr("s.lcd.icon_res", "40x40");
-    if (nr.empty()) nr = "40x40";
-    if (nr == s_res) return false;
-    s_res = nr;
-    return true;
+    /* Icon resolution is fixed to the tile size (LAUNCHER_ICON_RES), so the
+     * s.lcd.icon_res key no longer drives it — nothing to refresh. */
+    return false;
 }

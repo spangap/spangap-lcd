@@ -50,8 +50,8 @@ lv_group_t* lcdInputGroup(void);
 /** Register the in-RAM lv_fs driver ('D') and start the loader task. Call
  *  after lv_init(). */
 void        lcdIconsInit(void);
-/** Resolve a basename to its LVGL src path at the current resolution, e.g.
- *  "D:/fixed/lcd/icons/40x40/rns.bin". Returns out. */
+/** Resolve a basename to its LVGL src path at the (fixed) launcher resolution,
+ *  e.g. "D:/fixed/lcd/icons/36x36/rns.bin". Returns out. */
 const char* lcdIconSrc(const char* basename, char* out, size_t outLen);
 /** True iff the current-resolution bytes for `basename` are already cached
  *  (lcd-task-only). */
@@ -60,9 +60,10 @@ bool        lcdIconReady(const char* basename);
  *  for `basename`. On completion the lcd task caches them and calls
  *  lcdLauncherIconLoaded(basename). No-op if already cached. */
 void        lcdIconRequest(const char* basename);
-/** Current icon resolution bucket (e.g. "40x40"), from s.lcd.icon_res. */
+/** The launcher's fixed icon resolution bucket (LAUNCHER_ICON_RES, "36x36"). */
 const char* lcdIconRes(void);
-/** Re-read s.lcd.icon_res; returns true if it changed (caller reloads). */
+/** No-op now the resolution is fixed; always returns false. Kept for the
+ *  s.lcd.icon_res subscription wiring in lcd.cpp. */
 bool        lcdIconResRefresh(void);
 
 /* ---- lcd_launcher.cpp ---- */
