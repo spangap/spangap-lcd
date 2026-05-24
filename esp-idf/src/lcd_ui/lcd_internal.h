@@ -42,6 +42,22 @@ bool        lcdInputPoll(void);
  *  own timing and can miss the release-pause, leaving it auto-reading at ~30 Hz).
  *  Called each lcd-loop pass; keeps the task idle when nothing is held. */
 void        lcdPauseIdleInputTimers(void);
+
+/* ---- inactivity blank / screen standby (lcd_lvgl.cpp; lcd task only) ---- */
+/** Set the inactivity timeout (seconds; <=0 disables blanking) and (re)arm the
+ *  blank timer. Driven by the s.lcd.inactivity_timeout subscription. */
+void        lcdInactivitySetTimeout(int seconds);
+/** Register user input. Resets the blank timer; if the screen is in standby it
+ *  is woken. Returns true iff this call woke the screen (so the caller can
+ *  consume the waking edge instead of delivering it to the UI). */
+bool        lcdActivity(void);
+/** True while the screen is blanked (backlight off + panel in standby). The lcd
+ *  loop skips rendering and sleeps until input while this holds. */
+bool        lcdScreenIsOff(void);
+/** Arm a touch-swallow after an input edge woke the screen, so the rest of the
+ *  waking touch is dropped (the GT911 re-fires while the finger stays down).
+ *  Self-clears when the finger lifts; no-op without touch. lcd task only. */
+void        lcdSwallowTouch(void);
 /** Focus group for non-pointer indevs (encoder/keypad). Launcher icons join
  *  it so a trackball-only board navigates the same UI. */
 lv_group_t* lcdInputGroup(void);

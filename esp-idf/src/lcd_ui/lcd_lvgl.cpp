@@ -11,6 +11,7 @@
 
 #include "log.h"
 #include "spi_helper.h"
+#include "storage.h"
 
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
@@ -39,9 +40,10 @@ static SemaphoreHandle_t      s_dmaDone = nullptr;   /* given when a strip's DMA
 /* Event-mode input bookkeeping (all touched only on the lcd task). The indevs
  * are LV_INDEV_MODE_EVENT, so they only read when lcdInputPoll() drives them. */
 static lv_timer_t*            s_touchTrack = nullptr; /* 10ms re-read while a finger is down */
-static lv_timer_t*            s_btnHold    = nullptr; /* 1s "hold = go home" one-shot */
+static lv_timer_t*            s_btnHold    = nullptr; /* 300ms "hold = go home" one-shot */
 static bool                   s_btnLong    = false;   /* hold fired → suppress the release click */
 static bool                   s_inputAgain = false;   /* a read cb wants an immediate follow-up read */
+static bool                   s_touchSwallow = false; /* drop the touch that woke the screen until it lifts */
 
 /* Trackball/mouse pointer (board->pointer_read). The board owns the position; we
  * own the LVGL pointer indev, the cursor object, and its show-on-move/auto-hide. */
@@ -96,15 +98,22 @@ static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
         int y = (s_h - 1) - pt[0].x;
         if (x < 0) x = 0; else if (x >= s_w) x = s_w - 1;
         if (y < 0) y = 0; else if (y >= s_h) y = s_h - 1;
+        /* Keep re-reading while the finger is down (the GT911 INT only guarantees
+         * the first edge) — also how a swallowed wake-touch is polled to release. */
+        if (!s_touchTrack) s_touchTrack = lv_timer_create(touchTrackCb, 10, nullptr);
+        /* If this touch woke the screen, swallow the whole press: the GT911 re-fires
+         * its INT every frame the finger stays down, so without this the second edge
+         * onward would land as a real press → click on whatever is under the finger. */
+        if (s_touchSwallow) { data->state = LV_INDEV_STATE_RELEASED; return; }
         data->point.x = x;
         data->point.y = y;
         data->state   = LV_INDEV_STATE_PRESSED;
         if (!wasDown) dbg("touch raw=(%d,%d) -> (%d,%d)\n", pt[0].x, pt[0].y, x, y);
         wasDown = true;
-        if (!s_touchTrack) s_touchTrack = lv_timer_create(touchTrackCb, 10, nullptr);
     } else {
         data->state   = LV_INDEV_STATE_RELEASED;
         wasDown = false;
+        s_touchSwallow = false;   /* finger lifted — the next touch is a real one */
         if (s_touchTrack) { lv_timer_delete(s_touchTrack); s_touchTrack = nullptr; }
     }
 }
@@ -112,9 +121,9 @@ static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
 /* Hardware Home/centre button as a keypad indev (board->button_read). It's also
  * the trackball's click, so we mustn't eat every press: a short press emits an
  * ENTER click on the focused item (synthesized as a press+release on two reads),
- * while a hold of >=1s returns to the launcher and is NOT clicked.
+ * while a hold of >=300ms returns to the launcher and is NOT clicked.
  *
- * Event-driven: the button INT wakes the press and release edges; the 1s hold is
+ * Event-driven: the button INT wakes the press and release edges; the 300ms hold is
  * a one-shot lv_timer (s_btnHold) armed on press — so there is no per-frame
  * polling during a hold, only a single deadline. All on the lcd task. */
 static void btnHoldCb(lv_timer_t*) {
@@ -126,7 +135,7 @@ static void btnHoldCb(lv_timer_t*) {
 /* The centre/Home button's click-vs-hold state machine, shared by the keypad
  * button indev and the trackball pointer indev (whichever owns GPIO 0). It never
  * reports the raw hold as a press: a short press is replayed as a synthesized
- * press+release over two reads (driven by s_inputAgain), and a >=1 s hold fires
+ * press+release over two reads (driven by s_inputAgain), and a >=300 ms hold fires
  * Home via a one-shot lv_timer and is NOT clicked. Returns the press/release to
  * emit this read, or BTN_NONE (caller reports released). */
 enum btn_action_t { BTN_NONE, BTN_PRESS, BTN_RELEASE };
@@ -140,7 +149,7 @@ static btn_action_t centerButtonStep(bool down) {
         if (phase == IDLE) {
             phase = HELD;
             s_btnLong = false;
-            s_btnHold = lv_timer_create(btnHoldCb, 1000, nullptr);
+            s_btnHold = lv_timer_create(btnHoldCb, 300, nullptr);   /* 300ms hold = go home */
             lv_timer_set_repeat_count(s_btnHold, 1);   /* one-shot: fires once, self-deletes */
         }
         return BTN_NONE;                          /* never report the raw hold */
@@ -198,6 +207,65 @@ void lcdPointerSetVisibleMs(int ms) {
         cursorPoke();                                      /* re-time a currently-shown cursor */
     }
 }
+
+/* ---- inactivity blank / screen standby ----
+ * After s.lcd.inactivity_timeout seconds with no user input the screen blanks:
+ * backlight off + (if the board supports it) panel standby, GRAM retained. Any
+ * input wakes it (lcdActivity); the lcd loop skips rendering while off so the
+ * chip can light-sleep. Same one-shot lv_timer pattern as the cursor auto-hide. */
+static lv_timer_t* s_blankTimer = nullptr;
+static int         s_blankMs    = 0;       /* <=0 = never blank */
+static bool        s_screenOff  = false;
+
+static void screenSleep(void);
+
+static void armBlankTimer(void) {
+    if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+    if (s_blankMs <= 0 || s_screenOff) return;
+    s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; screenSleep(); },
+                                   (uint32_t)s_blankMs, nullptr);
+    lv_timer_set_repeat_count(s_blankTimer, 1);   /* one-shot: fires once, self-deletes */
+}
+
+static void screenSleep(void) {
+    if (s_screenOff) return;
+    s_screenOff = true;
+    if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+    const lcd_board_t* b = lcdBoard();
+    if (b && b->backlight)     b->backlight(0);
+    if (b && b->display_power) b->display_power(false);   /* panel standby */
+}
+
+static void screenWake(void) {
+    if (!s_screenOff) return;
+    s_screenOff = false;
+    const lcd_board_t* b = lcdBoard();
+    if (b && b->display_power) b->display_power(true);
+    if (b && b->backlight)     b->backlight((uint8_t)storageGetInt("s.lcd.backlight", 200));
+    armBlankTimer();
+}
+
+void lcdInactivitySetTimeout(int seconds) {
+    s_blankMs = seconds > 0 ? seconds * 1000 : 0;
+    armBlankTimer();
+}
+
+bool lcdActivity(void) {
+    if (s_screenOff) { screenWake(); return true; }
+    if (s_blankTimer) lv_timer_reset(s_blankTimer);
+    else              armBlankTimer();   /* (re)arm if a setting change left it off */
+    return false;
+}
+
+bool lcdScreenIsOff(void) { return s_screenOff; }
+
+/* Called from the lcd loop when an input edge woke the screen. The button/trackball
+ * wake edge is already dropped (the loop skips that poll); touch needs more, since
+ * the GT911 re-fires its INT every frame the finger stays down. Arm a swallow so
+ * touchReadCb drops the rest of the waking press; it self-clears when the finger
+ * lifts. No-op for a button/trackball wake (no finger down → cleared on the next
+ * touch read). */
+void lcdSwallowTouch(void) { s_touchSwallow = true; }
 
 /* The hardware keyboard, if any, is a CONSUMER concern (its quirks vary per
  * board): the consumer creates its own keypad indev, joins it to lcdInputGroup(),
@@ -296,7 +364,7 @@ bool lcdLvglInit(void) {
 
     /* Optional hardware button (T-Deck centre/Home), only when no cursor device
      * claimed it. Keypad indev on the focus group: short press clicks the focused
-     * tile, >=1s hold returns to the launcher. */
+     * tile, >=300ms hold returns to the launcher. */
     if (board->button_read && !board->pointer_read) {
         s_btnIndev = lv_indev_create();
         lv_indev_set_type(s_btnIndev, LV_INDEV_TYPE_KEYPAD);

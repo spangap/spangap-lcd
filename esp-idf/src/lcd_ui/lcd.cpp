@@ -105,6 +105,15 @@ void lcdGoHome(void) {
     lcdRun([](void*) { lcdGoHomeInternal(); });
 }
 
+bool lcdNotifyActivity(void) {
+    /* On the lcd task (e.g. a consumer keyboard read_cb): act inline and report
+     * whether it woke the screen, so the caller can swallow the waking key.
+     * Off-task: post it and report no wake (only on-task input needs the result). */
+    if (xTaskGetCurrentTaskHandle() == lcdTaskHandle) return lcdActivity();
+    lcdRun([](void*) { lcdActivity(); });
+    return false;
+}
+
 /* ---- task ---- */
 
 static void lcdTaskFn(void*) {
@@ -137,15 +146,29 @@ static void lcdTaskFn(void*) {
     storageSubscribeChanges("s.lcd.icon_res", ON_CHANGE {
         if (lcdIconResRefresh()) lcdLauncherReload();
     });
+    /* Inactivity blank: after s.lcd.inactivity_timeout s with no input the screen
+     * goes to standby (backlight off + panel sleep); any input wakes it. */
+    NOW_AND_ON_CHANGE("s.lcd.inactivity_timeout", { lcdInactivitySetTimeout(atoi(val)); });
 
     info("ready (%dx%d)\n", lcdScreenW(), lcdScreenH());
 
     for (;;) {
         while (itsPoll(0)) {}              /* drain aux / storage callbacks */
-        if (s_inputPending) {             /* woke on a touch/button/key edge */
+        if (s_inputPending) {             /* woke on a touch/button/trackball edge */
             s_inputPending = false;
-            while (lcdInputPoll()) {}      /* drain click / keystroke synthesis */
+            /* lcdActivity() resets the inactivity timer and, if the screen was in
+             * standby, wakes it and returns true — in which case this edge only
+             * served to wake, so we consume it (don't feed the indevs, so it can't
+             * click / go-home / move the cursor on wake). The button/trackball wake
+             * is fully handled by skipping this poll; touch isn't (the GT911 keeps
+             * firing while the finger is down), so arm a swallow for the rest of it. */
+            if (lcdActivity()) lcdSwallowTouch();
+            else               while (lcdInputPoll()) {}   /* drain click / keystroke */
         }
+        /* While blanked, skip rendering entirely and sleep until the next input
+         * edge or ITS message — no 1 Hz status-clock wake, so the chip can
+         * light-sleep. (Keyboard keys arrive as lcdRun aux and wake us here.) */
+        if (lcdScreenIsOff()) { itsPoll(portMAX_DELAY); continue; }
         /* LVGL resumes a pointer indev's read timer on press (for its own
          * long-press timing) and only pauses it on release — if that pause is
          * missed, LVGL auto-reads the pointer at ~30 Hz forever (repositioning the
@@ -167,6 +190,7 @@ void lcdInit(void) {
     storageDefault("s.lcd.backlight",    200);
     storageDefault("s.lcd.icon_res",     "40x40");
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
+    storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */
 
     /* PSRAM stack is fine: the lcd task never does flash I/O (the loader does).
      * Core 1 (core 0 hosts WiFi); prio 2. LVGL render needs generous stack. */

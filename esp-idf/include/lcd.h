@@ -48,6 +48,14 @@ void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn);
 /** Set backlight 0..255 (0 = off). Persists s.lcd.backlight. Any task. */
 void lcdSetBacklight(uint8_t level);
 
+/** Report user input to the inactivity tracker (e.g. a consumer hardware-keyboard
+ *  keystroke — the touch/button/trackball indevs report themselves). Resets the
+ *  blank timer and, if the screen is in standby, wakes it. Returns true iff this
+ *  call woke the screen, so an on-lcd-task caller can swallow the waking key
+ *  rather than deliver it. Safe from any task (off-task callers always get false
+ *  and the wake is posted asynchronously). */
+bool lcdNotifyActivity(void);
+
 /** Hide the current program layer and return to the launcher. Runs on the lcd
  *  task; safe to call from a registered fn (e.g. a Back button). */
 void lcdGoHome(void);
