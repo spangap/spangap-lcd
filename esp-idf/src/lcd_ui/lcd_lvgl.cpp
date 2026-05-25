@@ -45,6 +45,13 @@ static bool                   s_btnLong    = false;   /* hold fired → suppress
 static bool                   s_inputAgain = false;   /* a read cb wants an immediate follow-up read */
 static bool                   s_touchSwallow = false; /* drop the touch that woke the screen until it lifts */
 
+/* Multi-touch / gestures (off by default — single-touch is the cheapest path).
+ * When on, touchReadCb reads all fingers and dispatches to gesture handlers;
+ * >=2 fingers suppress the single pointer so the gesture owner has the gesture. */
+#define LCD_TOUCH_MAXPTS 5
+static volatile bool          s_multipoint = false;
+static lcd_gesture_cb_t       s_gestureCb[4] = {};
+
 /* Trackball/mouse pointer (board->pointer_read). The board owns the position; we
  * own the LVGL pointer indev, the cursor object, and its show-on-move/auto-hide. */
 static lv_indev_t*            s_ptrIndev   = nullptr;
@@ -85,37 +92,60 @@ static void touchTrackCb(lv_timer_t*) { if (s_indev) lv_indev_read(s_indev); }
 
 static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
     auto tp = static_cast<esp_lcd_touch_handle_t>(lv_indev_get_user_data(indev));
-    esp_lcd_touch_point_data_t pt[1] = {};
+    esp_lcd_touch_point_data_t pt[LCD_TOUCH_MAXPTS] = {};
     uint8_t cnt = 0;
     esp_lcd_touch_read_data(tp);
-    esp_lcd_touch_get_data(tp, pt, &cnt, 1);
-    static bool wasDown = false;   /* TEMP calib: log on the press edge only */
-    if (cnt > 0) {
-        /* GT911 reports raw native-portrait coords (esp_lcd_touch left identity).
-         * Rotate to our landscape display: screen_x = raw_y, screen_y = (H-1) -
-         * raw_x. Clamp to the panel so edge touches never wrap off-screen. */
-        int x = pt[0].y;
-        int y = (s_h - 1) - pt[0].x;
+    esp_lcd_touch_get_data(tp, pt, &cnt, s_multipoint ? LCD_TOUCH_MAXPTS : 1);
+
+    /* GT911 reports raw native-portrait coords (esp_lcd_touch left identity).
+     * Rotate each to our landscape display: screen_x = raw_y, screen_y = (H-1) -
+     * raw_x. Clamp to the panel so edge touches never wrap off-screen. */
+    int n = cnt > LCD_TOUCH_MAXPTS ? LCD_TOUCH_MAXPTS : cnt;
+    lcd_touch_pt_t gp[LCD_TOUCH_MAXPTS];
+    for (int i = 0; i < n; i++) {
+        int x = pt[i].y;
+        int y = (s_h - 1) - pt[i].x;
         if (x < 0) x = 0; else if (x >= s_w) x = s_w - 1;
         if (y < 0) y = 0; else if (y >= s_h) y = s_h - 1;
-        /* Keep re-reading while the finger is down (the GT911 INT only guarantees
-         * the first edge) — also how a swallowed wake-touch is polled to release. */
+        gp[i].x = (int16_t)x; gp[i].y = (int16_t)y;
+    }
+
+    /* Keep re-reading while any finger is down (the GT911 INT only guarantees the
+     * first edge) — also how a swallowed wake-touch is polled to release. */
+    if (n > 0) {
         if (!s_touchTrack) s_touchTrack = lv_timer_create(touchTrackCb, 10, nullptr);
-        /* If this touch woke the screen, swallow the whole press: the GT911 re-fires
-         * its INT every frame the finger stays down, so without this the second edge
-         * onward would land as a real press → click on whatever is under the finger. */
-        if (s_touchSwallow) { data->state = LV_INDEV_STATE_RELEASED; return; }
-        data->point.x = x;
-        data->point.y = y;
-        data->state   = LV_INDEV_STATE_PRESSED;
-        if (!wasDown) dbg("touch raw=(%d,%d) -> (%d,%d)\n", pt[0].x, pt[0].y, x, y);
-        wasDown = true;
     } else {
-        data->state   = LV_INDEV_STATE_RELEASED;
-        wasDown = false;
         s_touchSwallow = false;   /* finger lifted — the next touch is a real one */
         if (s_touchTrack) { lv_timer_delete(s_touchTrack); s_touchTrack = nullptr; }
     }
+
+    /* Gesture dispatch (multipoint only). */
+    if (s_multipoint)
+        for (auto cb : s_gestureCb) if (cb) cb(gp, n);
+
+    /* Single pointer for LVGL: point 0 drives it, but >=2 fingers (multipoint)
+     * suppress it so the gesture owner has the interaction; a screen-waking touch
+     * is swallowed until lift (the GT911 re-fires its INT every frame the finger
+     * stays down, which would otherwise land as a real press). */
+    static bool wasDown = false;
+    bool suppress = (s_multipoint && n >= 2);
+    if (n > 0 && !suppress && !s_touchSwallow) {
+        data->point.x = gp[0].x;
+        data->point.y = gp[0].y;
+        data->state   = LV_INDEV_STATE_PRESSED;
+        if (!wasDown) dbg("touch -> (%d,%d)\n", gp[0].x, gp[0].y);
+        wasDown = true;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+        wasDown = false;
+    }
+}
+
+void lcdTouchSetMultipoint(bool on) { s_multipoint = on; }
+
+void lcdTouchAddGestureHandler(lcd_gesture_cb_t cb) {
+    if (!cb) return;
+    for (auto& h : s_gestureCb) if (!h) { h = cb; return; }
 }
 
 /* Hardware Home/centre button as a keypad indev (board->button_read). It's also

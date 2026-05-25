@@ -78,6 +78,28 @@ void lcdSetHasKeyboard(bool present);
  *  its own config key). Runs on / hops to the lcd task. */
 void lcdPointerSetVisibleMs(int ms);
 
+/* ---- Multi-touch / gestures ----
+ * A consumer that wants raw multi-finger input (e.g. pinch-zoom) enables
+ * multipoint reads and registers a gesture handler. Point 0 still drives the
+ * normal single-pointer indev (single-finger UI is unaffected); with >=2
+ * fingers down the pointer is suppressed so the gesture owner has the gesture.
+ * The high-rate finger data flows through the callback, never storage. */
+
+/** One touch point, in display (post-rotation) coordinates. */
+typedef struct { int16_t x, y; } lcd_touch_pt_t;
+
+/** Gesture handler, run on the lcd task whenever touch is sampled while
+ *  multipoint is enabled. `count` is the number of fingers (0 = all lifted). */
+typedef void (*lcd_gesture_cb_t)(const lcd_touch_pt_t* pts, int count);
+
+/** Enable/disable multi-point touch reads. Off by default (single-touch, the
+ *  cheapest path); no-op on boards without a multi-point panel. Cheap to
+ *  toggle — enable while gestures are wanted, disable when done. Any task. */
+void lcdTouchSetMultipoint(bool on);
+
+/** Register a gesture handler (fixed small set). Call once at init. */
+void lcdTouchAddGestureHandler(lcd_gesture_cb_t cb);
+
 /* ---- Settings ---- */
 
 /** Register an entry in the built-in Settings menu (the gear program lcd owns).
@@ -110,5 +132,46 @@ lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* ke
 lv_obj_t* lcdSettingValue   (lv_obj_t* parent, const char* label, const char* key);
 /** Action button; `onClick` runs on the lcd task (arg is the row). */
 lv_obj_t* lcdSettingButton  (lv_obj_t* parent, const char* label, lcd_fn_t onClick);
+
+/* ---- Virtualized text view ----
+ * A vertically-scrolling monospace text view that holds a large scrollback but
+ * only ever lays out the on-screen window into LVGL — append and scroll cost
+ * O(visible rows), not O(scrollback), however deep the history. Built for the
+ * on-device Log / CLI terminals; usable by any program showing growing or large
+ * text. All calls run on the lcd task (LVGL is single-threaded). */
+
+typedef struct lcd_textview_t lcd_textview_t;
+
+/** Create a text view filling a `w`x`h` box in `parent`, rendered in monospace
+ *  `font` / colour `fg`, scrollback capped to `budget` bytes (oldest whole lines
+ *  trimmed). Freed automatically when its container (a child of `parent`) is
+ *  deleted — e.g. when a program layer is reclaimed. */
+lcd_textview_t* lcdTextViewCreate(lv_obj_t* parent, int32_t w, int32_t h,
+                                  const lv_font_t* font, lv_color_t fg, size_t budget);
+
+/** Append text to the scrollback. Stays pinned to the bottom if it already was;
+ *  otherwise the on-screen reading position is held steady across trims. */
+void lcdTextViewAppend(lcd_textview_t* v, const char* data, size_t len);
+
+/** Replace the entire scrollback with `data`. */
+void lcdTextViewSet(lcd_textview_t* v, const char* data, size_t len);
+
+/** Set a transient tail rendered after the scrollback but never stored or
+ *  trimmed (e.g. a CLI's in-progress input line + cursor). null/0 clears it. */
+void lcdTextViewSetSuffix(lcd_textview_t* v, const char* data, size_t len);
+
+/** Jump to and pin the newest content (the bottom). */
+void lcdTextViewScrollToBottom(lcd_textview_t* v);
+
+/** True while the view sits at the bottom (newest content visible). */
+bool lcdTextViewAtBottom(lcd_textview_t* v);
+
+/** The scroll container — add it to lcdInputGroup() for keyboard focus, or
+ *  attach your own event callbacks (e.g. a CLI line editor on LV_EVENT_KEY). */
+lv_obj_t* lcdTextViewObj(lcd_textview_t* v);
+
+/** Destroy the view (deletes its container). Optional — deleting the parent
+ *  layer frees it automatically. */
+void lcdTextViewDelete(lcd_textview_t* v);
 
 #endif /* DIPTYCH_LCD_H */

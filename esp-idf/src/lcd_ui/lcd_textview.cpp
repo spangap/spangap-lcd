@@ -1,0 +1,261 @@
+/**
+ * lcd_textview.cpp — virtualized monospace text view (lcdTextView* in lcd.h).
+ *
+ * Holds an arbitrarily large scrollback in a std::string but only ever lays out
+ * the on-screen window into a single LVGL label, so both append and scroll cost
+ * O(visible rows) rather than O(scrollback). The standard "don't put a megabyte
+ * of text in one widget" virtual scroll: an invisible spacer child gives the
+ * scroll container its true content height (so LVGL's own scrollbar + scroll
+ * physics work unchanged), while the label is repositioned and refilled with
+ * just the rows around the current scroll offset — plus a small margin — as the
+ * view moves.
+ *
+ * Monospace is assumed for the column math: text is hard-wrapped at a fixed
+ * column count (terminal-style, not word-wrapped), and the row pitch is the font
+ * line height with zero line spacing — so the spacer's pixel height (rows x
+ * pitch) stays exact and scrolling never drifts against LVGL's own layout.
+ *
+ * Runs on the lcd task (LVGL is single-threaded); see lcd.h / lcd_internal.h.
+ */
+#include "lcd.h"
+#include "lvgl.h"
+
+#include <string>
+#include <vector>
+#include <cstdint>
+
+struct lcd_textview_t {
+    lv_obj_t*             cont   = nullptr;  /* scroll container (the viewport)     */
+    lv_obj_t*             spacer = nullptr;  /* invisible child = true content height*/
+    lv_obj_t*             label  = nullptr;  /* the materialised window of rows     */
+    const lv_font_t*      font   = nullptr;
+    int                   rowH   = 8;        /* line pitch (px)                     */
+    int                   cols   = 1;        /* chars per visual row                */
+    int                   vpRows = 1;        /* rows that fit in the viewport       */
+    size_t                budget = 4096;     /* scrollback cap (bytes)              */
+    std::string           buf;               /* committed scrollback (capped)       */
+    std::string           suffix;            /* transient, un-stored tail           */
+    std::string           disp;              /* buf + suffix (the slice source)     */
+    std::vector<uint32_t> rowStart;          /* byte offset of each visual row      */
+    int                   firstRow  = -1;    /* first row currently in the label    */
+    int                   rowsShown = 0;
+};
+
+namespace {
+
+/* Rows rendered above + below the viewport, so small scrolls don't re-lay-out. */
+constexpr int MARGIN = 6;
+
+/* Rebuild disp = buf + suffix, recompute the visual-row offset table (hard wrap
+ * at `cols`), and resize the spacer to the true content height. */
+void reflow(lcd_textview_t* v) {
+    v->disp.clear();
+    v->disp.reserve(v->buf.size() + v->suffix.size());
+    v->disp.append(v->buf);
+    v->disp.append(v->suffix);
+
+    v->rowStart.clear();
+    const std::string& s = v->disp;
+    const size_t n = s.size();
+    size_t i = 0;
+    while (i < n) {
+        v->rowStart.push_back((uint32_t)i);
+        int col = 0;
+        while (i < n && s[i] != '\n' && col < v->cols) { i++; col++; }
+        if (i < n && s[i] == '\n') i++;   /* the newline belongs to this row */
+    }
+    const int total = (int)v->rowStart.size();
+    lv_obj_set_height(v->spacer, total > 0 ? total * v->rowH : 1);
+}
+
+/* Materialise the rows around the current scroll offset into the label. Skips
+ * the work unless the visible band moved outside the rendered window (or force). */
+void renderWindow(lcd_textview_t* v, bool force) {
+    if (!v->label || !lv_obj_is_valid(v->label)) return;
+    const int total = (int)v->rowStart.size();
+    if (total == 0) {
+        lv_label_set_text(v->label, "");
+        lv_obj_set_y(v->label, 0);
+        v->firstRow  = 0;
+        v->rowsShown = 0;
+        return;
+    }
+
+    int scrollY = lv_obj_get_scroll_y(v->cont);
+    if (scrollY < 0) scrollY = 0;
+    const int topRow = scrollY / v->rowH;
+    const int botRow = topRow + v->vpRows;
+
+    if (!force && v->firstRow >= 0 &&
+        topRow >= v->firstRow && botRow <= v->firstRow + v->rowsShown)
+        return;                            /* still inside the rendered band */
+
+    /* Slide a fixed-size window to fit within the content, so an elastic
+     * overscroll past either end never shrinks or blanks the visible rows. */
+    int shown = v->vpRows + 2 * MARGIN;
+    if (shown > total) shown = total;
+    int first = topRow - MARGIN;
+    if (first > total - shown) first = total - shown;
+    if (first < 0) first = 0;
+
+    std::string win;
+    for (int r = first; r < first + shown; r++) {
+        const uint32_t s0 = v->rowStart[r];
+        uint32_t s1 = (r + 1 < total) ? v->rowStart[r + 1] : (uint32_t)v->disp.size();
+        if (s1 > s0 && v->disp[s1 - 1] == '\n') s1--;   /* drop the row's newline */
+        win.append(v->disp, s0, s1 - s0);
+        if (r + 1 < first + shown) win.push_back('\n');
+    }
+    lv_label_set_text(v->label, win.c_str());
+    lv_obj_set_y(v->label, first * v->rowH);
+    v->firstRow  = first;
+    v->rowsShown = shown;
+}
+
+/* Trim buf to budget on a whole-line boundary; returns bytes removed from front. */
+size_t trim(lcd_textview_t* v) {
+    if (v->buf.size() <= v->budget) return 0;
+    size_t cut = v->buf.size() - v->budget;
+    const size_t nl = v->buf.find('\n', cut);
+    cut = (nl == std::string::npos) ? v->buf.size() : nl + 1;
+    v->buf.erase(0, cut);
+    return cut;
+}
+
+void onScroll(lv_event_t* e) {
+    renderWindow(static_cast<lcd_textview_t*>(lv_event_get_user_data(e)), false);
+}
+void onDelete(lv_event_t* e) {
+    delete static_cast<lcd_textview_t*>(lv_event_get_user_data(e));
+}
+
+}  // namespace
+
+lcd_textview_t* lcdTextViewCreate(lv_obj_t* parent, int32_t w, int32_t h,
+                                  const lv_font_t* font, lv_color_t fg, size_t budget) {
+    lcd_textview_t* v = new lcd_textview_t();
+    v->font   = font;
+    v->budget = budget ? budget : 4096;
+
+    lv_obj_t* cont = lv_obj_create(parent);
+    lv_obj_remove_style_all(cont);
+    lv_obj_set_size(cont, w, h);
+    lv_obj_set_style_bg_color(cont, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(cont, 1, 0);
+    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+    v->cont = cont;
+
+    /* Invisible child whose height is the real content height — gives `cont` its
+     * scroll extent (and a correctly-sized scrollbar) without holding any text. */
+    lv_obj_t* sp = lv_obj_create(cont);
+    lv_obj_remove_style_all(sp);
+    lv_obj_set_pos(sp, 0, 0);
+    lv_obj_set_size(sp, 1, 1);
+    lv_obj_remove_flag(sp, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(sp, LV_OBJ_FLAG_CLICKABLE);
+    v->spacer = sp;
+
+    /* The one label: holds only the visible window, repositioned as we scroll.
+     * WRAP mode auto-sizes its height to the slice; our rows are pre-wrapped to
+     * <= cols chars so it never actually wraps. */
+    lv_obj_t* lbl = lv_label_create(cont);
+    lv_obj_set_width(lbl, w - 2);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_font(lbl, font, 0);
+    lv_obj_set_style_text_color(lbl, fg, 0);
+    lv_obj_set_style_text_line_space(lbl, 0, 0);
+    lv_obj_set_style_text_letter_space(lbl, 0, 0);
+    lv_obj_set_pos(lbl, 0, 0);
+    lv_label_set_text(lbl, "");
+    v->label = lbl;
+
+    v->rowH = lv_font_get_line_height(font);
+    if (v->rowH < 1) v->rowH = 8;
+    int charW = lv_font_get_glyph_width(font, 'M', 0);
+    if (charW < 1) charW = 5;
+    v->cols = (w - 2) / charW;
+    if (v->cols < 1) v->cols = 1;
+    v->vpRows = (h - 2) / v->rowH;
+    if (v->vpRows < 1) v->vpRows = 1;
+
+    lv_obj_add_event_cb(cont, onScroll, LV_EVENT_SCROLL, v);
+    lv_obj_add_event_cb(cont, onDelete, LV_EVENT_DELETE, v);
+    return v;
+}
+
+void lcdTextViewAppend(lcd_textview_t* v, const char* data, size_t len) {
+    if (!v || !data || len == 0) return;
+    const bool wasBottom = lcdTextViewAtBottom(v);
+
+    /* If scrolled up, remember the byte offset of the top visible row so we can
+     * re-pin to the same content after a front-trim shifts every row index. */
+    size_t anchorOff = 0;
+    bool   haveAnchor = false;
+    if (!wasBottom && !v->rowStart.empty()) {
+        int scrollY = lv_obj_get_scroll_y(v->cont);
+        if (scrollY < 0) scrollY = 0;
+        int topRow = scrollY / v->rowH;
+        if (topRow >= (int)v->rowStart.size()) topRow = (int)v->rowStart.size() - 1;
+        anchorOff  = v->rowStart[topRow];
+        haveAnchor = true;
+    }
+
+    v->buf.append(data, len);
+    const size_t erased = trim(v);
+    reflow(v);
+
+    if (wasBottom) {
+        lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
+    } else if (haveAnchor) {
+        const size_t target = (anchorOff > erased) ? (anchorOff - erased) : 0;
+        int lo = 0, hi = (int)v->rowStart.size();
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            if (v->rowStart[mid] < target) lo = mid + 1; else hi = mid;
+        }
+        int row = lo;
+        if (row >= (int)v->rowStart.size()) row = (int)v->rowStart.size() - 1;
+        if (row < 0) row = 0;
+        lv_obj_scroll_to_y(v->cont, row * v->rowH, LV_ANIM_OFF);
+    }
+    renderWindow(v, true);
+}
+
+void lcdTextViewSet(lcd_textview_t* v, const char* data, size_t len) {
+    if (!v) return;
+    const bool wasBottom = lcdTextViewAtBottom(v);
+    v->buf.assign(data ? data : "", data ? len : 0);
+    trim(v);
+    reflow(v);
+    if (wasBottom) lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
+    renderWindow(v, true);
+}
+
+void lcdTextViewSetSuffix(lcd_textview_t* v, const char* data, size_t len) {
+    if (!v) return;
+    const bool wasBottom = lcdTextViewAtBottom(v);
+    v->suffix.assign(data ? data : "", data ? len : 0);
+    reflow(v);
+    if (wasBottom) lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
+    renderWindow(v, true);
+}
+
+void lcdTextViewScrollToBottom(lcd_textview_t* v) {
+    if (!v) return;
+    lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
+    renderWindow(v, true);
+}
+
+bool lcdTextViewAtBottom(lcd_textview_t* v) {
+    if (!v) return true;
+    return lv_obj_get_scroll_bottom(v->cont) <= v->rowH;
+}
+
+lv_obj_t* lcdTextViewObj(lcd_textview_t* v) { return v ? v->cont : nullptr; }
+
+void lcdTextViewDelete(lcd_textview_t* v) {
+    /* The container's LV_EVENT_DELETE handler (onDelete) frees `v` itself. */
+    if (v && v->cont && lv_obj_is_valid(v->cont)) lv_obj_delete(v->cont);
+}
