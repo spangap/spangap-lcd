@@ -15,6 +15,18 @@
  * line height with zero line spacing — so the spacer's pixel height (rows x
  * pitch) stays exact and scrolling never drifts against LVGL's own layout.
  *
+ * Rendering is debounced, not synchronous. A panel flush is the bottleneck here
+ * (the SPI transfer paints the whole text region at only a few Hz), so the win
+ * isn't rate-limiting draws — it's *skipping* the intermediate ones. Append /
+ * set / scroll only mark the view dirty and (re)arm a paused lv_timer that fires
+ * once activity has settled for SETTLE_MS; the timer then does the single reflow
+ * + repaint of the *latest* state and re-pauses. A boot-time log flood therefore
+ * paints once when it quiets instead of churning through every scroll position,
+ * and a drag redraws when the finger stops, not on every move. A MAX_DEFER_MS
+ * cap bounds the wait so a non-stop stream still shows periodic progress. The
+ * timer pausing when clean keeps the lcd task's event-driven / light-sleep loop
+ * intact (no idle render wake).
+ *
  * Runs on the lcd task (LVGL is single-threaded); see lcd.h / lcd_internal.h.
  */
 #include "lcd.h"
@@ -39,12 +51,31 @@ struct lcd_textview_t {
     std::vector<uint32_t> rowStart;          /* byte offset of each visual row      */
     int                   firstRow  = -1;    /* first row currently in the label    */
     int                   rowsShown = 0;
+
+    /* Debounced rendering. Mutators only set the dirty flags below and (re)arm the
+     * flush timer; it fires once activity settles, does the one reflow/render of
+     * the latest state, and re-pauses. Skips the intermediate states of a flood. */
+    lv_timer_t* flushTimer  = nullptr;
+    uint32_t    dirtySince  = 0;             /* lv_tick when batch went dirty; 0=clean */
+    bool        needReflow  = false;         /* buf/suffix changed → re-wrap        */
+    bool        needRender  = false;         /* scroll moved → re-materialise band  */
+    bool        stick       = false;         /* re-pin to bottom on flush           */
+    bool        haveAnchor  = false;         /* re-pin to anchorOff on flush        */
+    bool        captured    = false;         /* pre-batch scroll state captured     */
+    size_t      anchorOff   = 0;             /* top visible row offset (pre-batch)  */
+    size_t      erased      = 0;             /* bytes front-trimmed this batch      */
 };
 
 namespace {
 
-/* Rows rendered above + below the viewport, so small scrolls don't re-lay-out. */
-constexpr int MARGIN = 6;
+/* Rows rendered above + below the viewport, so small scrolls don't re-lay-out
+ * (and so don't cost a panel flush) at all. */
+constexpr int      MARGIN       = 16;
+/* Debounce: draw only after activity has been quiet this long... */
+constexpr uint32_t SETTLE_MS    = 100;
+/* ...but never defer a pending draw longer than this, so a non-stop stream
+ * still updates (~1 Hz) instead of looking frozen. */
+constexpr uint32_t MAX_DEFER_MS = 1000;
 
 /* Rebuild disp = buf + suffix, recompute the visual-row offset table (hard wrap
  * at `cols`), and resize the spacer to the true content height. */
@@ -122,11 +153,78 @@ size_t trim(lcd_textview_t* v) {
     return cut;
 }
 
+/* (Re)arm the flush timer to fire SETTLE_MS after this — the latest — event, so
+ * a burst coalesces into one draw once it quiets. The MAX_DEFER_MS cap shortens
+ * the wait as the batch ages, so a stream that never quiets still draws ~1 Hz. */
+void schedule(lcd_textview_t* v) {
+    if (!v->flushTimer) return;
+    if (v->dirtySince == 0) { uint32_t t = lv_tick_get(); v->dirtySince = t ? t : 1; }
+    const uint32_t age = lv_tick_elaps(v->dirtySince);
+    uint32_t period = SETTLE_MS;
+    if (age + SETTLE_MS >= MAX_DEFER_MS)
+        period = (age >= MAX_DEFER_MS) ? 1 : (MAX_DEFER_MS - age);
+    lv_timer_set_period(v->flushTimer, period);
+    lv_timer_reset(v->flushTimer);     /* restart the countdown from now */
+    lv_timer_resume(v->flushTimer);
+}
+
+/* Capture the pre-batch scroll intent once, before the first mutation of a batch:
+ * pin to bottom if we were at it, else remember the top row so a front-trim can
+ * re-pin to the same content. Idempotent within a batch (cleared on flush). */
+void captureAnchor(lcd_textview_t* v) {
+    if (v->captured) return;
+    v->captured = true;
+    if (lcdTextViewAtBottom(v)) { v->stick = true; return; }
+    if (v->rowStart.empty()) return;
+    int scrollY = lv_obj_get_scroll_y(v->cont);
+    if (scrollY < 0) scrollY = 0;
+    int topRow = scrollY / v->rowH;
+    if (topRow >= (int)v->rowStart.size()) topRow = (int)v->rowStart.size() - 1;
+    v->anchorOff  = v->rowStart[topRow];
+    v->haveAnchor = true;
+}
+
+/* Apply all pending work in one pass: re-wrap, re-pin the scroll, repaint. */
+void flush(lcd_textview_t* v) {
+    if (v->needReflow) reflow(v);
+
+    if (v->stick) {
+        lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
+    } else if (v->needReflow && v->haveAnchor) {
+        const size_t target = (v->anchorOff > v->erased) ? (v->anchorOff - v->erased) : 0;
+        int lo = 0, hi = (int)v->rowStart.size();
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            if (v->rowStart[mid] < target) lo = mid + 1; else hi = mid;
+        }
+        int row = lo;
+        if (row >= (int)v->rowStart.size()) row = (int)v->rowStart.size() - 1;
+        if (row < 0) row = 0;
+        lv_obj_scroll_to_y(v->cont, row * v->rowH, LV_ANIM_OFF);
+    }
+
+    if (v->needReflow || v->needRender) renderWindow(v, v->needReflow);
+
+    v->needReflow = v->needRender = false;
+    v->stick = v->haveAnchor = v->captured = false;
+    v->erased = 0;
+    v->dirtySince = 0;
+}
+
+void flushTimerCb(lv_timer_t* t) {
+    flush(static_cast<lcd_textview_t*>(lv_timer_get_user_data(t)));
+    lv_timer_pause(t);                 /* nothing pending until the next mutation */
+}
+
 void onScroll(lv_event_t* e) {
-    renderWindow(static_cast<lcd_textview_t*>(lv_event_get_user_data(e)), false);
+    auto* v = static_cast<lcd_textview_t*>(lv_event_get_user_data(e));
+    v->needRender = true;
+    schedule(v);
 }
 void onDelete(lv_event_t* e) {
-    delete static_cast<lcd_textview_t*>(lv_event_get_user_data(e));
+    auto* v = static_cast<lcd_textview_t*>(lv_event_get_user_data(e));
+    if (v->flushTimer) lv_timer_delete(v->flushTimer);
+    delete v;
 }
 
 }  // namespace
@@ -145,6 +243,13 @@ lcd_textview_t* lcdTextViewCreate(lv_obj_t* parent, int32_t w, int32_t h,
     lv_obj_set_style_pad_all(cont, 1, 0);
     lv_obj_set_scroll_dir(cont, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+    /* Terminal scrolling, not widget scrolling: kill the inertial throw and the
+     * elastic overscroll. Momentum keeps animating scroll_y for seconds after a
+     * swipe, and on a few-Hz panel each decay step is its own near-identical
+     * draw — so a single swipe paints screens for ages. We want the view to stop
+     * dead where the finger lifts. */
+    lv_obj_remove_flag(cont, (lv_obj_flag_t)(LV_OBJ_FLAG_SCROLL_MOMENTUM |
+                                             LV_OBJ_FLAG_SCROLL_ELASTIC));
     v->cont = cont;
 
     /* Invisible child whose height is the real content height — gives `cont` its
@@ -182,70 +287,47 @@ lcd_textview_t* lcdTextViewCreate(lv_obj_t* parent, int32_t w, int32_t h,
 
     lv_obj_add_event_cb(cont, onScroll, LV_EVENT_SCROLL, v);
     lv_obj_add_event_cb(cont, onDelete, LV_EVENT_DELETE, v);
+
+    /* Paused until a mutation/scroll marks the view dirty; schedule() then sets
+     * the period (the debounce/cap delay) and arms it. */
+    v->flushTimer = lv_timer_create(flushTimerCb, SETTLE_MS, v);
+    lv_timer_pause(v->flushTimer);
     return v;
 }
 
 void lcdTextViewAppend(lcd_textview_t* v, const char* data, size_t len) {
     if (!v || !data || len == 0) return;
-    const bool wasBottom = lcdTextViewAtBottom(v);
-
-    /* If scrolled up, remember the byte offset of the top visible row so we can
-     * re-pin to the same content after a front-trim shifts every row index. */
-    size_t anchorOff = 0;
-    bool   haveAnchor = false;
-    if (!wasBottom && !v->rowStart.empty()) {
-        int scrollY = lv_obj_get_scroll_y(v->cont);
-        if (scrollY < 0) scrollY = 0;
-        int topRow = scrollY / v->rowH;
-        if (topRow >= (int)v->rowStart.size()) topRow = (int)v->rowStart.size() - 1;
-        anchorOff  = v->rowStart[topRow];
-        haveAnchor = true;
-    }
-
+    captureAnchor(v);                  /* pins bottom, or remembers the top row */
     v->buf.append(data, len);
-    const size_t erased = trim(v);
-    reflow(v);
-
-    if (wasBottom) {
-        lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
-    } else if (haveAnchor) {
-        const size_t target = (anchorOff > erased) ? (anchorOff - erased) : 0;
-        int lo = 0, hi = (int)v->rowStart.size();
-        while (lo < hi) {
-            const int mid = (lo + hi) / 2;
-            if (v->rowStart[mid] < target) lo = mid + 1; else hi = mid;
-        }
-        int row = lo;
-        if (row >= (int)v->rowStart.size()) row = (int)v->rowStart.size() - 1;
-        if (row < 0) row = 0;
-        lv_obj_scroll_to_y(v->cont, row * v->rowH, LV_ANIM_OFF);
-    }
-    renderWindow(v, true);
+    v->erased += trim(v);
+    v->needReflow = true;
+    schedule(v);
 }
 
 void lcdTextViewSet(lcd_textview_t* v, const char* data, size_t len) {
     if (!v) return;
-    const bool wasBottom = lcdTextViewAtBottom(v);
+    captureAnchor(v);                  /* only the bottom-stick intent survives  */
     v->buf.assign(data ? data : "", data ? len : 0);
     trim(v);
-    reflow(v);
-    if (wasBottom) lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
-    renderWindow(v, true);
+    v->haveAnchor = false;             /* content replaced — old offsets are void */
+    v->erased = 0;
+    v->needReflow = true;
+    schedule(v);
 }
 
 void lcdTextViewSetSuffix(lcd_textview_t* v, const char* data, size_t len) {
     if (!v) return;
-    const bool wasBottom = lcdTextViewAtBottom(v);
+    captureAnchor(v);
     v->suffix.assign(data ? data : "", data ? len : 0);
-    reflow(v);
-    if (wasBottom) lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
-    renderWindow(v, true);
+    v->needReflow = true;
+    schedule(v);
 }
 
 void lcdTextViewScrollToBottom(lcd_textview_t* v) {
     if (!v) return;
-    lv_obj_scroll_to_y(v->cont, LV_COORD_MAX, LV_ANIM_OFF);
-    renderWindow(v, true);
+    v->stick = v->captured = true;     /* force bottom over any pending anchor */
+    v->needRender = true;
+    schedule(v);
 }
 
 bool lcdTextViewAtBottom(lcd_textview_t* v) {
