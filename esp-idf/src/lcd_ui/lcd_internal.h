@@ -95,6 +95,10 @@ void        lcdGoHomeInternal(void);
 
 /* ---- lcd_statusbar.cpp ---- */
 void        lcdStatusbarInit(void);
+/** Show/hide the opaque top status bar (e.g. for an immersive program screen).
+ *  The launcher coordinates this with the current layer's geometry — programs
+ *  should call lcdProgramFullscreen(), not this, to reclaim the bar's space. */
+void        lcdStatusbarSetVisible(bool visible);
 
 /* ---- lcd_settings.cpp ---- */
 /** Register the built-in Settings (gear) program with the launcher. */
