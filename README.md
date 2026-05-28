@@ -79,7 +79,7 @@ and registers programs / panes via the public API above.
 
 ## What the consumer must supply
 
-The board HAL (`lcd_board.h`) — the consuming app-straddle implements
+The board HAL (`lcd_board.h`) — the consuming buildable straddle implements
 it. Display panel init, touch HAL, keyboard / trackball / button input,
 backlight control, dpi/orientation. For the LilyGo T-Deck Plus, the
 reticulous-tdeck straddle provides this in `tdeck.cpp`.
@@ -87,7 +87,7 @@ reticulous-tdeck straddle provides this in `tdeck.cpp`.
 ## What it does NOT own
 
 - The display/touch hardware drivers — those live in the consuming
-  app-straddle's board HAL.
+  buildable straddle's board HAL.
 - The browser SPA — that's [spangap-web](../spangap-web).
 - Per-app UI content — those are slices in each straddle's
   `esp-idf/lcd/` subdir, owned by the straddle that registered the

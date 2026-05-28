@@ -16,7 +16,7 @@ None.
 ### Build-time dependencies
 
 Declared in `esp-idf/idf_component.yml`. Additionally, the consumer
-app-straddle (e.g. `reticulous-tdeck`) must supply LVGL and a touch driver as
+buildable straddle (e.g. `reticulous-tdeck`) must supply LVGL and a touch driver as
 managed components when `CONFIG_SPANGAP_LCD=y`. Typical set:
 
 | Component | Source | License |
