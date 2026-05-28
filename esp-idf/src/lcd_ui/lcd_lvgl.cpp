@@ -307,7 +307,7 @@ static void tickCb(void*) { lv_tick_inc(LCD_TICK_MS); }
 bool lcdLvglInit(void) {
     const lcd_board_t* board = lcdBoard();
     if (!board || !board->init) {
-        err("no board registered — call lcdSetBoard() before diptychInit()\n");
+        err("no board registered — call lcdSetBoard() before spangapInit()\n");
         return false;
     }
     esp_lcd_panel_io_handle_t io = nullptr;
@@ -423,7 +423,7 @@ bool lcdInputPoll(void) {
  * indev is released. LVGL resumes it on press (lv_indev.c) and is supposed to
  * pause it on release; when that's missed the timer keeps auto-reading the indev
  * at ~30 Hz, which for a pointer also repositions the cursor → redraws → idle CPU
- * for no reason. diptych reads every indev manually (event mode) and handles its
+ * for no reason. spangap reads every indev manually (event mode) and handles its
  * own press/hold timing, so these timers should never run when nothing is held. */
 void lcdPauseIdleInputTimers(void) {
     lv_indev_t* devs[] = { s_indev, s_ptrIndev, s_btnIndev };

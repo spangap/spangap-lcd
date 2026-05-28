@@ -1,0 +1,16 @@
+description: "spangap-lcd: on-device LVGL launcher + settings shell for spangap device apps."
+url: https://github.com/spangap/spangap-lcd
+version: "0.1.0"
+license: "Apache-2.0"
+targets:
+  - esp32s3
+dependencies:
+  idf:
+    version: ">=5.5"
+  # Cross-straddle deps (spangap-core) are declared in straddle.yaml's
+  # `requires:`, not here — they're staged short-named via EXTRA_COMPONENT_DIRS
+  # at consumer-build time. Listing them here too would double-stage them under
+  # the manager's namespaced form and cause duplicate-symbol link errors.
+  # LVGL + touch are linked when CONFIG_SPANGAP_LCD=y (see CMakeLists.txt).
+  # The consumer's idf_component.yml supplies the actual managed-component
+  # versions; this manifest declares no LVGL deps.

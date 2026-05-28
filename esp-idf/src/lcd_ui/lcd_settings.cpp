@@ -57,11 +57,29 @@ const int SETTINGS_HDR_H = 30;
 lv_obj_t* s_titleLbl = nullptr;
 lv_obj_t* s_back     = nullptr;
 lv_obj_t* s_host     = nullptr;        /* holds the page stack, below the header */
+lv_obj_t* s_pillUp   = nullptr;        /* "more above" hint on the top page */
+lv_obj_t* s_pillDn   = nullptr;        /* "more below" hint on the top page */
 
 struct Page { lv_obj_t* obj; Node* node; };
 std::vector<Page> s_pages;             /* nav stack; back() = visible top page */
 
 void onRowClick(lv_event_t* e);
+
+/* Refresh the pill visibility from the top page's scroll bounds. Called on every
+ * scroll event from any page, and after each push/pop. Non-scrollable pages
+ * report scroll_top/bottom == 0, so this is a no-op for them. */
+void scrollIndicatorsUpdate() {
+    if (s_pages.empty() || !s_pillUp || !s_pillDn) return;
+    lv_obj_t* page = s_pages.back().obj;
+    bool up = lv_obj_get_scroll_top(page)    > 0;
+    bool dn = lv_obj_get_scroll_bottom(page) > 0;
+    if (up) lv_obj_remove_flag(s_pillUp, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag   (s_pillUp, LV_OBJ_FLAG_HIDDEN);
+    if (dn) lv_obj_remove_flag(s_pillDn, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag   (s_pillDn, LV_OBJ_FLAG_HIDDEN);
+}
+
+void onAnyPageScroll(lv_event_t*) { scrollIndicatorsUpdate(); }
 
 void updateHeader() {
     if (s_pages.empty()) return;
@@ -76,10 +94,10 @@ void updateHeader() {
     else                     lv_obj_remove_flag(s_back, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* Opaque, full-size page in the host — stacking hides the parent. Menu pages
- * are non-scrollable (they're short, and a scrollable parent can swallow a row
- * tap as a scroll); item panes scroll since they can be long. */
-lv_obj_t* makePage(bool scrollable) {
+/* Opaque, full-size page in the host — stacking hides the parent. All pages
+ * scroll: item panes can be long, and a menu can outgrow the viewport too
+ * (e.g. Settings/Net). LVGL's scroll-vs-tap threshold keeps row clicks working. */
+lv_obj_t* makePage() {
     lv_obj_t* pg = lv_obj_create(s_host);
     lv_obj_remove_style_all(pg);
     lv_obj_set_pos(pg, 0, 0);
@@ -89,14 +107,24 @@ lv_obj_t* makePage(bool scrollable) {
     lv_obj_set_flex_flow(pg, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(pg, 6, 0);
     lv_obj_set_style_pad_row(pg, 6, 0);
-    if (!scrollable) lv_obj_remove_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(pg, onAnyPageScroll, LV_EVENT_SCROLL, nullptr);
     return pg;
+}
+
+/* Called once the new top page is on the stack AND its content is built, so
+ * the layout pass sees the final content height before we read scroll bounds.
+ * Also re-floats the pills on top of the freshly-pushed page. */
+void afterPagePush(lv_obj_t* pg) {
+    if (s_pillUp) lv_obj_move_foreground(s_pillUp);
+    if (s_pillDn) lv_obj_move_foreground(s_pillDn);
+    lv_obj_update_layout(pg);
+    scrollIndicatorsUpdate();
 }
 
 void pushMenu(Node* menu) {
     info("settings pushMenu '%s' kids=%d\n",                 /* TEMP diag */
          menu == &s_root ? "root" : menu->label.c_str(), (int)menu->kids.size());
-    lv_obj_t* pg = makePage(false);
+    lv_obj_t* pg = makePage();
     for (Node* k : menu->kids) {
         lv_obj_t* row = lv_button_create(pg);
         lv_obj_remove_style_all(row);
@@ -125,13 +153,15 @@ void pushMenu(Node* menu) {
     }
     s_pages.push_back({ pg, menu });
     updateHeader();
+    afterPagePush(pg);
 }
 
 void pushItem(Node* item) {
-    lv_obj_t* pg = makePage(true);
+    lv_obj_t* pg = makePage();
     s_pages.push_back({ pg, item });
     updateHeader();
     item->fn(pg);                      /* build the pane into this page */
+    afterPagePush(pg);
 }
 
 void popPage() {
@@ -140,6 +170,7 @@ void popPage() {
     s_pages.pop_back();
     lv_obj_delete(top);                /* reveal the parent beneath, scroll intact */
     updateHeader();
+    scrollIndicatorsUpdate();
 }
 
 void onRowClick(lv_event_t* e) {
@@ -183,6 +214,33 @@ void settingsOpen(void* arg) {
     lv_obj_remove_style_all(s_host);
     lv_obj_set_pos(s_host, 0, SETTINGS_HDR_H);
     lv_obj_set_size(s_host, lv_pct(100), layerH - SETTINGS_HDR_H);
+    lv_obj_remove_flag(s_host, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_host, LV_OBJ_FLAG_CLICKABLE);
+
+    /* Scroll-overflow pills: small rounded chips at the right edge of the host,
+     * shown when the top page has content above (↑) or below (↓). Persistent
+     * across navigation; afterPagePush() moves them above each freshly-pushed
+     * page so they always float on top. */
+    auto makePill = [](const char* sym, lv_align_t align) {
+        lv_obj_t* p = lv_obj_create(s_host);
+        lv_obj_remove_style_all(p);
+        lv_obj_set_size(p, 24, 16);
+        lv_obj_set_style_bg_color(p, lv_color_hex(0x3a4658), 0);
+        lv_obj_set_style_bg_opa(p, LV_OPA_80, 0);
+        lv_obj_set_style_radius(p, 8, 0);
+        lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(p, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag   (p, LV_OBJ_FLAG_HIDDEN);
+        int y = (align == LV_ALIGN_TOP_RIGHT) ? 4 : -4;
+        lv_obj_align(p, align, -4, y);
+        lv_obj_t* l = lv_label_create(p);
+        lv_label_set_text(l, sym);
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        lv_obj_center(l);
+        return p;
+    };
+    s_pillUp = makePill(LV_SYMBOL_UP,   LV_ALIGN_TOP_RIGHT);
+    s_pillDn = makePill(LV_SYMBOL_DOWN, LV_ALIGN_BOTTOM_RIGHT);
 
     s_pages.clear();
     pushMenu(&s_root);                 /* root page */

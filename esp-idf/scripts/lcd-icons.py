@@ -2,7 +2,7 @@
 """
 lcd-icons.py — rasterize launcher icon sources into LVGL RGB565A8 .bin files.
 
-Invoked by the diptych_lcd_icons() CMake helper. For each *.svg / *.png source
+Invoked by the spangap_lcd_icons() CMake helper. For each *.svg / *.png source
 in the --src dirs and each WxH bucket in --sizes, render to that size and convert
 to the LVGL binary image format (RGB565A8: 16-bit colour + 8-bit alpha) via the
 LVGLImage.py shipped with the lvgl component. Output:

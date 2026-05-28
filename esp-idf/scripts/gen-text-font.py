@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate diptych's compact accented UI font: lv_font_montserrat_12_latin.
+"""Generate spangap's compact accented UI font: lv_font_montserrat_12_latin.
 
 LVGL's stock Montserrat fonts cover only ASCII + a sparse symbol set — no
 accented Latin — so user text (names, messages) loses umlauts/accents to

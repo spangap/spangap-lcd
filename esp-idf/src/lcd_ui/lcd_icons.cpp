@@ -35,7 +35,7 @@
  * resolution is tied to the tile (the lcd_launcher ICON layout), not a user
  * setting. Using a fixed bucket also means a device that still has an old
  * s.lcd.icon_res persisted in /state renders correctly without a factory reset.
- * Must match a bucket built by diptych_lcd_icons() (see the consumer CMakeLists).*/
+ * Must match a bucket built by spangap_lcd_icons() (see the consumer CMakeLists).*/
 #define LAUNCHER_ICON_RES "36x36"
 
 namespace {

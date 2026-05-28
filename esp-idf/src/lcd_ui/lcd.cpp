@@ -45,7 +45,7 @@ extern "C" void IRAM_ATTR lcdInputISR(void* /*arg*/) {
     portYIELD_FROM_ISR(hp);
 }
 
-/* Board HAL, registered by the consumer via lcdSetBoard() before diptychInit(). */
+/* Board HAL, registered by the consumer via lcdSetBoard() before spangapInit(). */
 static const lcd_board_t* s_board = nullptr;
 void lcdSetBoard(const lcd_board_t* board) { s_board = board; }
 const lcd_board_t* lcdBoard(void) { return s_board; }
@@ -172,7 +172,7 @@ static void lcdTaskFn(void*) {
         /* LVGL resumes a pointer indev's read timer on press (for its own
          * long-press timing) and only pauses it on release — if that pause is
          * missed, LVGL auto-reads the pointer at ~30 Hz forever (repositioning the
-         * cursor → redraws → quiescent CPU). diptych drives all input manually and
+         * cursor → redraws → quiescent CPU). spangap drives all input manually and
          * doesn't use LVGL's input timers, so enforce it: pause any released
          * indev's read timer. */
         lcdPauseIdleInputTimers();

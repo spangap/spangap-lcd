@@ -14,11 +14,11 @@
  * hides the layer back to the launcher; layers persist, so re-opening resumes
  * where it left off.
  *
- * Gated on CONFIG_DIPTYCH_LCD. lcdInit() is called by diptychInit(); the
+ * Gated on CONFIG_SPANGAP_LCD. lcdInit() is called by spangapInit(); the
  * consumer's board layer must implement the lcd_board.h contract.
  */
-#ifndef DIPTYCH_LCD_H
-#define DIPTYCH_LCD_H
+#ifndef SPANGAP_LCD_H
+#define SPANGAP_LCD_H
 
 #include "lvgl.h"
 
@@ -30,7 +30,7 @@ typedef void (*lcd_fn_t)(void* arg);
 #define ON_LCD [](void* arg)
 
 /** Bring up display, LVGL, launcher and status bar, and spawn the lcd task.
- *  Called by diptychInit() when CONFIG_DIPTYCH_LCD=y. Safe to call once. */
+ *  Called by spangapInit() when CONFIG_SPANGAP_LCD=y. Safe to call once. */
 void lcdInit(void);
 
 /** Run fn(arg) on the lcd task — the only place LVGL may be touched. Returns
@@ -205,4 +205,4 @@ lv_obj_t* lcdTextViewObj(lcd_textview_t* v);
  *  layer frees it automatically. */
 void lcdTextViewDelete(lcd_textview_t* v);
 
-#endif /* DIPTYCH_LCD_H */
+#endif /* SPANGAP_LCD_H */

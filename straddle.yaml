@@ -1,0 +1,19 @@
+# spangap-lcd — on-device LVGL launcher + shell.
+#
+# LCD-side UI activator: when this straddle is in the dep graph (and
+# --no-lcd is not set), the build folds every other straddle's
+# esp-idf/lcd/ slice into that straddle's firmware component and calls
+# its <prefix>LcdInit() from the generated dispatcher. Parallel to (not
+# built atop) spangap-web — the LCD launcher is its own UI surface.
+#
+# Owns the display + input + the one LVGL context; paints program tiles,
+# status bar, built-in Settings menu, built-in Log/CLI programs. Consumer
+# supplies the board HAL via lcd_board.h.
+schema_version: 1
+name: spangap/spangap-lcd
+prefix: lcd
+version: 0.1.0
+firmware: esp-idf
+platforms: [idf]
+requires:
+  - spangap/spangap-core
