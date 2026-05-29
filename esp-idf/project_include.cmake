@@ -29,7 +29,13 @@ function(spangap_lcd_icons)
         set(_DLI_SIZES "36x36")
     endif()
     if(NOT _DLI_PARTITION)
-        set(_DLI_PARTITION "fixed_a")
+        # Default to whatever bootstrap.cmake picked — fixed_a (OTA on) or fixed (OTA off).
+        set(_DLI_PARTITION "${SPANGAP_FIXED_PARTITION}")
+    endif()
+    if(NOT _DLI_PARTITION)
+        message(FATAL_ERROR
+            "spangap_lcd_icons: no PARTITION specified and SPANGAP_FIXED_PARTITION "
+            "isn't set (bootstrap.cmake didn't run?)")
     endif()
     if(NOT TARGET spangap_data_merge)
         message(FATAL_ERROR "spangap_lcd_icons: call spangap_create_factory_image() first")
