@@ -40,8 +40,11 @@ spangap-lcd/
 
 ## How others use it — programs
 
-Any straddle that wants an on-device UI calls `lcdRegister` from its
-`init()` (gated on `CONFIG_SPANGAP_LCD`):
+Any straddle that wants an on-device UI lists `spangap/spangap-lcd`
+under its `optional_requires:` in `straddle.yaml`, then calls
+`lcdRegister` from its `init()` gated on `CONFIG_SPANGAP_LCD` — the
+short-form alias that `spangap-inside` emits whenever this straddle
+is in the staged set (a `--no-lcd` build leaves it undefined):
 
 ```cpp
 #if CONFIG_SPANGAP_LCD
@@ -68,11 +71,16 @@ the dep graph (and `--no-lcd` is not set), the build:
 1. Walks every other straddle's `esp-idf/lcd/` slice.
 2. Folds that slice into the *owning straddle's* firmware component
    (the slice's `.cpp` includes use the straddle's existing
-   `#include` and Kconfig surface).
+   `#include` surface plus the auto-generated `CONFIG_STRADDLE_*`
+   presence symbols).
 3. Calls the slice's `<prefix>LcdInit()` from the generated dispatcher.
 
 The slice's `.cpp` body is typically wrapped in
 `#if CONFIG_SPANGAP_LCD` so straddles compile without it as well.
+`CONFIG_SPANGAP_LCD` is auto-emitted as a short-form alias by
+`spangap-inside` when this straddle is staged — no user-facing
+`menuconfig` knob. See `spangap/INTERNALS.md` for the
+`optional_requires:` mechanism that drives it.
 
 A slice for straddle `foo` lives in `foo/esp-idf/lcd/src/foo_lcd.cpp`
 and registers programs / panes via the public API above.

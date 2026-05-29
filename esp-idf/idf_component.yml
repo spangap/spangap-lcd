@@ -11,6 +11,13 @@ dependencies:
   # `requires:`, not here — they're staged short-named via EXTRA_COMPONENT_DIRS
   # at consumer-build time. Listing them here too would double-stage them under
   # the manager's namespaced form and cause duplicate-symbol link errors.
-  # LVGL + touch are linked when CONFIG_SPANGAP_LCD=y (see CMakeLists.txt).
-  # The consumer's idf_component.yml supplies the actual managed-component
-  # versions; this manifest declares no LVGL deps.
+  #
+  # LVGL is pinned here, not by the consumer: spangap-lcd ships its own
+  # launcher / settings shell built against the LVGL v9 API, so we own the
+  # version. Consumers don't need to list lvgl in their manifest. The link
+  # is still Kconfig-gated in CMakeLists.txt, so screen-less builds compile
+  # LVGL but don't link it into the final binary. esp_lcd_touch is brought
+  # in transitively by the consumer's specific touch driver (e.g.
+  # esp_lcd_touch_gt911 in reticulous-tdeck).
+  lvgl/lvgl:
+    version: "^9.2"
