@@ -24,6 +24,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
+#include <algorithm>
 
 namespace {
 
@@ -122,10 +123,20 @@ void afterPagePush(lv_obj_t* pg) {
 }
 
 void pushMenu(Node* menu) {
-    info("settings pushMenu '%s' kids=%d\n",                 /* TEMP diag */
-         menu == &s_root ? "root" : menu->label.c_str(), (int)menu->kids.size());
+    dbg("settings pushMenu '%s' kids=%d\n",                 /* TEMP diag */
+        menu == &s_root ? "root" : menu->label.c_str(), (int)menu->kids.size());
     lv_obj_t* pg = makePage();
-    for (Node* k : menu->kids) {
+    /* Show children alphabetically (case-insensitive). Registration order is
+     * boot/dependency order, which isn't meaningful to the user; sort a copy so
+     * the tree itself is left untouched. Mirrors the web menu's label sort. */
+    std::vector<Node*> kids = menu->kids;
+    std::sort(kids.begin(), kids.end(), [](const Node* a, const Node* b) {
+        std::string la = a->label, lb = b->label;
+        for (char& c : la) c = (char)tolower((unsigned char)c);
+        for (char& c : lb) c = (char)tolower((unsigned char)c);
+        return la < lb;
+    });
+    for (Node* k : kids) {
         lv_obj_t* row = lv_button_create(pg);
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, lv_pct(100));
@@ -135,8 +146,8 @@ void pushMenu(Node* menu) {
         lv_obj_set_style_radius(row, 6, 0);
         lv_obj_add_event_cb(row, onRowClick, LV_EVENT_CLICKED, k);
         lv_obj_add_event_cb(row, [](lv_event_t* e) {    /* TEMP diag */
-            info("settings row PRESSED: %s\n",
-                 static_cast<Node*>(lv_event_get_user_data(e))->label.c_str());
+            dbg("settings row PRESSED: %s\n",
+                static_cast<Node*>(lv_event_get_user_data(e))->label.c_str());
         }, LV_EVENT_PRESSED, k);
 
         lv_obj_t* lbl = lv_label_create(row);
@@ -176,7 +187,7 @@ void popPage() {
 void onRowClick(lv_event_t* e) {
     Node* n = static_cast<Node*>(lv_event_get_user_data(e));
     if (!n) return;
-    info("settings row CLICKED: %s\n", n->label.c_str());   /* TEMP diag */
+    dbg("settings row CLICKED: %s\n", n->label.c_str());   /* TEMP diag */
     if (n->fn) pushItem(n);            /* item -> pane page */
     else       pushMenu(n);            /* submenu -> descend */
 }
