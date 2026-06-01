@@ -64,6 +64,9 @@ struct Term {
 Term s_log;
 Term s_cli;
 std::string s_cliEdit;              /* CLI: the command line being typed (inline) */
+int         s_cliEsc  = 0;          /* CLI output escape-filter state (see cliFeed)  */
+std::string s_cliOsc;               /* accumulated OSC body, for the 5379 raw toggle  */
+bool        s_cliRaw  = false;      /* raw passthrough (interactive ssh): no local echo */
 
 /* ---- Log program ---- */
 
@@ -124,11 +127,74 @@ void cliShowEdit(bool pin) {
     if (pin) lcdTextViewScrollToBottom(s_cli.tv);
 }
 
+/* Enter/leave raw passthrough. In raw mode the remote pty owns echo + editing
+ * (interactive ssh shell): cliKeyCb sends keystrokes verbatim and we show no
+ * local edit line. Toggled by our private OSC 5379 (see ssh_client.cpp / the
+ * browser's TerminalWindow.vue). */
+void cliSetRaw(bool on) {
+    if (s_cliRaw == on) return;
+    s_cliRaw = on;
+    s_cliEdit.clear();
+    if (s_cli.tv) lcdTextViewSetSuffix(s_cli.tv, on ? "" : "_", on ? 0 : 1);
+}
+
+/* Feed device→screen bytes through an escape-sequence filter before they reach
+ * the text view, which is plain-text only (no cursor addressing / colour). CSI,
+ * OSC and other escapes are dropped; printable text + \n \r \t \b pass through.
+ * Our own OSC 5379;1/;0 is recognised and flips raw mode. State persists across
+ * calls — a sequence can straddle an itsRecv boundary. */
+void cliFeed(const char* data, size_t n) {
+    if (!s_cli.tv) return;
+    char out[2048];
+    size_t o = 0;
+    auto flush = [&]() { if (o) { lcdTextViewAppend(s_cli.tv, out, o); o = 0; } };
+    auto oscDone = [&]() {
+        if      (s_cliOsc == "5379;1") cliSetRaw(true);
+        else if (s_cliOsc == "5379;0") cliSetRaw(false);
+        s_cliOsc.clear();
+    };
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)data[i];
+        switch (s_cliEsc) {
+        case 0:                                          /* normal text */
+            if (c == 0x1b) s_cliEsc = 1;                 /* ESC — start of a sequence */
+            else if (c >= 0x20 || c == '\n' || c == '\r' || c == '\t' || c == '\b') {
+                if (o == sizeof(out)) flush();
+                out[o++] = (char)c;
+            }                                            /* other control bytes: drop */
+            break;
+        case 1:                                          /* just saw ESC */
+            if (c == '[')                       s_cliEsc = 2;                 /* CSI */
+            else if (c == ']')                  { s_cliEsc = 3; s_cliOsc.clear(); }  /* OSC */
+            else if (c=='('||c==')'||c=='*'||c=='+')  s_cliEsc = 5;           /* charset: eat 1 */
+            else if (c=='P'||c=='X'||c=='^'||c=='_')  { s_cliEsc = 3; s_cliOsc.clear(); } /* DCS/SOS/PM/APC: to ST */
+            else                                s_cliEsc = 0;                 /* 2-byte esc: done */
+            break;
+        case 2:                                          /* CSI: params… then a final 0x40–0x7e */
+            if (c >= 0x40 && c <= 0x7e) s_cliEsc = 0;
+            break;
+        case 3:                                          /* OSC/string: until BEL or ST (ESC \) */
+            if (c == 0x07)      { oscDone(); s_cliEsc = 0; }
+            else if (c == 0x1b) s_cliEsc = 4;
+            else if (s_cliOsc.size() < 32) s_cliOsc.push_back((char)c);
+            break;
+        case 4:                                          /* OSC saw ESC, expect '\' (ST) */
+            oscDone();
+            s_cliEsc = (c == '\\') ? 0 : (c == 0x1b ? 4 : 0);
+            break;
+        case 5:                                          /* charset designator: drop one byte */
+            s_cliEsc = 0;
+            break;
+        }
+    }
+    flush();
+}
+
 void cliRecvCb(int handle, size_t) {
     char tmp[2048];
     size_t n;
     while ((n = itsRecv(handle, tmp, sizeof(tmp), 0)) > 0)
-        if (s_cli.tv) lcdTextViewAppend(s_cli.tv, tmp, n);
+        cliFeed(tmp, n);
 }
 
 void cliDiscCb(int) {
@@ -143,6 +209,7 @@ void cliOnDelete(lv_event_t*) {
     if (s_cli.handle >= 0) itsDisconnect(s_cli.handle);
     s_cli = Term{};        /* the text view frees itself on its container DELETE */
     s_cliEdit.clear();
+    s_cliEsc = 0; s_cliOsc.clear(); s_cliRaw = false;   /* fresh filter/mode on reopen */
 }
 
 /* Focus the terminal so the keyboard reaches it. Deferred via a one-shot timer
@@ -161,7 +228,18 @@ void cliFocusClickCb(lv_event_t*) { cliFocus(); }
 /* Inline line editor — keys arrive as LV_EVENT_KEY on the focused terminal. */
 void cliKeyCb(lv_event_t* e) {
     uint32_t key = lv_event_get_key(e);
-    dbg("cliKey: 0x%x\n", (unsigned)key);                 /* TEMP probe: did a key reach the focused CLI? */
+    if (s_cliRaw) {
+        /* Raw passthrough (interactive ssh): one byte per key, no local echo or
+         * editing — the remote pty echoes through cliFeed. */
+        char b;
+        if      (key == LV_KEY_ENTER)     b = '\r';
+        else if (key == LV_KEY_BACKSPACE) b = 0x7f;
+        else if (key == LV_KEY_ESC)       b = 0x1b;
+        else if (key >= 0x20 && key < 0x7F) b = (char)key;
+        else return;                                    /* nav/other — nothing to send */
+        if (s_cli.handle >= 0) itsSend(s_cli.handle, &b, 1, pdMS_TO_TICKS(200));
+        return;
+    }
     if (key == LV_KEY_ENTER) {
         std::string line = s_cliEdit;
         line.push_back('\n');
