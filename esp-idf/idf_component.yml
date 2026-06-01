@@ -18,6 +18,6 @@ dependencies:
   # is still Kconfig-gated in CMakeLists.txt, so screen-less builds compile
   # LVGL but don't link it into the final binary. esp_lcd_touch is brought
   # in transitively by the consumer's specific touch driver (e.g.
-  # esp_lcd_touch_gt911 in reticulous-tdeck).
+  # esp_lcd_touch_gt911 in hw-tdeck).
   lvgl/lvgl:
     version: "^9.2"

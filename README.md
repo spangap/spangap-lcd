@@ -90,7 +90,7 @@ and registers programs / panes via the public API above.
 The board HAL (`lcd_board.h`) — the consuming buildable straddle implements
 it. Display panel init, touch HAL, keyboard / trackball / button input,
 backlight control, dpi/orientation. For the LilyGo T-Deck Plus, the
-reticulous-tdeck straddle provides this in `tdeck.cpp`.
+hw-tdeck straddle provides this in `tdeck.cpp`.
 
 ## What it does NOT own
 

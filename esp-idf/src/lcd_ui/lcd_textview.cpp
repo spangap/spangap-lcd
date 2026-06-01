@@ -39,7 +39,8 @@
 struct lcd_textview_t {
     lv_obj_t*             cont   = nullptr;  /* scroll container (the viewport)     */
     lv_obj_t*             spacer = nullptr;  /* invisible child = true content height*/
-    lv_obj_t*             label  = nullptr;  /* the materialised window of rows     */
+    lv_obj_t*             label[2] = { nullptr, nullptr };  /* double buffer: [active] shown, other is back */
+    int                   active = 0;        /* index of the visible (front) label  */
     const lv_font_t*      font   = nullptr;
     int                   rowH   = 8;        /* line pitch (px)                     */
     int                   cols   = 1;        /* chars per visual row                */
@@ -69,8 +70,10 @@ struct lcd_textview_t {
 namespace {
 
 /* Rows rendered above + below the viewport, so small scrolls don't re-lay-out
- * (and so don't cost a panel flush) at all. */
-constexpr int      MARGIN       = 16;
+ * (and so don't cost a panel flush) at all. 32 each side = a ~64-row band, well
+ * past a viewport, so a normal swipe stays inside it: pure LVGL scroll of the
+ * already-materialised label, no re-materialise, no roll-through. */
+constexpr int      MARGIN       = 32;
 /* Debounce: draw only after activity has been quiet this long... */
 constexpr uint32_t SETTLE_MS    = 100;
 /* ...but never defer a pending draw longer than this, so a non-stop stream
@@ -101,14 +104,29 @@ void reflow(lcd_textview_t* v) {
 
 /* Materialise the rows around the current scroll offset into the label. Skips
  * the work unless the visible band moved outside the rendered window (or force). */
+/* Reveal the freshly-rendered back label and hide the stale front one in one
+ * step, so a band re-materialise appears atomically instead of repainting in
+ * place. The viewport content is identical across the swap (same rows under the
+ * scroll offset, just backed by a differently-positioned label), so it costs at
+ * most one flush of the viewport region — and only on a band cross. We swap via
+ * the HIDDEN flag rather than z-order: the labels are transparent (the container
+ * paints the background), so a back label left visible would composite through. */
+void swapBands(lcd_textview_t* v) {
+    lv_obj_remove_flag(v->label[1 - v->active], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag   (v->label[v->active],     LV_OBJ_FLAG_HIDDEN);
+    v->active = 1 - v->active;
+}
+
 void renderWindow(lcd_textview_t* v, bool force) {
-    if (!v->label || !lv_obj_is_valid(v->label)) return;
+    lv_obj_t* back = v->label[1 - v->active];   /* materialise into the hidden buffer */
+    if (!back || !lv_obj_is_valid(back)) return;
     const int total = (int)v->rowStart.size();
     if (total == 0) {
-        lv_label_set_text(v->label, "");
-        lv_obj_set_y(v->label, 0);
+        lv_label_set_text(back, "");
+        lv_obj_set_y(back, 0);
         v->firstRow  = 0;
         v->rowsShown = 0;
+        swapBands(v);
         return;
     }
 
@@ -119,7 +137,7 @@ void renderWindow(lcd_textview_t* v, bool force) {
 
     if (!force && v->firstRow >= 0 &&
         topRow >= v->firstRow && botRow <= v->firstRow + v->rowsShown)
-        return;                            /* still inside the rendered band */
+        return;                            /* still inside the rendered band — no swap */
 
     /* Slide a fixed-size window to fit within the content, so an elastic
      * overscroll past either end never shrinks or blanks the visible rows. */
@@ -137,10 +155,12 @@ void renderWindow(lcd_textview_t* v, bool force) {
         win.append(v->disp, s0, s1 - s0);
         if (r + 1 < first + shown) win.push_back('\n');
     }
-    lv_label_set_text(v->label, win.c_str());
-    lv_obj_set_y(v->label, first * v->rowH);
+    lv_label_set_text(back, win.c_str());
+    lv_obj_set_y(back, first * v->rowH);
+    lv_obj_set_height(back, shown * v->rowH);   /* explicit, so CLIP shows the whole band */
     v->firstRow  = first;
     v->rowsShown = shown;
+    swapBands(v);
 }
 
 /* Trim buf to budget on a whole-line boundary; returns bytes removed from front. */
@@ -262,19 +282,28 @@ lcd_textview_t* lcdTextViewCreate(lv_obj_t* parent, int32_t w, int32_t h,
     lv_obj_remove_flag(sp, LV_OBJ_FLAG_CLICKABLE);
     v->spacer = sp;
 
-    /* The one label: holds only the visible window, repositioned as we scroll.
-     * WRAP mode auto-sizes its height to the slice; our rows are pre-wrapped to
-     * <= cols chars so it never actually wraps. */
-    lv_obj_t* lbl = lv_label_create(cont);
-    lv_obj_set_width(lbl, w - 2);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_style_text_font(lbl, font, 0);
-    lv_obj_set_style_text_color(lbl, fg, 0);
-    lv_obj_set_style_text_line_space(lbl, 0, 0);
-    lv_obj_set_style_text_letter_space(lbl, 0, 0);
-    lv_obj_set_pos(lbl, 0, 0);
-    lv_label_set_text(lbl, "");
-    v->label = lbl;
+    /* Two stacked labels, double-buffered: renderWindow materialises the next
+     * band into the hidden one and swaps visibility, so a band cross appears
+     * atomically instead of repainting in place. Each holds only the visible
+     * window ± MARGIN rows. WRAP mode auto-sizes height to the slice; our rows
+     * are pre-wrapped to <= cols chars so it never actually wraps. */
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t* lbl = lv_label_create(cont);
+        lv_obj_set_width(lbl, w - 2);
+        /* Rows are pre-wrapped to <= cols with explicit \n, so WRAP mode only
+         * wastes time re-measuring word breaks over the whole label on every
+         * draw (×32 partial strips). CLIP splits on \n and skips that. */
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_style_text_font(lbl, font, 0);
+        lv_obj_set_style_text_color(lbl, fg, 0);
+        lv_obj_set_style_text_line_space(lbl, 0, 0);
+        lv_obj_set_style_text_letter_space(lbl, 0, 0);
+        lv_obj_set_pos(lbl, 0, 0);
+        lv_label_set_text(lbl, "");
+        if (i == 1) lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);   /* back buffer starts hidden */
+        v->label[i] = lbl;
+    }
+    v->active = 0;
 
     v->rowH = lv_font_get_line_height(font);
     if (v->rowH < 1) v->rowH = 8;

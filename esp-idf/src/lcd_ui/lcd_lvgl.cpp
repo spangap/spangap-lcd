@@ -215,10 +215,36 @@ static void cursorPoke(void) {
     lv_timer_set_repeat_count(s_ptrHide, 1);
 }
 
+/* Glide the cursor toward (x,y) instead of teleporting. The trackball delivers one
+ * read per pulse (EVENT mode); each retargets a short ease-out, so a flick trails
+ * smoothly to rest. It's an lv_anim, so it self-drives the lcd loop frame-by-frame
+ * (and rides the animation CPU boost) until it settles. snap=true jumps instantly —
+ * used when the cursor first reappears after an auto-hide so it doesn't streak in
+ * from wherever it last was. We own the position (no lv_indev_set_cursor). */
+static void cursorGlideTo(int x, int y, bool snap) {
+    if (!s_cursor) return;
+    if (snap) { lv_anim_delete(s_cursor, nullptr); lv_obj_set_pos(s_cursor, x, y); return; }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_cursor);
+    lv_anim_set_duration(&a, 100);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&a, [](void* o, int32_t v) { lv_obj_set_x((lv_obj_t*)o, v); });
+    lv_anim_set_values(&a, lv_obj_get_x(s_cursor), x);
+    lv_anim_start(&a);
+    lv_anim_set_exec_cb(&a, [](void* o, int32_t v) { lv_obj_set_y((lv_obj_t*)o, v); });
+    lv_anim_set_values(&a, lv_obj_get_y(s_cursor), y);
+    lv_anim_start(&a);
+}
+
 static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
     const lcd_board_t* board = lcdBoard();
     int x = 0, y = 0;
-    if (board && board->pointer_read && board->pointer_read(&x, &y)) cursorPoke();  /* moved */
+    if (board && board->pointer_read && board->pointer_read(&x, &y)) {   /* moved */
+        bool wasHidden = s_cursor && lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        cursorPoke();
+        cursorGlideTo(x, y, wasHidden);    /* snap into view, then ease on later pulses */
+    }
     data->point.x = x;
     data->point.y = y;
 
@@ -386,7 +412,9 @@ bool lcdLvglInit(void) {
         lv_indev_set_type(s_ptrIndev, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(s_ptrIndev, pointerReadCb);
         lv_indev_set_display(s_ptrIndev, s_disp);
-        lv_indev_set_cursor(s_ptrIndev, s_cursor);
+        /* Not lv_indev_set_cursor(): that snaps the cursor to the point on every
+         * read (the zap). We position s_cursor ourselves in pointerReadCb via
+         * cursorGlideTo() so it eases to each new spot. */
         lv_indev_set_mode(s_ptrIndev, LV_INDEV_MODE_EVENT);
         lcdPointerSetVisibleMs(s_ptrVisMs);   /* apply dwell now the cursor exists
                                                  (the owner may have set it earlier) */

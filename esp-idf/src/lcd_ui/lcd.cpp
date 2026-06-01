@@ -152,6 +152,11 @@ static void lcdTaskFn(void*) {
 
     info("ready (%dx%d)\n", lcdScreenW(), lcdScreenH());
 
+    /* Hold a manual boost to 240 MHz while any LVGL animation is running. Anim
+     * frames come as timer wakes (not notifies), so the notify model would leave
+     * the inertial fling / transitions at the DFS floor; this keeps them smooth.
+     * Released the instant the last animation ends. */
+    bool animBoosted = false;
     for (;;) {
         while (itsPoll(0)) {}              /* drain aux / storage callbacks */
         if (s_inputPending) {             /* woke on a touch/button/trackball edge */
@@ -168,7 +173,10 @@ static void lcdTaskFn(void*) {
         /* While blanked, skip rendering entirely and sleep until the next input
          * edge or ITS message — no 1 Hz status-clock wake, so the chip can
          * light-sleep. (Keyboard keys arrive as lcdRun aux and wake us here.) */
-        if (lcdScreenIsOff()) { itsPoll(portMAX_DELAY); continue; }
+        if (lcdScreenIsOff()) {
+            if (animBoosted) { pmBoostEnd(); animBoosted = false; }   /* never pin 240 while blanked */
+            itsPoll(portMAX_DELAY); continue;
+        }
         /* LVGL resumes a pointer indev's read timer on press (for its own
          * long-press timing) and only pauses it on release — if that pause is
          * missed, LVGL auto-reads the pointer at ~30 Hz forever (repositioning the
@@ -180,6 +188,11 @@ static void lcdTaskFn(void*) {
          * idle return is honest: sleep until the next LVGL timer (animation,
          * clock, touch-tracking) or an ISR/ITS wake — no more 30ms input poll. */
         uint32_t idle = lv_timer_handler();
+        /* Boost across active animations (their frames are timer wakes, not
+         * notifies). Acquire on the rising edge, release when the last one ends. */
+        bool anim = lv_anim_count_running() > 0;
+        if (anim && !animBoosted)      { pmBoost();    animBoosted = true; }
+        else if (!anim && animBoosted) { pmBoostEnd(); animBoosted = false; }
         itsPoll(idle == LV_NO_TIMER_READY ? portMAX_DELAY : pdMS_TO_TICKS(idle));
     }
 }
