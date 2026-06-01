@@ -27,6 +27,7 @@
  * that sizes the log paste-back.
  */
 #include "lcd_internal.h"
+#include "lcd_term.h"
 
 #include "its.h"
 #include "log.h"
@@ -63,10 +64,7 @@ struct Term {
 
 Term s_log;
 Term s_cli;
-std::string s_cliEdit;              /* CLI: the command line being typed (inline) */
-int         s_cliEsc  = 0;          /* CLI output escape-filter state (see cliFeed)  */
-std::string s_cliOsc;               /* accumulated OSC body, for the 5379 raw toggle  */
-bool        s_cliRaw  = false;      /* raw passthrough (interactive ssh): no local echo */
+lcd_term_t* s_cliTerm = nullptr;    /* CLI: the libvterm-backed on-device terminal */
 
 /* ---- Log program ---- */
 
@@ -111,105 +109,36 @@ void logFn(void* arg) {
 }
 
 /* ---- CLI program ----
- * Inline terminal: no separate input box. The command line being typed lives in
- * s_cliEdit and is rendered as the text view's transient suffix (committed
- * output sits in the scrollback, which ends in the server's "$ " prompt),
- * followed by a cursor. The container is the keyboard focus target; cliKeyCb is
- * the line editor. The device CLI's DC port is LINE mode — we echo locally. */
+ * A real terminal (lcd_term / libvterm). The device runs this DC session in
+ * CLI_ANSI and echoes + line-edits; an interactive ssh shell drives the screen
+ * directly. We forward keystrokes and render whatever comes back — cursor
+ * addressing, scrolling and all — so a shell, top, vim and ncurses lay out
+ * correctly instead of scrolling off into nowhere. */
 
-/* Push the in-progress line + cursor as the transient suffix. When the user is
- * typing (pin), pull the view down to the live prompt regardless of scroll pos. */
-void cliShowEdit(bool pin) {
-    if (!s_cli.tv) return;
-    std::string suf = s_cliEdit;
-    suf.push_back('_');                             /* cursor */
-    lcdTextViewSetSuffix(s_cli.tv, suf.data(), suf.size());
-    if (pin) lcdTextViewScrollToBottom(s_cli.tv);
-}
-
-/* Enter/leave raw passthrough. In raw mode the remote pty owns echo + editing
- * (interactive ssh shell): cliKeyCb sends keystrokes verbatim and we show no
- * local edit line. Toggled by our private OSC 5379 (see ssh_client.cpp / the
- * browser's TerminalWindow.vue). */
-void cliSetRaw(bool on) {
-    if (s_cliRaw == on) return;
-    s_cliRaw = on;
-    s_cliEdit.clear();
-    if (s_cli.tv) lcdTextViewSetSuffix(s_cli.tv, on ? "" : "_", on ? 0 : 1);
-}
-
-/* Feed device→screen bytes through an escape-sequence filter before they reach
- * the text view, which is plain-text only (no cursor addressing / colour). CSI,
- * OSC and other escapes are dropped; printable text + \n \r \t \b pass through.
- * Our own OSC 5379;1/;0 is recognised and flips raw mode. State persists across
- * calls — a sequence can straddle an itsRecv boundary. */
-void cliFeed(const char* data, size_t n) {
-    if (!s_cli.tv) return;
-    char out[2048];
-    size_t o = 0;
-    auto flush = [&]() { if (o) { lcdTextViewAppend(s_cli.tv, out, o); o = 0; } };
-    auto oscDone = [&]() {
-        if      (s_cliOsc == "5379;1") cliSetRaw(true);
-        else if (s_cliOsc == "5379;0") cliSetRaw(false);
-        s_cliOsc.clear();
-    };
-    for (size_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)data[i];
-        switch (s_cliEsc) {
-        case 0:                                          /* normal text */
-            if (c == 0x1b) s_cliEsc = 1;                 /* ESC — start of a sequence */
-            else if (c >= 0x20 || c == '\n' || c == '\r' || c == '\t' || c == '\b') {
-                if (o == sizeof(out)) flush();
-                out[o++] = (char)c;
-            }                                            /* other control bytes: drop */
-            break;
-        case 1:                                          /* just saw ESC */
-            if (c == '[')                       s_cliEsc = 2;                 /* CSI */
-            else if (c == ']')                  { s_cliEsc = 3; s_cliOsc.clear(); }  /* OSC */
-            else if (c=='('||c==')'||c=='*'||c=='+')  s_cliEsc = 5;           /* charset: eat 1 */
-            else if (c=='P'||c=='X'||c=='^'||c=='_')  { s_cliEsc = 3; s_cliOsc.clear(); } /* DCS/SOS/PM/APC: to ST */
-            else                                s_cliEsc = 0;                 /* 2-byte esc: done */
-            break;
-        case 2:                                          /* CSI: params… then a final 0x40–0x7e */
-            if (c >= 0x40 && c <= 0x7e) s_cliEsc = 0;
-            break;
-        case 3:                                          /* OSC/string: until BEL or ST (ESC \) */
-            if (c == 0x07)      { oscDone(); s_cliEsc = 0; }
-            else if (c == 0x1b) s_cliEsc = 4;
-            else if (s_cliOsc.size() < 32) s_cliOsc.push_back((char)c);
-            break;
-        case 4:                                          /* OSC saw ESC, expect '\' (ST) */
-            oscDone();
-            s_cliEsc = (c == '\\') ? 0 : (c == 0x1b ? 4 : 0);
-            break;
-        case 5:                                          /* charset designator: drop one byte */
-            s_cliEsc = 0;
-            break;
-        }
-    }
-    flush();
+/* Bytes the terminal wants to send upstream (keystroke encodings, query
+ * replies) → straight to the device CLI session. */
+void cliOutput(const char* data, size_t len, void* /*user*/) {
+    if (s_cli.handle >= 0) itsSend(s_cli.handle, data, len, pdMS_TO_TICKS(200));
 }
 
 void cliRecvCb(int handle, size_t) {
     char tmp[2048];
     size_t n;
     while ((n = itsRecv(handle, tmp, sizeof(tmp), 0)) > 0)
-        cliFeed(tmp, n);
+        lcdTermFeed(s_cliTerm, tmp, n);
 }
 
 void cliDiscCb(int) {
     s_cli.handle = -1;
-    if (s_cli.tv) {
-        const char* m = "\n[cli connection closed]\n";
-        lcdTextViewAppend(s_cli.tv, m, strlen(m));
-    }
+    const char* m = "\r\n[cli connection closed]\r\n";
+    lcdTermFeed(s_cliTerm, m, strlen(m));
 }
 
 void cliOnDelete(lv_event_t*) {
     if (s_cli.handle >= 0) itsDisconnect(s_cli.handle);
-    s_cli = Term{};        /* the text view frees itself on its container DELETE */
-    s_cliEdit.clear();
-    s_cliEsc = 0; s_cliOsc.clear(); s_cliRaw = false;   /* fresh filter/mode on reopen */
+    lcdTermDestroy(s_cliTerm);   /* frees the VTerm; LVGL objects go with the layer */
+    s_cliTerm = nullptr;
+    s_cli = Term{};
 }
 
 /* Focus the terminal so the keyboard reaches it. Deferred via a one-shot timer
@@ -217,72 +146,45 @@ void cliOnDelete(lv_event_t*) {
  * group on click-release — i.e. AFTER our handlers run — so an immediate focus
  * would be stolen back. The timer fires once that settles; a tap re-focuses. */
 void cliFocus(void) {
-    lv_obj_t* c = lcdTextViewObj(s_cli.tv);
+    lv_obj_t* c = lcdTermObj(s_cliTerm);
     if (c && lv_obj_is_valid(c)) lv_group_focus_obj(c);
-    dbg("cliFocus: cont=%p now-focused=%p\n", (void*)c,
-        (void*)(lcdInputGroup() ? lv_group_get_focused(lcdInputGroup()) : nullptr));   /* TEMP probe */
 }
 void cliFocusTimerCb(lv_timer_t*) { cliFocus(); }
 void cliFocusClickCb(lv_event_t*) { cliFocus(); }
 
-/* Inline line editor — keys arrive as LV_EVENT_KEY on the focused terminal. */
+/* Keys arrive as LV_EVENT_KEY on the focused terminal; libvterm encodes them
+ * (incl. arrows / Enter / Backspace) and emits the bytes via cliOutput. */
 void cliKeyCb(lv_event_t* e) {
-    uint32_t key = lv_event_get_key(e);
-    if (s_cliRaw) {
-        /* Raw passthrough (interactive ssh): one byte per key, no local echo or
-         * editing — the remote pty echoes through cliFeed. */
-        char b;
-        if      (key == LV_KEY_ENTER)     b = '\r';
-        else if (key == LV_KEY_BACKSPACE) b = 0x7f;
-        else if (key == LV_KEY_ESC)       b = 0x1b;
-        else if (key >= 0x20 && key < 0x7F) b = (char)key;
-        else return;                                    /* nav/other — nothing to send */
-        if (s_cli.handle >= 0) itsSend(s_cli.handle, &b, 1, pdMS_TO_TICKS(200));
-        return;
-    }
-    if (key == LV_KEY_ENTER) {
-        std::string line = s_cliEdit;
-        line.push_back('\n');
-        if (s_cli.tv) lcdTextViewAppend(s_cli.tv, line.data(), line.size());  /* echo */
-        if (s_cli.handle >= 0)
-            itsSend(s_cli.handle, line.data(), line.size(), pdMS_TO_TICKS(200));
-        s_cliEdit.clear();
-    } else if (key == LV_KEY_BACKSPACE) {
-        if (!s_cliEdit.empty()) s_cliEdit.pop_back();
-    } else if (key == LV_KEY_ESC) {
-        s_cliEdit.clear();
-    } else if (key >= 0x20 && key < 0x7F) {
-        s_cliEdit.push_back((char)key);
-    } else {
-        return;                                     /* nav/other — leave as-is */
-    }
-    cliShowEdit(true);                              /* typing pins to the prompt */
+    lcdTermKey(s_cliTerm, lv_event_get_key(e));
 }
 
 void cliFn(void* arg) {
     lv_obj_t* layer = (lv_obj_t*)arg;
-    s_cli.tv = lcdTextViewCreate(layer, lcdScreenW(), termBodyH(),
-                                 &lv_font_spleen_5x8, cliFg(), scrollbackBudget());
-    s_cliEdit.clear();
+    s_cliTerm = lcdTermCreate(layer, lcdScreenW(), termBodyH(),
+                              &lv_font_spleen_5x8, cliFg(), cliOutput, nullptr);
 
-    /* The scrollable terminal is the keyboard focus target + line editor. */
-    lv_obj_t* cont = lcdTextViewObj(s_cli.tv);
+    lv_obj_t* cont = lcdTermObj(s_cliTerm);
     if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), cont);
     lv_obj_add_event_cb(cont, cliKeyCb,        LV_EVENT_KEY,     nullptr);
     lv_obj_add_event_cb(cont, cliFocusClickCb, LV_EVENT_CLICKED, nullptr);
     lv_timer_t* ft = lv_timer_create(cliFocusTimerCb, 40, nullptr);
     lv_timer_set_repeat_count(ft, 1);
+    lcdProgramScrollwheelArrows(true);   /* trackball → arrows while the CLI is up */
 
     lv_obj_add_event_cb(layer, cliOnDelete, LV_EVENT_DELETE, nullptr);
 
-    /* DC port is LINE mode (device echoes nothing — we echo locally). */
-    s_cli.handle = itsConnect("cli", CLI_PORT_DC, nullptr, 0,
+    /* The device echoes + line-edits in CLI_ANSI; the terminal renders it. The
+     * connect payload reports our grid size ("colsxrows") so the device's ssh
+     * client can request a correctly-sized pty for ncurses apps. */
+    int trows = 0, tcols = 0;
+    lcdTermSize(s_cliTerm, &trows, &tcols);
+    std::string sz = std::to_string(tcols) + "x" + std::to_string(trows);
+    s_cli.handle = itsConnect("cli", CLI_PORT_DC, sz.data(), sz.size(),
                               pdMS_TO_TICKS(500), 0, cliRecvCb, cliDiscCb);
     if (s_cli.handle < 0) {
-        const char* m = "[cli: connect failed]\n";
-        lcdTextViewSet(s_cli.tv, m, strlen(m));
+        const char* m = "[cli: connect failed]\r\n";
+        lcdTermFeed(s_cliTerm, m, strlen(m));
     }
-    cliShowEdit(false);            /* show the cursor; don't force-scroll on open */
 }
 
 }  // namespace

@@ -29,6 +29,11 @@ typedef void (*lcd_fn_t)(void* arg);
 /** Lambda -> lcd_fn_t sugar, mirroring storage's ON_CHANGE. No captures. */
 #define ON_LCD [](void* arg)
 
+/** Modifier bit a board keyboard driver OR's into an lv key to mean "Ctrl +
+ *  this (lowercase) letter". Sits above every LVGL key code and ASCII, so it
+ *  never collides; the on-device terminal decodes it to a control byte. */
+#define LCD_KEY_CTRL 0x40000000u
+
 /** Bring up display, LVGL, launcher and status bar, and spawn the lcd task.
  *  Called by spangapInit() when CONFIG_SPANGAP_LCD=y. Safe to call once. */
 void lcdInit(void);
@@ -68,6 +73,18 @@ void lcdGoHome(void);
  *  own view changes. Percentage-sized children of the layer reflow to the new
  *  height automatically. Runs on the lcd task; call from a registered fn. */
 void lcdProgramFullscreen(bool on);
+
+/** Program property (mirrors lcdProgramFullscreen): while this program's layer
+ *  is the one on screen, the trackball emits arrow keys into the focus group
+ *  instead of moving the pointer — so an on-device terminal / vim can navigate.
+ *  The launcher turns it off when the layer goes Home and back on when it's
+ *  re-shown. Call from a registered fn. */
+void lcdProgramScrollwheelArrows(bool on);
+
+/** True while the trackball is in arrow-key mode (see above). The board's
+ *  pointer_read consults this to decide whether to move the pointer or feed
+ *  arrows to lcdInputGroup(). Lcd task. */
+bool lcdScrollwheelArrowsActive(void);
 
 /** The shared keypad focus group that hardware button / keyboard indevs target.
  *  Add focusable widgets you build in a program (e.g. a textarea) with

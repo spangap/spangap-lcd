@@ -1,4 +1,8 @@
 file(GLOB LCD_SRCS "src/lcd_ui/*.cpp" "src/lcd_ui/*.c")
+# Vendored libvterm (neovim mirror, MIT) — the VT100/xterm state machine behind
+# the on-device terminal. Plain C, no autoconf; compiled straight into this
+# component. Its public header is private to us (only lcd_term.cpp uses it).
+file(GLOB VTERM_SRCS "libvterm/src/*.c")
 
 # Cross-straddle REQUIRES (today: just spangap-core) come through the
 # generated spangap_requires.cmake; the file exists in every build, even
@@ -6,9 +10,9 @@ file(GLOB LCD_SRCS "src/lcd_ui/*.cpp" "src/lcd_ui/*.c")
 # special-case.
 include(${CMAKE_CURRENT_LIST_DIR}/spangap_requires.cmake)
 idf_component_register(
-    SRCS ${LCD_SRCS}
+    SRCS ${LCD_SRCS} ${VTERM_SRCS}
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "src/lcd_ui"
+    PRIV_INCLUDE_DIRS "src/lcd_ui" "libvterm/include" "libvterm/src"
     REQUIRES
         ${SPANGAP_REQUIRES}
         driver
@@ -16,6 +20,10 @@ idf_component_register(
         esp_timer
         esp_psram
 )
+
+# Vendored third-party C — don't let our warning flags (-Werror et al.) fail the
+# build on upstream code we don't maintain.
+set_source_files_properties(${VTERM_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
 
 # Display stack — linked here (not in REQUIRES). The presence of this
 # straddle in the staged set IS the gate (it's an optional_requires of

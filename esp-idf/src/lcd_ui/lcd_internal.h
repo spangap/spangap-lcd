@@ -62,6 +62,10 @@ void        lcdSwallowTouch(void);
  *  it so a trackball-only board navigates the same UI. */
 lv_group_t* lcdInputGroup(void);
 
+/** Set trackball→arrows mode (the launcher calls this as the shown layer
+ *  changes; see lcdProgramScrollwheelArrows). Hides the pointer while on. */
+void        lcdScrollwheelArrowsApply(bool on);
+
 /* ---- lcd_icons.cpp: RAM cache + lv_fs driver + loader ---- */
 /** Register the in-RAM lv_fs driver ('D') and start the loader task. Call
  *  after lv_init(). */

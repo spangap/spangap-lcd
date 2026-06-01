@@ -468,3 +468,11 @@ void lcdPauseIdleInputTimers(void) {
 int         lcdScreenW(void)     { return s_w; }
 int         lcdScreenH(void)     { return s_h; }
 lv_group_t* lcdInputGroup(void)  { return s_group; }
+
+/* ---- trackball → arrow keys (see lcdProgramScrollwheelArrows) ---- */
+static bool s_swArrows = false;
+void lcdScrollwheelArrowsApply(bool on) {
+    s_swArrows = on;
+    if (on && s_cursor) lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);   /* no pointer in arrow mode */
+}
+bool lcdScrollwheelArrowsActive(void) { return s_swArrows; }

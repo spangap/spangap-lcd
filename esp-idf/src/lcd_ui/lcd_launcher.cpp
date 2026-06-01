@@ -84,6 +84,9 @@ void applyFullscreen() {
         lv_obj_set_pos(s_current, 0, top);
         lv_obj_set_size(s_current, lcdScreenW(), lcdScreenH() - top);
     }
+    /* Trackball→arrows follows the shown layer the same way (the program marks
+     * its layer with LV_OBJ_FLAG_USER_1 via lcdProgramScrollwheelArrows). */
+    lcdScrollwheelArrowsApply(s_current && lv_obj_has_flag(s_current, LV_OBJ_FLAG_USER_1));
 }
 
 lv_obj_t* makeProgramLayer() {
@@ -120,15 +123,20 @@ void showLine(bool on)    { setHidden(s_bottomLine, !on); } /* edge: only while 
 void openEntry(size_t idx) {
     if (idx >= s_entries.size()) return;
     lv_obj_t* layer = findProgramLayer(idx);
-    if (!layer) {                                    /* first open, or rebuilt after evict */
+    bool firstBuild = (layer == nullptr);
+    if (firstBuild) {                                /* first open, or rebuilt after evict */
         layer = makeProgramLayer();
         lv_obj_set_user_data(layer, (void*)(intptr_t)(idx + 1));
-        if (s_entries[idx].fn) s_entries[idx].fn(layer);   /* build into it, once */
     }
     lv_anim_delete(layer, nullptr);                  /* cancel an in-flight Home slide */
-    if (s_current && s_current != layer)
-        lv_obj_add_flag(s_current, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t* prev = s_current;
+    /* Make it current BEFORE building so a program's fn can set its own layer
+     * properties (lcdProgramFullscreen / lcdProgramScrollwheelArrows) and have
+     * them bind to this layer. */
     s_current = layer;
+    if (firstBuild && s_entries[idx].fn) s_entries[idx].fn(layer);   /* build into it, once */
+    if (prev && prev != layer)
+        lv_obj_add_flag(prev, LV_OBJ_FLAG_HIDDEN);
     applyFullscreen();                               /* pos/size + status bar for this layer */
     lv_obj_remove_flag(layer, LV_OBJ_FLAG_HIDDEN);
     showHomebar(true);                               /* pill belongs to a shown app (edge stays hidden) */
@@ -370,5 +378,16 @@ void lcdGoHomeInternal(void) {
 
 void lcdProgramFullscreen(bool on) {
     s_fullscreenLayer = on ? s_current : nullptr;
+    applyFullscreen();
+}
+
+/* Marks the current layer (the one being built / shown) as wanting trackball
+ * arrows; the flag rides the layer so it persists across Home/re-open, and
+ * applyFullscreen() turns the mode on only while that layer is current. */
+void lcdProgramScrollwheelArrows(bool on) {
+    if (s_current) {
+        if (on) lv_obj_add_flag(s_current, LV_OBJ_FLAG_USER_1);
+        else    lv_obj_remove_flag(s_current, LV_OBJ_FLAG_USER_1);
+    }
     applyFullscreen();
 }
