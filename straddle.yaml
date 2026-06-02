@@ -17,3 +17,12 @@ firmware: esp-idf
 platforms: [idf]
 requires:
   - spangap/spangap-core
+# Auto-init: lcdInit() is folded into the generated spangapInitStraddles()
+# dispatcher in the app-layer band (>150), so it comes up after the net
+# foundation + services (its status bar reads net/storage/web state) but
+# before the app straddles that paint into it. Other straddles' LCD launcher
+# tiles / Settings panes register from inside their own init() — into
+# registries the lcd task reads lazily — so they're order-independent of this.
+init:
+  - call: lcdInit
+    order: 150
