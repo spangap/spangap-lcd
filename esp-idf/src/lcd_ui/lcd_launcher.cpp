@@ -41,8 +41,8 @@ int  s_dragBaseY  = 0;            /* layer y when the drag began */
 bool s_dragging   = false;
 
 /* 4 columns × 3 rows on a 320×240 panel (status bar steals 24px → 320×216 grid).
- * Cols: ROW_WRAP wraps when 5·TILE_W exceeds the width, so 64 < TILE_W ≤ 80 gives
- * exactly 4 (72 → 288px of tiles, the rest is SPACE_EVENLY gaps). Rows: pad_top 8
+ * Cols: ROW_WRAP wraps when another tile+gap won't fit; pad_left 8 + 4·72 +
+ * 3·pad_column 8 = 320 packs exactly 4 left-aligned, a 5th wraps. Rows: pad_top 8
  * + 3·64 + 2·pad_row 8 = 216, an exact fit. Icons render at their native size (the
  * lcd_icons bucket is tile-sized — LAUNCHER_ICON_RES) with no runtime scaling: at
  * 36px the icon (y 4..40) sits clear of the Montserrat-12 label (y ~47..62). */
@@ -224,10 +224,16 @@ void lcdLauncherInit(lv_obj_t* screen) {
     lv_obj_set_style_bg_color(s_launcher, lv_color_hex(0x101418), 0);
     lv_obj_set_style_bg_opa(s_launcher, LV_OPA_COVER, 0);
     lv_obj_set_flex_flow(s_launcher, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(s_launcher, LV_FLEX_ALIGN_SPACE_EVENLY,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    /* Left-/top-aligned grid: START on the main axis packs the columns to the
+     * left, START on the track axis stacks the rows from the top (no vertical
+     * centering). Explicit pad_left/pad_column replace the gaps SPACE_EVENLY
+     * used to insert: 8 + 4·72 + 3·8 = 320 fits the row exactly. */
+    lv_obj_set_flex_align(s_launcher, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_top(s_launcher, 8, 0);
+    lv_obj_set_style_pad_left(s_launcher, 8, 0);
     lv_obj_set_style_pad_row(s_launcher, 8, 0);
+    lv_obj_set_style_pad_column(s_launcher, 8, 0);
     /* Don't let a stray touch scroll the icon grid out of view (the 4×3 grid fits
      * 12 tiles on one screen). Re-enable for paging once there are more than fit. */
     lv_obj_remove_flag(s_launcher, LV_OBJ_FLAG_SCROLLABLE);
