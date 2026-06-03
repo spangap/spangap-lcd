@@ -85,9 +85,16 @@ seccam build had to `#if` it out everywhere. As a separate straddle
 the LCD UI is opt-in by dependency — present a screen, depend on
 `spangap-lcd`; ship headless, don't.
 
-## Consumer-supplied board HAL
+## Display config + consumer-supplied input HAL
 
-`include/lcd_board.h` declares the interface that the consuming app
-must implement. Display panel init, touch HAL, keyboard / trackball /
-button input, backlight, orientation. The hw-tdeck straddle
-provides this in `tdeck.cpp` for the LilyGo T-Deck Plus.
+The display is the component's own: `lcd_panel.cpp` brings up the SPI bus, the
+controller (ST7789 built into esp_lcd, or ILI9341 via the managed component), the
+LEDC backlight, and the orientation — all from Kconfig (`CONFIG_LCD_*`, see
+`Kconfig`). Resolution can't be probed from an SPI panel, so native size +
+rotation are config; the same rotation is applied to raw touch.
+
+`include/lcd_input.h` declares the only thing the consuming app implements: the
+input HAL — `touch_read` (raw native points), `pointer_read` (cursor device),
+and `click_read` (centre/Home button; the board owns the click-vs-hold policy and
+calls `lcdGoHome()` on a hold). All optional. The hw-tdeck straddle provides this
+in `tdeck.cpp` for the LilyGo T-Deck Plus (GT911 touch, trackball, centre button).

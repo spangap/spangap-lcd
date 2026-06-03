@@ -18,9 +18,10 @@ spangap-lcd/
 └── esp-idf/
     ├── include/
     │   ├── lcd.h          public API (lcdRegister, lcdRegisterSettings)
-    │   └── lcd_board.h    board-HAL interface — consumer provides the impl
+    │   └── lcd_input.h    input-HAL interface — consumer provides touch/cursor/button
     ├── src/lcd_ui/
     │   ├── lcd.cpp        LVGL context, the LVGL task
+    │   ├── lcd_panel.cpp        SPI panel bring-up from Kconfig (ST7789/ILI9341)
     │   ├── lcd_launcher.cpp     program-tile grid
     │   ├── lcd_statusbar.cpp    top bar (WiFi/upstream/time/battery)
     │   ├── lcd_settings.cpp     built-in Settings menu + lcdSetting* helpers
@@ -87,15 +88,19 @@ and registers programs / panes via the public API above.
 
 ## What the consumer must supply
 
-The board HAL (`lcd_board.h`) — the consuming buildable straddle implements
-it. Display panel init, touch HAL, keyboard / trackball / button input,
-backlight control, dpi/orientation. For the LilyGo T-Deck Plus, the
-hw-tdeck straddle provides this in `tdeck.cpp`.
+The input HAL (`lcd_input.h`) — touch, a cursor device (trackball/mouse), and a
+centre/Home button — implemented by the consuming buildable straddle and
+registered with `lcdSetInput()`. All members are optional (a keyboard-only board
+registers nothing). The **display** is not the consumer's concern: the SPI panel
+(bus, ST7789/ILI9341 controller, backlight, orientation) is configured through
+Kconfig (`CONFIG_LCD_*`) and brought up by `lcd_panel.cpp`. For the LilyGo
+T-Deck Plus, the hw-tdeck straddle provides the input HAL in `tdeck.cpp` and sets
+the panel pins in its `sdkconfig.defaults`.
 
 ## What it does NOT own
 
-- The display/touch hardware drivers — those live in the consuming
-  buildable straddle's board HAL.
+- The touch/cursor/button hardware reads — those live in the consuming
+  buildable straddle's input HAL.
 - The browser SPA — that's [spangap-web](../spangap-web).
 - Per-app UI content — those are slices in each straddle's
   `esp-idf/lcd/` subdir, owned by the straddle that registered the

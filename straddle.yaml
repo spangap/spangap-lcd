@@ -6,23 +6,24 @@
 # its <prefix>LcdInit() from the generated dispatcher. Parallel to (not
 # built atop) spangap-web — the LCD launcher is its own UI surface.
 #
-# Owns the display + input + the one LVGL context; paints program tiles,
-# status bar, built-in Settings menu, built-in Log/CLI programs. Consumer
-# supplies the board HAL via lcd_board.h.
+# Owns the display and the one LVGL context; paints program tiles, status bar,
+# built-in Settings menu, built-in Log/CLI programs. The panel (SPI bus,
+# controller, backlight, orientation) is configured through Kconfig
+# (CONFIG_LCD_*); a consumer supplies only the input HAL (touch / cursor /
+# button) via lcd_input.h.
 schema_version: 1
 name: spangap/spangap-lcd
 prefix: lcd
 version: 0.1.0
 firmware: esp-idf
 platforms: [idf]
-requires:
-  - spangap/spangap-core
+# spangap-core is implicit (the empty-prefix platform foundation) — not listed.
 # Auto-init: lcdInit() is folded into the generated spangapInitStraddles()
-# dispatcher in the app-layer band (>150), so it comes up after the net
-# foundation + services (its status bar reads net/storage/web state) but
-# before the app straddles that paint into it. Other straddles' LCD launcher
-# tiles / Settings panes register from inside their own init() — into
-# registries the lcd task reads lazily — so they're order-independent of this.
+# dispatcher. lcd is the last of the platform band (core, net, web, lcd — see
+# spangap-inside PLATFORM_ORDER), so its status bar can read net/storage/web
+# state at init, and — the point of the band — every other straddle runs after
+# it. So a straddle that paints a launcher tile / Settings pane is guaranteed
+# the lcd task already exists; no ordering dance, no lazy-registration trick
+# needed for correctness.
 init:
   - call: lcdInit
-    order: 150

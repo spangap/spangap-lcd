@@ -28,21 +28,23 @@ set_source_files_properties(${VTERM_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
 # Display stack — linked here (not in REQUIRES). The presence of this
 # straddle in the staged set IS the gate (it's an optional_requires of
 # every consumer that uses it); when staged we always want LVGL linked.
-# `esp_lcd` ships with IDF; `lvgl` is pinned in our own idf_component.yml
-# (we own the launcher built against LVGL v9, so the version is ours to
-# choose); `esp_lcd_touch` comes in transitively via the consumer's
-# specific touch driver (e.g. esp_lcd_touch_gt911).
+# `esp_lcd` (with the built-in ST7789 driver) ships with IDF; `lvgl` and
+# `esp_lcd_ili9341` are pinned in our own idf_component.yml — we own the
+# launcher built against LVGL v9 and the panel bring-up, so those versions
+# are ours to choose.
 #
 # lvgl is linked PUBLIC because `lcd.h` (our public header) #include's
 # `lvgl.h`, so every consumer that picks up spangap-lcd through
 # ${SPANGAP_REQUIRES} also sees lvgl on its compile path. esp_lcd /
-# esp_lcd_touch only appear in our .cpp impls — keep them PRIVATE so
-# we don't push them into every consumer's include path.
+# esp_lcd_ili9341 only appear in lcd_panel.cpp — keep them PRIVATE so we
+# don't push them into every consumer's include path. esp_lcd_ili9341 is
+# always staged (it's in our manifest) but dead-stripped unless
+# CONFIG_LCD_CONTROLLER_ILI9341 selects it.
 foreach(_lcd_dep IN ITEMS lvgl__lvgl)
     idf_component_get_property(_lcd_lib ${_lcd_dep} COMPONENT_LIB)
     target_link_libraries(${COMPONENT_LIB} PUBLIC ${_lcd_lib})
 endforeach()
-foreach(_lcd_dep IN ITEMS esp_lcd espressif__esp_lcd_touch)
+foreach(_lcd_dep IN ITEMS esp_lcd espressif__esp_lcd_ili9341)
     idf_component_get_property(_lcd_lib ${_lcd_dep} COMPONENT_LIB)
     target_link_libraries(${COMPONENT_LIB} PRIVATE ${_lcd_lib})
 endforeach()

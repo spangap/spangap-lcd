@@ -1,0 +1,123 @@
+# LCD display configuration. These symbols exist only when spangap-lcd is in the
+# staged set — i.e. the buildable requires it and `spangap build --no-lcd` was
+# not passed; presence of the straddle is the enable, there is no on/off symbol
+# here. A board sets the pins in its sdkconfig.defaults; tweak per-build with
+# `spangap menuconfig`.
+#
+# The display itself — SPI bus, panel controller, backlight, orientation — is
+# described entirely below and brought up by the lcd component (lcd_panel.cpp),
+# so a board with a standard SPI panel contributes no display C code. Bespoke
+# input (touch / trackball / buttons) stays behind lcd_input.h.
+
+menu "LCD display"
+
+# ─── shared SPI bus ─────────────────────────────────────────────────────────
+# spi_helper makes bus bring-up idempotent, so the panel can share these pins
+# with the SD card and a LoRa modem (as on the T-Deck); only CS/DC are the
+# panel's own.
+config LCD_SPI_HOST
+    int "SPI host (1=SPI1 2=SPI2/FSPI 3=SPI3)"
+    default 2
+    help
+        The peripheral name, matching the LORA_/SDCARD_ host knobs. The IDF
+        spi_host_device_t enum is offset by one (SPI2_HOST=1); lcd_panel.cpp
+        subtracts it.
+
+config LCD_SCK_PIN
+    int "SPI SCK pin"
+    default -1
+config LCD_MOSI_PIN
+    int "SPI MOSI pin"
+    default -1
+config LCD_MISO_PIN
+    int "SPI MISO pin (-1 if unused)"
+    default -1
+
+# ─── panel ──────────────────────────────────────────────────────────────────
+config LCD_CS_PIN
+    int "Panel chip-select pin"
+    default -1
+config LCD_DC_PIN
+    int "Panel data/command pin"
+    default -1
+config LCD_RST_PIN
+    int "Panel reset pin (-1 if it resets with the power rail)"
+    default -1
+config LCD_BL_PIN
+    int "Backlight pin — LEDC PWM (-1 if none / not host-controlled)"
+    default -1
+config LCD_PCLK_MHZ
+    int "Pixel (SPI) clock in MHz"
+    default 40
+    help
+        Pins not on the SoC's SPI IOMUX route via the GPIO matrix, which caps
+        the ESP32-S3 SPI clock around 40 MHz — asking for more just clamps.
+
+choice
+    prompt "Panel controller"
+    default LCD_CONTROLLER_ST7789
+    help
+        The display controller. ST7789 is built into esp_lcd (no extra
+        dependency); ILI9341 is the espressif/esp_lcd_ili9341 managed component,
+        pulled in automatically. Both are RGB565-over-SPI parts driven through
+        the same esp_lcd panel ops, so the runtime path is shared.
+    config LCD_CONTROLLER_ST7789
+        bool "ST7789 / ST7789V"
+    config LCD_CONTROLLER_ILI9341
+        bool "ILI9341"
+endchoice
+config LCD_CONTROLLER_ID
+    int
+    default 0 if LCD_CONTROLLER_ST7789
+    default 1 if LCD_CONTROLLER_ILI9341
+    default 0
+
+# ─── geometry / orientation ─────────────────────────────────────────────────
+# Native = the panel's physical pixels, before rotation. Resolution can't be
+# probed from an SPI panel (the controller's GRAM doesn't report the attached
+# glass), so it must be set here. Rotation is done in hardware (swap_xy + mirror)
+# at bring-up and the post-rotation size is what LVGL is told; the same transform
+# is applied to raw touch (lcdPanelOrientTouch) so touch and pixels always agree.
+config LCD_NATIVE_WIDTH
+    int "Native panel width (px, pre-rotation)"
+    default 240
+config LCD_NATIVE_HEIGHT
+    int "Native panel height (px, pre-rotation)"
+    default 320
+
+choice
+    prompt "Rotation"
+    default LCD_ROTATION_90
+    help
+        Hardware rotation applied at bring-up. The base swap_xy/mirror per
+        rotation follows the common ST7789/ILI9341 table; if a panel's scan
+        direction differs the image comes out mirrored — use the Mirror X/Y
+        toggles below to correct it.
+    config LCD_ROTATION_0
+        bool "0° (portrait, native)"
+    config LCD_ROTATION_90
+        bool "90° (landscape)"
+    config LCD_ROTATION_180
+        bool "180° (portrait, flipped)"
+    config LCD_ROTATION_270
+        bool "270° (landscape, flipped)"
+endchoice
+config LCD_ROTATION
+    int
+    default 0   if LCD_ROTATION_0
+    default 90  if LCD_ROTATION_90
+    default 180 if LCD_ROTATION_180
+    default 270 if LCD_ROTATION_270
+    default 0
+
+config LCD_MIRROR_X
+    bool "Mirror X (flip if the image is left-right reversed)"
+    default n
+config LCD_MIRROR_Y
+    bool "Mirror Y (flip if the image is top-bottom reversed)"
+    default n
+config LCD_INVERT_COLOR
+    bool "Invert colour (most ST7789 IPS panels need this)"
+    default y
+
+endmenu

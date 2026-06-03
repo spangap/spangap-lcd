@@ -1,16 +1,18 @@
 /**
  * lcd_internal.h — cross-file glue for the lcd component (private to src/lcd_ui).
  *
- * Public API is lcd.h; the board HAL is lcd_board.h. This header wires the
- * internal modules: core task (lcd.cpp), LVGL bring-up (lcd_lvgl.cpp), icon
- * cache + loader (lcd_icons.cpp), launcher (lcd_launcher.cpp), status bar
- * (lcd_statusbar.cpp). Everything here runs on the lcd task unless noted.
+ * Public API is lcd.h; the input HAL is lcd_input.h. This header wires the
+ * internal modules: core task (lcd.cpp), panel bring-up (lcd_panel.cpp), LVGL
+ * bring-up (lcd_lvgl.cpp), icon cache + loader (lcd_icons.cpp), launcher
+ * (lcd_launcher.cpp), status bar (lcd_statusbar.cpp). Everything here runs on
+ * the lcd task unless noted.
  */
 #pragma once
 
 #include "lvgl.h"
 #include "lcd.h"
-#include "lcd_board.h"
+#include "lcd_input.h"
+#include "esp_lcd_types.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -21,15 +23,29 @@
 /* ---- lcd.cpp ---- */
 /** The lcd task handle (for aux sends from other tasks / the loader). */
 extern TaskHandle_t lcdTaskHandle;
-/** Registered board HAL (lcdSetBoard), or nullptr if none. */
-const lcd_board_t* lcdBoard(void);
+/** Registered input HAL (lcdSetInput), or nullptr if none. */
+const lcd_input_t* lcdInput(void);
 /** Whether a consumer reported a hardware text keyboard (lcdSetHasKeyboard).
  *  Settings text fields edit in place when true, else use the on-screen kb. */
 bool lcdHasKeyboard(void);
 
+/* ---- lcd_panel.cpp: generic Kconfig-driven panel + backlight ---- */
+/** Bring up the SPI bus + panel-io + controller from CONFIG_LCD_*; returns the
+ *  panel handle and, via the out params, the panel-IO handle and the final
+ *  (post-rotation) display size. Installs the shared GPIO ISR service. nullptr
+ *  on failure. */
+esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut, int* hOut);
+/** Backlight 0..255 (0 = off) via CONFIG_LCD_BL_PIN (LEDC). No-op if no BL pin. */
+void        lcdPanelBacklight(uint8_t level);
+/** Panel display on/off for the inactivity standby (GRAM retained → instant wake). */
+void        lcdPanelDisplayPower(bool on);
+/** Map a raw native touch point to display coordinates using CONFIG_LCD_ROTATION
+ *  + mirror (the same transform applied to the pixels); out params are clamped. */
+void        lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY);
+
 /* ---- lcd_lvgl.cpp: display + input bring-up ---- */
-/** boardLcdInit + lv_init + display/flush/tick + (optional) touch indev.
- *  Returns false on failure. */
+/** lcdPanelInit + lv_init + display/flush/tick + (optional) touch/pointer/button
+ *  indevs. Returns false on failure. */
 bool        lcdLvglInit(void);
 int         lcdScreenW(void);
 int         lcdScreenH(void);

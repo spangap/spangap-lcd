@@ -14,8 +14,9 @@
  * hides the layer back to the launcher; layers persist, so re-opening resumes
  * where it left off.
  *
- * Gated on CONFIG_SPANGAP_LCD. lcdInit() is called by spangapInit(); the
- * consumer's board layer must implement the lcd_board.h contract.
+ * Gated on CONFIG_SPANGAP_LCD. lcdInit() is called by spangapInit(). The display
+ * is configured through Kconfig (CONFIG_LCD_*); a consumer supplies only input
+ * via the lcd_input.h contract.
  */
 #ifndef SPANGAP_LCD_H
 #define SPANGAP_LCD_H

@@ -1,21 +1,21 @@
 /**
  * lcd_lvgl.cpp — LVGL v9 bring-up over esp_lcd.
  *
- * Brings up the panel via the board HAL, creates the LVGL display with a
- * partial double buffer, wires the flush + DMA-done + tick callbacks, and (if
- * the board has touch) a pointer indev. A focus group is created for future
- * encoder/keypad indevs so a trackball-only board can drive the same UI.
+ * Brings up the panel (lcd_panel.cpp, from Kconfig), creates the LVGL display
+ * with a partial double buffer, wires the flush + DMA-done + tick callbacks, and
+ * — for whichever input the board registered (lcd_input.h) — touch / cursor /
+ * button indevs. A focus group is created for keypad indevs so a trackball- or
+ * keyboard-only board can drive the same UI.
  */
 #include "lcd_internal.h"
-#include "lcd_board.h"
+#include "lcd_input.h"
 
 #include "log.h"
-#include "spi_helper.h"
+#include "spi_helper.h"   /* flushCb holds the shared-bus lock across the DMA drain */
 #include "storage.h"
 
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
-#include "esp_lcd_touch.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "freertos/semphr.h"
@@ -30,8 +30,7 @@
 
 static esp_lcd_panel_handle_t s_panel = nullptr;
 static lv_display_t*          s_disp  = nullptr;
-static esp_lcd_touch_handle_t s_touch = nullptr;
-static lv_indev_t*            s_indev = nullptr;
+static lv_indev_t*            s_indev = nullptr;       /* touch pointer indev */
 static lv_indev_t*            s_btnIndev = nullptr;   /* hardware Home/centre button */
 static lv_group_t*            s_group = nullptr;
 static int                    s_w = 0, s_h = 0;
@@ -40,8 +39,6 @@ static SemaphoreHandle_t      s_dmaDone = nullptr;   /* given when a strip's DMA
 /* Event-mode input bookkeeping (all touched only on the lcd task). The indevs
  * are LV_INDEV_MODE_EVENT, so they only read when lcdInputPoll() drives them. */
 static lv_timer_t*            s_touchTrack = nullptr; /* 10ms re-read while a finger is down */
-static lv_timer_t*            s_btnHold    = nullptr; /* 300ms "hold = go home" one-shot */
-static bool                   s_btnLong    = false;   /* hold fired → suppress the release click */
 static bool                   s_inputAgain = false;   /* a read cb wants an immediate follow-up read */
 static bool                   s_touchSwallow = false; /* drop the touch that woke the screen until it lifts */
 
@@ -52,7 +49,7 @@ static bool                   s_touchSwallow = false; /* drop the touch that wok
 static volatile bool          s_multipoint = false;
 static lcd_gesture_cb_t       s_gestureCb[4] = {};
 
-/* Trackball/mouse pointer (board->pointer_read). The board owns the position; we
+/* Trackball/mouse pointer (input->pointer_read). The board owns the position; we
  * own the LVGL pointer indev, the cursor object, and its show-on-move/auto-hide. */
 static lv_indev_t*            s_ptrIndev   = nullptr;
 static lv_obj_t*              s_cursor     = nullptr;
@@ -90,23 +87,20 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
  * release (see touchReadCb). Runs on the lcd task inside lv_timer_handler. */
 static void touchTrackCb(lv_timer_t*) { if (s_indev) lv_indev_read(s_indev); }
 
-static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
-    auto tp = static_cast<esp_lcd_touch_handle_t>(lv_indev_get_user_data(indev));
-    esp_lcd_touch_point_data_t pt[LCD_TOUCH_MAXPTS] = {};
-    uint8_t cnt = 0;
-    esp_lcd_touch_read_data(tp);
-    esp_lcd_touch_get_data(tp, pt, &cnt, s_multipoint ? LCD_TOUCH_MAXPTS : 1);
+static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
+    const lcd_input_t* in = lcdInput();
+    lcd_raw_pt_t raw[LCD_TOUCH_MAXPTS];
+    int cnt = 0;
+    int max = s_multipoint ? LCD_TOUCH_MAXPTS : 1;
+    if (!in || !in->touch_read || !in->touch_read(raw, max, &cnt) || cnt < 0) cnt = 0;
 
-    /* GT911 reports raw native-portrait coords (esp_lcd_touch left identity).
-     * Rotate each to our landscape display: screen_x = raw_y, screen_y = (H-1) -
-     * raw_x. Clamp to the panel so edge touches never wrap off-screen. */
+    /* The board reports raw points in NATIVE panel coords; map each to display
+     * coords with the same rotation/mirror the panel applies to the pixels. */
     int n = cnt > LCD_TOUCH_MAXPTS ? LCD_TOUCH_MAXPTS : cnt;
     lcd_touch_pt_t gp[LCD_TOUCH_MAXPTS];
     for (int i = 0; i < n; i++) {
-        int x = pt[i].y;
-        int y = (s_h - 1) - pt[i].x;
-        if (x < 0) x = 0; else if (x >= s_w) x = s_w - 1;
-        if (y < 0) y = 0; else if (y >= s_h) y = s_h - 1;
+        int x, y;
+        lcdPanelOrientTouch(raw[i].x, raw[i].y, &x, &y);
         gp[i].x = (int16_t)x; gp[i].y = (int16_t)y;
     }
 
@@ -148,55 +142,17 @@ void lcdTouchAddGestureHandler(lcd_gesture_cb_t cb) {
     for (auto& h : s_gestureCb) if (!h) { h = cb; return; }
 }
 
-/* Hardware Home/centre button as a keypad indev (board->button_read). It's also
- * the trackball's click, so we mustn't eat every press: a short press emits an
- * ENTER click on the focused item (synthesized as a press+release on two reads),
- * while a hold of >=300ms returns to the launcher and is NOT clicked.
- *
- * Event-driven: the button INT wakes the press and release edges; the 300ms hold is
- * a one-shot lv_timer (s_btnHold) armed on press — so there is no per-frame
- * polling during a hold, only a single deadline. All on the lcd task. */
-static void btnHoldCb(lv_timer_t*) {
-    s_btnHold = nullptr;            /* the one-shot deleted itself after this fire */
-    s_btnLong = true;              /* tell the release edge not to make it a click */
-    lcdGoHomeInternal();
-}
-
-/* The centre/Home button's click-vs-hold state machine, shared by the keypad
- * button indev and the trackball pointer indev (whichever owns GPIO 0). It never
- * reports the raw hold as a press: a short press is replayed as a synthesized
- * press+release over two reads (driven by s_inputAgain), and a >=300 ms hold fires
- * Home via a one-shot lv_timer and is NOT clicked. Returns the press/release to
- * emit this read, or BTN_NONE (caller reports released). */
-enum btn_action_t { BTN_NONE, BTN_PRESS, BTN_RELEASE };
-static btn_action_t centerButtonStep(bool down) {
-    static enum { IDLE, HELD, CLICK_PRESS, CLICK_RELEASE } phase = IDLE;
-
-    if (phase == CLICK_PRESS)   { phase = CLICK_RELEASE; s_inputAgain = true; return BTN_PRESS; }
-    if (phase == CLICK_RELEASE) { phase = IDLE;                                return BTN_RELEASE; }
-
-    if (down) {
-        if (phase == IDLE) {
-            phase = HELD;
-            s_btnLong = false;
-            s_btnHold = lv_timer_create(btnHoldCb, 300, nullptr);   /* 300ms hold = go home */
-            lv_timer_set_repeat_count(s_btnHold, 1);   /* one-shot: fires once, self-deletes */
-        }
-        return BTN_NONE;                          /* never report the raw hold */
-    }
-
-    if (s_btnHold) { lv_timer_delete(s_btnHold); s_btnHold = nullptr; }
-    if (phase == HELD && !s_btnLong) { phase = CLICK_PRESS; s_inputAgain = true; }  /* short press -> click */
-    else                              phase = IDLE;                                 /* hold already fired */
-    return BTN_NONE;
-}
-
+/* Hardware Home/centre button as a keypad indev. The board owns all timing: its
+ * click_read() asserts a click only on a short press (never during the >=Nms hold
+ * it turns into lcdGoHome() itself). We turn that single asserted poll into an
+ * ENTER press and force one follow-up read (s_inputAgain) so the release lands the
+ * next poll — LVGL sees press+release = a click. */
 static void buttonReadCb(lv_indev_t*, lv_indev_data_t* data) {
-    const lcd_board_t* board = lcdBoard();
-    bool down = board && board->button_read && board->button_read();
-    data->key   = LV_KEY_ENTER;
-    data->state = (centerButtonStep(down) == BTN_PRESS) ? LV_INDEV_STATE_PRESSED
-                                                        : LV_INDEV_STATE_RELEASED;
+    const lcd_input_t* in = lcdInput();
+    bool click = in && in->click_read && in->click_read();
+    data->key = LV_KEY_ENTER;
+    if (click) { data->state = LV_INDEV_STATE_PRESSED;  s_inputAgain = true; }
+    else         data->state = LV_INDEV_STATE_RELEASED;
 }
 
 /* ---- trackball / mouse pointer ---- */
@@ -238,9 +194,9 @@ static void cursorGlideTo(int x, int y, bool snap) {
 }
 
 static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
-    const lcd_board_t* board = lcdBoard();
+    const lcd_input_t* in = lcdInput();
     int x = 0, y = 0;
-    if (board && board->pointer_read && board->pointer_read(&x, &y)) {   /* moved */
+    if (in && in->pointer_read && in->pointer_read(&x, &y)) {   /* moved */
         bool wasHidden = s_cursor && lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         cursorPoke();
         cursorGlideTo(x, y, wasHidden);    /* snap into view, then ease on later pulses */
@@ -248,9 +204,11 @@ static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
     data->point.x = x;
     data->point.y = y;
 
-    bool down = board && board->button_read && board->button_read();
-    if (centerButtonStep(down) == BTN_PRESS) { cursorPoke(); data->state = LV_INDEV_STATE_PRESSED; }
-    else                                       data->state = LV_INDEV_STATE_RELEASED;
+    /* The centre button is the cursor's click — same board-owned click_read() as
+     * the keypad path, pressed at the current cursor position. */
+    bool click = in && in->click_read && in->click_read();
+    if (click) { cursorPoke(); data->state = LV_INDEV_STATE_PRESSED; s_inputAgain = true; }
+    else        data->state = LV_INDEV_STATE_RELEASED;
 }
 
 void lcdPointerSetVisibleMs(int ms) {
@@ -287,17 +245,15 @@ static void screenSleep(void) {
     if (s_screenOff) return;
     s_screenOff = true;
     if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
-    const lcd_board_t* b = lcdBoard();
-    if (b && b->backlight)     b->backlight(0);
-    if (b && b->display_power) b->display_power(false);   /* panel standby */
+    lcdPanelBacklight(0);
+    lcdPanelDisplayPower(false);   /* panel standby, GRAM retained */
 }
 
 static void screenWake(void) {
     if (!s_screenOff) return;
     s_screenOff = false;
-    const lcd_board_t* b = lcdBoard();
-    if (b && b->display_power) b->display_power(true);
-    if (b && b->backlight)     b->backlight((uint8_t)storageGetInt("s.lcd.backlight", 200));
+    lcdPanelDisplayPower(true);
+    lcdPanelBacklight((uint8_t)storageGetInt("s.lcd.backlight", 200));
     armBlankTimer();
 }
 
@@ -331,15 +287,10 @@ void lcdSwallowTouch(void) { s_touchSwallow = true; }
 static void tickCb(void*) { lv_tick_inc(LCD_TICK_MS); }
 
 bool lcdLvglInit(void) {
-    const lcd_board_t* board = lcdBoard();
-    if (!board || !board->init) {
-        err("no board registered — call lcdSetBoard() before spangapInit()\n");
-        return false;
-    }
     esp_lcd_panel_io_handle_t io = nullptr;
-    s_panel = board->init(&io, &s_w, &s_h);
+    s_panel = lcdPanelInit(&io, &s_w, &s_h);
     if (!s_panel || !io || s_w <= 0 || s_h <= 0) {
-        err("board panel init failed\n");
+        err("panel init failed\n");
         return false;
     }
 
@@ -375,17 +326,20 @@ bool lcdLvglInit(void) {
     /* Focus group for non-pointer input (populated by the launcher). */
     s_group = lv_group_create();
 
+    /* Board input setup (create touch handles, wire input INT lines) — on the lcd
+     * task, with the panel and the shared GPIO ISR service already up. */
+    const lcd_input_t* in = lcdInput();
+    if (in && in->init) in->init();
+
     /* All indevs are EVENT-mode: LVGL never runs a read timer for them, so there
      * is no input polling. The board's INT lines (via lcdInputISR) wake the lcd
      * task, which calls lcdInputPoll() → lv_indev_read() only on a real edge. */
 
     /* Optional touch — pointer indev. Absent boards run without it. */
-    s_touch = board->touch_init ? board->touch_init() : nullptr;
-    if (s_touch) {
+    if (in && in->touch_read) {
         s_indev = lv_indev_create();
         lv_indev_set_type(s_indev, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(s_indev, touchReadCb);
-        lv_indev_set_user_data(s_indev, s_touch);
         lv_indev_set_display(s_indev, s_disp);
         lv_indev_set_mode(s_indev, LV_INDEV_MODE_EVENT);
     } else {
@@ -396,7 +350,7 @@ bool lcdLvglInit(void) {
      * visible, auto-hiding cursor. The board owns the position (pointer_read); we
      * own the cursor and route the centre button to it as the click, so the
      * keypad button indev below is skipped when a cursor device is present. */
-    if (board->pointer_read) {
+    if (in && in->pointer_read) {
         s_cursor = lv_obj_create(lv_layer_sys());      /* above the status bar */
         lv_obj_remove_style_all(s_cursor);
         lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_CLICKABLE);   /* never a hit target */
@@ -421,9 +375,9 @@ bool lcdLvglInit(void) {
     }
 
     /* Optional hardware button (T-Deck centre/Home), only when no cursor device
-     * claimed it. Keypad indev on the focus group: short press clicks the focused
-     * tile, >=300ms hold returns to the launcher. */
-    if (board->button_read && !board->pointer_read) {
+     * claimed it. Keypad indev on the focus group; the board's click_read() drives
+     * the click and owns the hold→home policy. */
+    if (in && in->click_read && !in->pointer_read) {
         s_btnIndev = lv_indev_create();
         lv_indev_set_type(s_btnIndev, LV_INDEV_TYPE_KEYPAD);
         lv_indev_set_read_cb(s_btnIndev, buttonReadCb);
@@ -467,6 +421,7 @@ void lcdPauseIdleInputTimers(void) {
 
 int         lcdScreenW(void)     { return s_w; }
 int         lcdScreenH(void)     { return s_h; }
+void        lcdDisplaySize(int* w, int* h) { if (w) *w = s_w; if (h) *h = s_h; }
 lv_group_t* lcdInputGroup(void)  { return s_group; }
 
 /* ---- trackball → arrow keys (see lcdProgramScrollwheelArrows) ---- */

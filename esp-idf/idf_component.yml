@@ -21,3 +21,9 @@ dependencies:
   # esp_lcd_touch_gt911 in hw-tdeck).
   lvgl/lvgl:
     version: "^9.2"
+  # ILI9341 panel controller (the CONFIG_LCD_CONTROLLER choice). ST7789 is built
+  # into esp_lcd (no dependency); ILI9341 is this managed component, linked
+  # PRIVATE in CMakeLists.txt and compiled into lcd_panel.cpp only when
+  # CONFIG_LCD_CONTROLLER_ILI9341 is selected (dead-stripped otherwise).
+  espressif/esp_lcd_ili9341:
+    version: "^1.2"
