@@ -9,7 +9,7 @@
 # so a board with a standard SPI panel contributes no display C code. Bespoke
 # input (touch / trackball / buttons) stays behind lcd_input.h.
 
-menu "LCD display"
+menu "spangap: spangap-lcd"
 
 # ─── shared SPI bus ─────────────────────────────────────────────────────────
 # spi_helper makes bus bring-up idempotent, so the panel can share these pins

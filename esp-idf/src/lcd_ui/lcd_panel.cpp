@@ -83,7 +83,7 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
     /* CONFIG_LCD_SPI_HOST is the peripheral *name* (2=SPI2/FSPI); the IDF
      * spi_host_device_t enum is offset by one (SPI2_HOST=1). Subtract — a raw
      * cast puts the panel on the wrong host where it fights the shared SD/LoRa
-     * bus (blank panel, SD/LoRa failures). Mirrors tr-lora + fs.cpp. */
+     * bus (blank panel, SD/LoRa failures). Mirrors iface-lora + fs.cpp. */
     const spi_host_device_t host = (spi_host_device_t)(CONFIG_LCD_SPI_HOST - 1);
 
     /* Shared SPI bus (idempotent — SD/LoRa may already have brought it up). */
