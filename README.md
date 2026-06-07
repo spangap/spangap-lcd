@@ -42,7 +42,7 @@ spangap-lcd/
 ## How others use it — programs
 
 Any straddle that wants an on-device UI lists `spangap/spangap-lcd`
-under its `optional_requires:` in `straddle.yaml`, then calls
+under its `additional_installs:` in `straddle.yaml`, then calls
 `lcdRegister` from its `init()` gated on `CONFIG_SPANGAP_LCD` — the
 short-form alias that `spangap-inside` emits whenever this straddle
 is in the staged set (a `--no-lcd` build leaves it undefined):
@@ -81,7 +81,7 @@ The slice's `.cpp` body is typically wrapped in
 `CONFIG_SPANGAP_LCD` is auto-emitted as a short-form alias by
 `spangap-inside` when this straddle is staged — no user-facing
 `menuconfig` knob. See `spangap/INTERNALS.md` for the
-`optional_requires:` mechanism that drives it.
+`additional_installs:` mechanism that drives it.
 
 A slice for straddle `foo` lives in `foo/esp-idf/lcd/src/foo_lcd.cpp`
 and registers programs / panes via the public API above.

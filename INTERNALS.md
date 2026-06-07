@@ -34,7 +34,7 @@ through git/IDE correctly) but compiles to nothing. The
 `CONFIG_SPANGAP_LCD` symbol is the short-form alias `spangap-inside`
 emits when `spangap-lcd` is staged; the long-form generic equivalent
 is `CONFIG_STRADDLE_SPANGAP_LCD`. See `../spangap/INTERNALS.md` for
-the `optional_requires:` mechanism that drives both.
+the `additional_installs:` mechanism that drives both.
 
 The folding is "hardcoded" in the firmware CMakeLists.txt of each
 slice's straddle for now — the activator-driven source-list exclusion is
