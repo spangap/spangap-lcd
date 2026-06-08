@@ -99,6 +99,11 @@ lv_group_t* lcdInputGroup(void);
  *  false (no keyboard → on-screen keyboard). Any task. */
 void lcdSetHasKeyboard(bool present);
 
+/** Whether a consumer has reported a hardware text keyboard (see
+ *  lcdSetHasKeyboard). Lets a program pick a keyboard-friendly layout (edit in
+ *  place) over a touch-only one (tap → on-screen keyboard). Any task. */
+bool lcdHasKeyboard(void);
+
 /** How long the cursor (driven by a board pointer device) stays visible after
  *  activity, in milliseconds; <0 = always visible. lcd owns the cursor but not
  *  this policy — the consumer that owns the pointing device sets it (e.g. from
