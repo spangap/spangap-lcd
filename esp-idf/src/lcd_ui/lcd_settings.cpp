@@ -33,6 +33,7 @@ namespace {
 struct Node {
     std::string id;
     std::string label;
+    int         placement = 0;         /* sibling ordering pref (see lcdRegisterSettings) */
     lcd_fn_t    fn = nullptr;          /* non-null => leaf item */
     std::vector<Node*> kids;
     Node* find(const std::string& cid) {
@@ -43,6 +44,9 @@ struct Node {
 Node s_root;
 
 void titleCase(std::string& s) { if (!s.empty()) s[0] = (char)toupper((unsigned char)s[0]); }
+
+/* Bucket placements: positive toward the top, 0 middle, negative toward the bottom. */
+int placeRank(int p) { return p > 0 ? 0 : (p < 0 ? 2 : 1); }
 
 /* ---- nav UI state (lcd task only) ----
  * Each menu level and each item pane is its own opaque, full-size page stacked
@@ -126,11 +130,15 @@ void pushMenu(Node* menu) {
     dbg("settings pushMenu '%s' kids=%d\n",                 /* TEMP diag */
         menu == &s_root ? "root" : menu->label.c_str(), (int)menu->kids.size());
     lv_obj_t* pg = makePage();
-    /* Show children alphabetically (case-insensitive). Registration order is
-     * boot/dependency order, which isn't meaningful to the user; sort a copy so
-     * the tree itself is left untouched. Mirrors the web menu's label sort. */
+    /* Order children by placement, then alphabetically (case-insensitive) within
+     * an equal preference. Registration order is boot/dependency order, which
+     * isn't meaningful to the user; sort a copy so the tree itself is left
+     * untouched. Mirrors the web menu's placement sort. */
     std::vector<Node*> kids = menu->kids;
     std::sort(kids.begin(), kids.end(), [](const Node* a, const Node* b) {
+        int ra = placeRank(a->placement), rb = placeRank(b->placement);
+        if (ra != rb) return ra < rb;
+        if (a->placement != b->placement) return a->placement < b->placement;
         std::string la = a->label, lb = b->label;
         for (char& c : la) c = (char)tolower((unsigned char)c);
         for (char& c : lb) c = (char)tolower((unsigned char)c);
@@ -439,7 +447,7 @@ void onInlineCommit(lv_event_t* e) {
 
 /* ================= public registry ================= */
 
-void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn) {
+void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn, int placement) {
     if (!path || !*path || !fn) return;
     std::vector<std::string> segs;
     std::string s;
@@ -460,7 +468,7 @@ void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn) {
             titleCase(n->label);
             cur->kids.push_back(n);
         }
-        if (i + 1 == segs.size()) { n->label = label ? label : n->label.c_str(); n->fn = fn; }
+        if (i + 1 == segs.size()) { n->label = label ? label : n->label.c_str(); n->fn = fn; n->placement = placement; }
         cur = n;
     }
 }

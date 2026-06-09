@@ -163,8 +163,12 @@ extern const lv_font_t lv_font_spleen_5x8;
  *  with the item's content widget (an empty, scrollable flex-column container —
  *  build the pane into it with the lcdSetting* helpers). Call at init, before
  *  Settings is first opened; populates a registry, so it works even before
- *  lcdInit() and from any init task. */
-void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn);
+ *  lcdInit() and from any init task.
+ *  `placement` orders the leaf among its siblings (and likewise menus among
+ *  menus): > 0 toward the top, ascending (1 is topmost); 0 (default) in the
+ *  middle, alphabetic; < 0 toward the bottom, ascending (-1 is bottom-most).
+ *  Ties sort alphabetically by label. */
+void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn, int placement = 0);
 
 /* ---- Setting-pane helpers ----
  * Build a uniform labeled row in `parent` (a Settings pane widget) bound to a
