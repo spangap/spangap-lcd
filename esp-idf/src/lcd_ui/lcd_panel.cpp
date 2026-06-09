@@ -156,12 +156,10 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
     backlightInit();
 
     /* Shared GPIO ISR service for the board's input INT lines (touch / button /
-     * trackball), installed here so it exists before the board's input init runs.
-     * LoRa's DIO1 path also installs it with ESP_INTR_FLAG_IRAM — match the flag
-     * so whichever runs first wins; the loser gets ESP_ERR_INVALID_STATE. */
-    esp_err_t isr = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    if (isr != ESP_OK && isr != ESP_ERR_INVALID_STATE)
-        warn("gpio isr service: %s\n", esp_err_to_name(isr));
+     * trackball), installed here so it exists before the board's input init
+     * runs. LoRa's DIO1 path needs it too; the shared one-shot installs it once
+     * with ESP_INTR_FLAG_IRAM regardless of who gets here first. */
+    spiHelperEnsureGpioIsr(ESP_INTR_FLAG_IRAM);
 
     if (ioOut) *ioOut = io;
     if (wOut)  *wOut  = dispW();
