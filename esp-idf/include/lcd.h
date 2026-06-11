@@ -177,6 +177,8 @@ void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn, int p
 
 /** Bold section divider (no control). */
 lv_obj_t* lcdSettingSection (lv_obj_t* parent, const char* title);
+/** Greyed, wrapped help text under a control (mirrors the browser's captions). */
+lv_obj_t* lcdSettingCaption (lv_obj_t* parent, const char* text);
 /** Toggle bound to an int key (0/1). */
 lv_obj_t* lcdSettingSwitch  (lv_obj_t* parent, const char* label, const char* key);
 /** Slider bound to an int key, clamped to [min,max]. */

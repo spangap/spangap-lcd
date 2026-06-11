@@ -411,6 +411,12 @@ void onSlider(lv_event_t* e) {
     lv_obj_t* s = static_cast<lv_obj_t*>(lv_event_get_target_obj(e));
     storageSet(key, (int)lv_slider_get_value(s));
 }
+/* Live numeric readout beside a slider (user_data = the value label). */
+void onSliderNum(lv_event_t* e) {
+    lv_obj_t* num = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+    lv_obj_t* s   = static_cast<lv_obj_t*>(lv_event_get_target_obj(e));
+    lv_label_set_text_fmt(num, "%d", (int)lv_slider_get_value(s));
+}
 void onDropdown(lv_event_t* e) {
     const char* key = static_cast<const char*>(lv_event_get_user_data(e));
     lv_obj_t* d = static_cast<lv_obj_t*>(lv_event_get_target_obj(e));
@@ -483,6 +489,15 @@ lv_obj_t* lcdSettingSection(lv_obj_t* parent, const char* title) {
     return l;
 }
 
+lv_obj_t* lcdSettingCaption(lv_obj_t* parent, const char* text) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, text);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);    /* wrap within the pane width */
+    lv_obj_set_width(l, lv_pct(100));
+    lv_obj_set_style_text_color(l, lv_color_hex(0x8a93a0), 0);
+    return l;
+}
+
 lv_obj_t* lcdSettingSwitch(lv_obj_t* parent, const char* label, const char* key) {
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
@@ -503,12 +518,29 @@ lv_obj_t* lcdSettingSlider(lv_obj_t* parent, const char* label, const char* key,
                            int min, int max) {
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
-    lv_obj_t* s = lv_slider_create(row);
-    lv_obj_set_width(s, lv_pct(50));
+
+    /* Right group: a live numeric readout + the slider, so the exact value is
+     * visible (a slider alone hides it). */
+    lv_obj_t* grp = lv_obj_create(row);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(grp, 8, 0);
+    lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* num = lv_label_create(grp);
+    lv_obj_set_style_text_color(num, lv_color_hex(0xb0b8c0), 0);
+    lv_label_set_text_fmt(num, "%d", storageGetInt(key, min));
+
+    lv_obj_t* s = lv_slider_create(grp);
+    lv_obj_set_width(s, 120);
     lv_slider_set_range(s, min, max);
     lv_slider_set_value(s, storageGetInt(key, min), LV_ANIM_OFF);
-    lv_obj_add_event_cb(s, onSlider, LV_EVENT_VALUE_CHANGED, (void*)key);
-    bindAttach(s, key, BK_SLIDER);
+    lv_obj_add_event_cb(s, onSlider,    LV_EVENT_VALUE_CHANGED, (void*)key);
+    lv_obj_add_event_cb(s, onSliderNum, LV_EVENT_VALUE_CHANGED, num);   /* immediate readout */
+    bindAttach(s,   key, BK_SLIDER);
+    bindAttach(num, key, BK_VALUE);   /* external writes refresh the number too */
     return row;
 }
 
@@ -563,11 +595,38 @@ lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* ke
 }
 
 lv_obj_t* lcdSettingValue(lv_obj_t* parent, const char* label, const char* key) {
+    std::string v = storageGetStr(key, "");
+
+    /* Long values (identity / dest hashes, paths) overrun the shared single-line
+     * row and collide with the label — stack the label over a wrapped value. */
+    if (v.size() > 18) {
+        lv_obj_t* row = lv_obj_create(parent);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_hor(row, 8, 0);
+        lv_obj_set_style_pad_ver(row, 4, 0);
+        lv_obj_set_style_pad_row(row, 2, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t* lab = lv_label_create(row);
+        lv_label_set_text(lab, label);
+        lv_obj_set_style_text_color(lab, lv_color_hex(0x8a93a0), 0);
+
+        lv_obj_t* val = lv_label_create(row);
+        lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+        lv_obj_set_width(val, lv_pct(100));
+        lv_label_set_long_mode(val, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(val, v.c_str());
+        bindAttach(val, key, BK_VALUE);
+        return row;
+    }
+
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
     lv_obj_t* val = lv_label_create(row);
     lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
-    std::string v = storageGetStr(key, "");
     lv_label_set_text(val, v.empty() ? "\xE2\x80\x94" : v.c_str());
     bindAttach(val, key, BK_VALUE);   /* event-driven: storage change -> label (no poll) */
     return row;
