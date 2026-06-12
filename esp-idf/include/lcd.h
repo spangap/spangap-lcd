@@ -51,6 +51,12 @@ void lcdRun(lcd_fn_t fn, void* arg = nullptr);
  *  if the layer was reclaimed. Safe to call from any task / any time. */
 void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn);
 
+/** Bring a registered program's layer to the front (building it on first use,
+ *  exactly as a tile tap would) by its registered `name`. No-op if no program
+ *  with that name is registered. Must run on the lcd task — call from a
+ *  registered fn, an lcdRun() callback, or another lcd-task handler. */
+void lcdShowProgram(const char* name);
+
 /** Set backlight 0..255 (0 = off). Persists s.lcd.backlight. Any task. */
 void lcdSetBacklight(uint8_t level);
 

@@ -173,6 +173,13 @@ void cliFn(void* arg) {
 
     lv_obj_add_event_cb(layer, cliOnDelete, LV_EVENT_DELETE, nullptr);
 
+    /* On-screen key hint, fed locally so it sits in the scrollback ahead of the
+     * device's first prompt and scrolls off like any other output. LCD-only —
+     * the browser xterm shares CLI_PORT_DC but has a real keyboard. */
+    static const char hint[] =
+        "Press Alt-C <char> for Ctrl-<char>, trackball does arrows\r\n";
+    lcdTermFeed(s_cliTerm, hint, sizeof(hint) - 1);
+
     /* The device echoes + line-edits in CLI_ANSI; the terminal renders it. The
      * connect payload reports our grid size ("colsxrows") so the device's ssh
      * client can request a correctly-sized pty for ncurses apps. */

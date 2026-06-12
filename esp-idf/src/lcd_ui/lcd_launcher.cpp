@@ -214,6 +214,12 @@ void homeSlideDone(lv_anim_t* a) {
 
 }  // namespace
 
+void lcdShowProgram(const char* name) {
+    if (!name) return;
+    for (size_t i = 0; i < s_entries.size(); i++)
+        if (s_entries[i].name == name) { openEntry(i); return; }
+}
+
 void lcdLauncherInit(lv_obj_t* screen) {
     s_screen = screen;
 
