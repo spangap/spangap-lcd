@@ -130,3 +130,7 @@ void        lcdSettingsInit(void);
 void        lcdAppsInit(void);
 /** Spleen 5x8 monospace bitmap font (generated lv_font_spleen_5x8.c). */
 extern const lv_font_t lv_font_spleen_5x8;
+/** Tom Thumb 4x6 monospace bitmap font (generated lv_font_tomthumb_4x6.c). */
+extern const lv_font_t lv_font_tomthumb_4x6;
+/** Micro 2x3 thumbnail font (generated lv_font_micro_2x3.c). */
+extern const lv_font_t lv_font_micro_2x3;

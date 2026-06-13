@@ -29,14 +29,24 @@ spangap-lcd/
     │   ├── lcd_textview.cpp     terminal view used by Log/CLI
     │   ├── lcd_icons.cpp        icon binding
     │   ├── lcd_lvgl.cpp         LVGL glue
-    │   ├── lv_font_spleen_5x8.c       Spleen 5×8 monospace (Log/CLI)
+    │   ├── lv_font_spleen_5x8.c       Spleen 5×8 monospace, 2 bpp (Log/CLI; full
+    │   │                              box-drawing/block-element "terminal graphics")
+    │   ├── lv_font_tomthumb_4x6.c     Tom Thumb 4×6 monospace (smallest readable;
+    │   │                              full box-drawing/block-element "terminal graphics")
+    │   ├── lv_font_micro_2x3.c        Micro 2×3, 2 bpp — unreadable page THUMBNAIL
+    │   │                              (the 4×6 set box-filtered 2×; 160 columns)
     │   └── lv_font_montserrat_12_latin.c   Montserrat 12 latin (chrome)
     ├── assets/lcd-icons/        cli.svg, log.svg, gear.svg (rasterized at build)
     └── scripts/
         ├── lcd-icons.py         SVG→RGB565 launcher tiles
         ├── gen-spleen-font.py
+        ├── gen-tomthumb-font.py
+        ├── gen-micro-font.py
         ├── gen-text-font.py
-        └── spleen-5x8.bdf
+        ├── spleen-5x8.bdf
+        ├── tom-thumb.bdf        Tom Thumb (MIT) — 4×6 text glyphs
+        ├── fixed-4x6.bdf        X11 misc-fixed 4×6 (public domain) — graphics glyphs
+        └── fixed-5x8.bdf        X11 misc-fixed 5×8 (public domain) — graphics glyphs
 ```
 
 ## How others use it — programs
