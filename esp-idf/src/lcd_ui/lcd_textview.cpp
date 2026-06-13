@@ -39,8 +39,15 @@
 struct lcd_textview_t {
     lv_obj_t*             cont   = nullptr;  /* scroll container (the viewport)     */
     lv_obj_t*             spacer = nullptr;  /* invisible child = true content height*/
-    lv_obj_t*             label[2] = { nullptr, nullptr };  /* double buffer: [active] shown, other is back */
-    int                   active = 0;        /* index of the visible (front) label  */
+    /* Double-buffered band containers: [active] shown, other is back. Each holds
+     * pooled labels — one per run of consecutive same-colour rows; with no line
+     * colorizer that's exactly one label per band (the old single-label design). */
+    lv_obj_t*             band[2] = { nullptr, nullptr };
+    std::vector<lv_obj_t*> pool[2];          /* per-band label pools (lazy-created) */
+    int                   active = 0;        /* index of the visible (front) band   */
+    lcd_textview_line_color_cb lineColor = nullptr;  /* optional per-line colour    */
+    lv_color_t            fg{};              /* default text colour                 */
+    int                   width  = 0;        /* label width (viewport minus pad)    */
     const lv_font_t*      font   = nullptr;
     int                   rowH   = 8;        /* line pitch (px)                     */
     int                   cols   = 1;        /* chars per visual row                */
@@ -102,27 +109,63 @@ void reflow(lcd_textview_t* v) {
     lv_obj_set_height(v->spacer, total > 0 ? total * v->rowH : 1);
 }
 
-/* Materialise the rows around the current scroll offset into the label. Skips
- * the work unless the visible band moved outside the rendered window (or force). */
-/* Reveal the freshly-rendered back label and hide the stale front one in one
+/* Materialise the rows around the current scroll offset into the back band.
+ * Skips the work unless the visible band moved outside the rendered window (or
+ * force). */
+/* Reveal the freshly-rendered back band and hide the stale front one in one
  * step, so a band re-materialise appears atomically instead of repainting in
  * place. The viewport content is identical across the swap (same rows under the
- * scroll offset, just backed by a differently-positioned label), so it costs at
+ * scroll offset, just backed by a differently-positioned band), so it costs at
  * most one flush of the viewport region — and only on a band cross. We swap via
- * the HIDDEN flag rather than z-order: the labels are transparent (the container
- * paints the background), so a back label left visible would composite through. */
+ * the HIDDEN flag rather than z-order: the bands are transparent (the container
+ * paints the background), so a back band left visible would composite through. */
 void swapBands(lcd_textview_t* v) {
-    lv_obj_remove_flag(v->label[1 - v->active], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag   (v->label[v->active],     LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(v->band[1 - v->active], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag   (v->band[v->active],     LV_OBJ_FLAG_HIDDEN);
     v->active = 1 - v->active;
 }
 
+/* Colour of the logical line containing byte offset `lineStart` (which must be
+ * the line's first byte). LCD_TEXTVIEW_DEFAULT when no colorizer is set. */
+uint32_t lineColorAt(lcd_textview_t* v, size_t lineStart) {
+    if (!v->lineColor) return LCD_TEXTVIEW_DEFAULT;
+    size_t end = v->disp.find('\n', lineStart);
+    if (end == std::string::npos) end = v->disp.size();
+    return v->lineColor(v->disp.data() + lineStart, end - lineStart);
+}
+
+/* Emit one group of consecutive same-colour rows as a (pooled) label in the
+ * back band. `bi` is the back-band index, `li` the next free pool slot. */
+void emitGroup(lcd_textview_t* v, int bi, size_t& li, int yRow,
+               const std::string& text, uint32_t color) {
+    auto& pool = v->pool[bi];
+    if (li >= pool.size()) {
+        lv_obj_t* l = lv_label_create(v->band[bi]);
+        /* Rows are pre-wrapped to <= cols with explicit \n, so WRAP mode only
+         * wastes time re-measuring word breaks over the whole label on every
+         * draw (×32 partial strips). CLIP splits on \n and skips that. */
+        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_style_text_font(l, v->font, 0);
+        lv_obj_set_style_text_line_space(l, 0, 0);
+        lv_obj_set_style_text_letter_space(l, 0, 0);
+        pool.push_back(l);
+    }
+    lv_obj_t* l = pool[li++];
+    lv_obj_remove_flag(l, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(l, 0, yRow * v->rowH);
+    lv_obj_set_width(l, v->width);
+    lv_obj_set_style_text_color(
+        l, color == LCD_TEXTVIEW_DEFAULT ? v->fg : lv_color_hex(color), 0);
+    lv_label_set_text(l, text.c_str());
+}
+
 void renderWindow(lcd_textview_t* v, bool force) {
-    lv_obj_t* back = v->label[1 - v->active];   /* materialise into the hidden buffer */
+    const int bi = 1 - v->active;               /* materialise into the hidden band */
+    lv_obj_t* back = v->band[bi];
     if (!back || !lv_obj_is_valid(back)) return;
     const int total = (int)v->rowStart.size();
     if (total == 0) {
-        lv_label_set_text(back, "");
+        for (lv_obj_t* l : v->pool[bi]) lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_y(back, 0);
         v->firstRow  = 0;
         v->rowsShown = 0;
@@ -147,17 +190,46 @@ void renderWindow(lcd_textview_t* v, bool force) {
     if (first > total - shown) first = total - shown;
     if (first < 0) first = 0;
 
-    std::string win;
+    /* The window's head row may be a continuation of a wrapped logical line —
+     * its colour comes from the line head, which sits before the window. */
+    uint32_t color = LCD_TEXTVIEW_DEFAULT;
+    if (v->lineColor) {
+        size_t s0 = v->rowStart[first];
+        size_t lineStart = s0;
+        if (s0 > 0 && v->disp[s0 - 1] != '\n') {
+            size_t nl = v->disp.rfind('\n', s0 - 1);
+            lineStart = (nl == std::string::npos) ? 0 : nl + 1;
+        }
+        color = lineColorAt(v, lineStart);
+    }
+
+    /* Group consecutive same-colour rows into one label each; the whole band
+     * is a single group (one label) when no colorizer is installed. */
+    size_t li = 0;
+    std::string group;
+    int groupRow = first, groupRows = 0;
     for (int r = first; r < first + shown; r++) {
         const uint32_t s0 = v->rowStart[r];
+        if (v->lineColor && r > first && (s0 == 0 || v->disp[s0 - 1] == '\n')) {
+            uint32_t c = lineColorAt(v, s0);
+            if (c != color) {
+                emitGroup(v, bi, li, groupRow - first, group, color);
+                group.clear();
+                groupRow = r; groupRows = 0;
+                color = c;
+            }
+        }
         uint32_t s1 = (r + 1 < total) ? v->rowStart[r + 1] : (uint32_t)v->disp.size();
         if (s1 > s0 && v->disp[s1 - 1] == '\n') s1--;   /* drop the row's newline */
-        win.append(v->disp, s0, s1 - s0);
-        if (r + 1 < first + shown) win.push_back('\n');
+        if (groupRows++) group.push_back('\n');         /* blank rows still separate */
+        group.append(v->disp, s0, s1 - s0);
     }
-    lv_label_set_text(back, win.c_str());
+    emitGroup(v, bi, li, groupRow - first, group, color);
+    for (; li < v->pool[bi].size(); li++)
+        lv_obj_add_flag(v->pool[bi][li], LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_set_y(back, first * v->rowH);
-    lv_obj_set_height(back, shown * v->rowH);   /* explicit, so CLIP shows the whole band */
+    lv_obj_set_height(back, shown * v->rowH);
     v->firstRow  = first;
     v->rowsShown = shown;
     swapBands(v);
@@ -282,26 +354,22 @@ lcd_textview_t* lcdTextViewCreate(lv_obj_t* parent, int32_t w, int32_t h,
     lv_obj_remove_flag(sp, LV_OBJ_FLAG_CLICKABLE);
     v->spacer = sp;
 
-    /* Two stacked labels, double-buffered: renderWindow materialises the next
-     * band into the hidden one and swaps visibility, so a band cross appears
-     * atomically instead of repainting in place. Each holds only the visible
-     * window ± MARGIN rows. WRAP mode auto-sizes height to the slice; our rows
-     * are pre-wrapped to <= cols chars so it never actually wraps. */
+    /* Two stacked band containers, double-buffered: renderWindow materialises
+     * the next band into the hidden one and swaps visibility, so a band cross
+     * appears atomically instead of repainting in place. Each holds only the
+     * visible window ± MARGIN rows, as pooled child labels — one per run of
+     * same-colour rows (exactly one label when no line colorizer is set). */
+    v->fg    = fg;
+    v->width = w - 2;
     for (int i = 0; i < 2; i++) {
-        lv_obj_t* lbl = lv_label_create(cont);
-        lv_obj_set_width(lbl, w - 2);
-        /* Rows are pre-wrapped to <= cols with explicit \n, so WRAP mode only
-         * wastes time re-measuring word breaks over the whole label on every
-         * draw (×32 partial strips). CLIP splits on \n and skips that. */
-        lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
-        lv_obj_set_style_text_font(lbl, font, 0);
-        lv_obj_set_style_text_color(lbl, fg, 0);
-        lv_obj_set_style_text_line_space(lbl, 0, 0);
-        lv_obj_set_style_text_letter_space(lbl, 0, 0);
-        lv_obj_set_pos(lbl, 0, 0);
-        lv_label_set_text(lbl, "");
-        if (i == 1) lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);   /* back buffer starts hidden */
-        v->label[i] = lbl;
+        lv_obj_t* band = lv_obj_create(cont);
+        lv_obj_remove_style_all(band);
+        lv_obj_set_pos(band, 0, 0);
+        lv_obj_set_size(band, w - 2, 1);
+        lv_obj_remove_flag(band, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(band, LV_OBJ_FLAG_CLICKABLE);
+        if (i == 1) lv_obj_add_flag(band, LV_OBJ_FLAG_HIDDEN);  /* back buffer starts hidden */
+        v->band[i] = band;
     }
     v->active = 0;
 
@@ -365,6 +433,14 @@ bool lcdTextViewAtBottom(lcd_textview_t* v) {
 }
 
 lv_obj_t* lcdTextViewObj(lcd_textview_t* v) { return v ? v->cont : nullptr; }
+
+void lcdTextViewSetLineColor(lcd_textview_t* v, lcd_textview_line_color_cb cb) {
+    if (!v) return;
+    v->lineColor = cb;
+    v->firstRow  = -1;          /* invalidate the band so the repaint isn't skipped */
+    v->needRender = true;
+    schedule(v);
+}
 
 void lcdTextViewDelete(lcd_textview_t* v) {
     /* The container's LV_EVENT_DELETE handler (onDelete) frees `v` itself. */

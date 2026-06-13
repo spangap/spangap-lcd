@@ -2,11 +2,20 @@
  * lcd_term.cpp — libvterm-backed terminal widget (see lcd_term.h).
  *
  * libvterm owns the VT state machine + the rows×cols live screen. We render a
- * window over [scrollback ++ live screen] into one LVGL label per visible row.
- * Lines that scroll off the top are kept (sb_pushline) in a PSRAM ring so you
- * can drag to scroll back; any keypress (and new output while at the bottom)
- * snaps back to the live screen. Monochrome for now: colour/attrs are read off
- * the cells but not yet styled (a contained follow-up).
+ * window over [scrollback ++ live screen] into per-row label runs. Lines that
+ * scroll off the top are kept (sb_pushline) in a PSRAM ring so you can drag to
+ * scroll back; any keypress (and new output while at the bottom) snaps back to
+ * the live screen.
+ *
+ * Colour: each visible row is painted as a row of labels, one per run of cells
+ * sharing (fg, bg) — SGR colours from the application (ls, logs, prompts)
+ * render, including backgrounds and reverse video. LVGL's label "recolor" was
+ * rejected for this: its '#' escape is broken in 9.5 (lv_text_is_cmd's escape
+ * branch is dead code), and terminal text is full of literal '#'. Run labels
+ * sidestep that and get backgrounds, which recolor can't do at all. Default-
+ * coloured text uses the widget fg passed at create; scrollback lines store
+ * their runs in a compact per-line string (0x1F marker + fg/bg + text per run)
+ * so colour survives scrolling without a vector-per-line heap footprint.
  */
 #include "lcd_term.h"
 #include "lcd.h"            /* LCD_KEY_CTRL */
@@ -30,6 +39,9 @@ VTermAllocatorFunctions VT_ALLOC = { vtMalloc, vtFree };
 
 constexpr size_t SB_CAP = 600;     /* scrollback lines retained */
 
+/* "No colour": use the widget default fg / transparent bg. */
+constexpr uint32_t TERM_DEFAULT = 0xFFFFFFFFu;
+
 void utf8Append(std::string& s, uint32_t cp) {
     if (cp < 0x80) s.push_back((char)cp);
     else if (cp < 0x800) {
@@ -46,6 +58,15 @@ void utf8Append(std::string& s, uint32_t cp) {
         s.push_back((char)(0x80 | (cp & 0x3F)));
     }
 }
+
+/* One run of consecutive cells sharing (fg, bg). `cols` is the cell count
+ * (label x/width are cols * charW; byte length differs under UTF-8). */
+struct Run {
+    uint32_t    fg = TERM_DEFAULT;
+    uint32_t    bg = TERM_DEFAULT;
+    uint16_t    cols = 0;
+    std::string text;
+};
 }  // namespace
 
 struct lcd_term_t {
@@ -55,11 +76,12 @@ struct lcd_term_t {
     lv_obj_t*    cursor = nullptr;        /* cursor block, above the labels */
     const lv_font_t* font = nullptr;
     lv_color_t   fg{};
+    uint32_t     fgRgb = 0xC8C8C8;        /* fg as 24-bit, for reverse-video swaps */
     int rows = 0, cols = 0, charW = 5, rowH = 8;
     lcd_term_output_cb out = nullptr;
     void* user = nullptr;
-    std::vector<lv_obj_t*> rowLbl;        /* one label per visible viewport row */
-    std::deque<std::string> sb;           /* scrollback: lines scrolled off the top */
+    std::vector<std::vector<lv_obj_t*>> rowLbl;  /* per visible row: pooled run labels */
+    std::deque<std::string> sb;           /* scrollback: encoded run lines (see sbEncode) */
     int      top  = 0;                    /* virtual row of the topmost visible row */
     bool     follow = true;               /* stick to the live screen (bottom)       */
     VTermPos cur{};                       /* cursor cell (live-screen coords)         */
@@ -72,28 +94,142 @@ struct lcd_term_t {
 
 namespace {
 
-/* Text of one live-screen row, exactly `cols` columns wide (blank/continuation
+/* Resolve a cell's colours to 24-bit (or TERM_DEFAULT), applying reverse
+ * video. Defaults resolve against the widget palette (fg) / black (bg) when a
+ * reverse swap forces them concrete. */
+void cellColors(lcd_term_t* t, const VTermScreenCell& cell, uint32_t& fg, uint32_t& bg) {
+    VTermColor f = cell.fg, b = cell.bg;
+    if (VTERM_COLOR_IS_DEFAULT_FG(&f)) fg = TERM_DEFAULT;
+    else {
+        vterm_screen_convert_color_to_rgb(t->scr, &f);
+        fg = ((uint32_t)f.rgb.red << 16) | ((uint32_t)f.rgb.green << 8) | f.rgb.blue;
+    }
+    if (VTERM_COLOR_IS_DEFAULT_BG(&b)) bg = TERM_DEFAULT;
+    else {
+        vterm_screen_convert_color_to_rgb(t->scr, &b);
+        bg = ((uint32_t)b.rgb.red << 16) | ((uint32_t)b.rgb.green << 8) | b.rgb.blue;
+    }
+    if (cell.attrs.reverse) {
+        uint32_t nf = (bg == TERM_DEFAULT) ? 0x000000u : bg;
+        uint32_t nb = (fg == TERM_DEFAULT) ? t->fgRgb  : fg;
+        fg = nf; bg = nb;
+    }
+}
+
+void runAppendCell(lcd_term_t* t, std::vector<Run>& runs, const VTermScreenCell& cell, int width) {
+    uint32_t fg, bg;
+    cellColors(t, cell, fg, bg);
+    if (runs.empty() || runs.back().fg != fg || runs.back().bg != bg) {
+        runs.push_back(Run{});
+        runs.back().fg = fg;
+        runs.back().bg = bg;
+    }
+    Run& r = runs.back();
+    uint32_t ch = cell.chars[0];
+    if (ch == 0 || ch == (uint32_t)-1) r.text.push_back(' ');
+    else                               utf8Append(r.text, ch);
+    for (int k = 1; k < width; k++) r.text.push_back(' ');   /* wide-cell padding */
+    r.cols = (uint16_t)(r.cols + width);
+}
+
+/* Runs of one live-screen row, exactly `cols` columns wide (blank/continuation
  * cells → space) so the grid stays aligned. */
-std::string screenRowText(lcd_term_t* t, int sr) {
-    std::string s;
-    s.reserve((size_t)t->cols + 8);
+std::vector<Run> screenRowRuns(lcd_term_t* t, int sr) {
+    std::vector<Run> runs;
     for (int c = 0; c < t->cols; ) {
         VTermScreenCell cell;
         VTermPos p; p.row = sr; p.col = c;
         if (vterm_screen_get_cell(t->scr, p, &cell)) {
             int w = cell.width < 1 ? 1 : cell.width;
-            uint32_t ch = cell.chars[0];
-            if (ch == 0 || ch == (uint32_t)-1) s.push_back(' ');
-            else                               utf8Append(s, ch);
+            runAppendCell(t, runs, cell, w);
             c += w;
-        } else { s.push_back(' '); c++; }
+        } else {
+            VTermScreenCell blank{};   /* zeroed colours read as RGB black, not default */
+            blank.fg.type = VTERM_COLOR_DEFAULT_FG;
+            blank.bg.type = VTERM_COLOR_DEFAULT_BG;
+            runAppendCell(t, runs, blank, 1);
+            c++;
+        }
+    }
+    return runs;
+}
+
+/* Scrollback line codec: per run, 0x1F marker + fg + bg + cols (raw LE) + text.
+ * One std::string per line keeps the ring's heap profile close to plain text.
+ * 0x1F (unit separator) can't occur in cell text (control chars never reach
+ * the screen as glyphs). */
+std::string sbEncode(const std::vector<Run>& runs) {
+    std::string s;
+    for (const Run& r : runs) {
+        s.push_back('\x1f');
+        char hdr[10];
+        memcpy(hdr,     &r.fg,   4);
+        memcpy(hdr + 4, &r.bg,   4);
+        memcpy(hdr + 8, &r.cols, 2);
+        s.append(hdr, 10);
+        s.append(r.text);
     }
     return s;
 }
 
+std::vector<Run> sbDecode(const std::string& s) {
+    std::vector<Run> runs;
+    size_t i = 0;
+    while (i < s.size() && s[i] == '\x1f' && i + 11 <= s.size()) {
+        Run r;
+        memcpy(&r.fg,   s.data() + i + 1, 4);
+        memcpy(&r.bg,   s.data() + i + 5, 4);
+        memcpy(&r.cols, s.data() + i + 9, 2);
+        i += 11;
+        size_t end = s.find('\x1f', i);
+        if (end == std::string::npos) end = s.size();
+        r.text.assign(s, i, end - i);
+        i = end;
+        runs.push_back(std::move(r));
+    }
+    return runs;
+}
+
 int maxTop(lcd_term_t* t) { return (int)t->sb.size(); }   /* bottom = live screen at window top 0 */
 
-/* Fill the visible row labels from the window [top, top+rows) over the virtual
+/* Paint one viewport row from its runs, reusing that row's label pool (labels
+ * are created on demand, extras hidden). x advances by run cell counts. */
+void paintRow(lcd_term_t* t, int r, const std::vector<Run>& runs) {
+    auto& pool = t->rowLbl[r];
+    size_t li = 0;
+    int col = 0;
+    for (const Run& run : runs) {
+        if (run.cols == 0) continue;
+        if (li >= pool.size()) {
+            lv_obj_t* l = lv_label_create(t->cont);
+            lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
+            lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
+            lv_obj_set_style_text_font(l, t->font, 0);
+            lv_obj_set_style_text_line_space(l, 0, 0);
+            lv_obj_set_style_text_letter_space(l, 0, 0);
+            pool.push_back(l);
+            /* Labels are created lazily, i.e. after the cursor — keep the
+             * cursor block composited above the run labels. */
+            if (t->cursor) lv_obj_move_foreground(t->cursor);
+        }
+        lv_obj_t* l = pool[li++];
+        lv_obj_remove_flag(l, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(l, col * t->charW, r * t->rowH);
+        lv_obj_set_size(l, run.cols * t->charW, t->rowH);
+        lv_obj_set_style_text_color(l, run.fg == TERM_DEFAULT ? t->fg : lv_color_hex(run.fg), 0);
+        if (run.bg == TERM_DEFAULT) {
+            lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
+        } else {
+            lv_obj_set_style_bg_color(l, lv_color_hex(run.bg), 0);
+            lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
+        }
+        lv_label_set_text(l, run.text.c_str());
+        col += run.cols;
+    }
+    for (; li < pool.size(); li++) lv_obj_add_flag(pool[li], LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Fill the visible rows from the window [top, top+rows) over the virtual
  * buffer (scrollback then live screen), and place the cursor. */
 void renderView(lcd_term_t* t) {
     if (t->follow) t->top = maxTop(t);
@@ -102,9 +238,9 @@ void renderView(lcd_term_t* t) {
     const int nsb = (int)t->sb.size();
     for (int r = 0; r < t->rows; r++) {
         int v = t->top + r;
-        if (v < nsb)                 lv_label_set_text(t->rowLbl[r], t->sb[v].c_str());
-        else if (v < nsb + t->rows)  lv_label_set_text(t->rowLbl[r], screenRowText(t, v - nsb).c_str());
-        else                         lv_label_set_text(t->rowLbl[r], "");
+        if (v < nsb)                 paintRow(t, r, sbDecode(t->sb[v]));
+        else if (v < nsb + t->rows)  paintRow(t, r, screenRowRuns(t, v - nsb));
+        else                         paintRow(t, r, {});
     }
     /* Cursor shows only on the live screen (when following). */
     bool curOnScreen = t->follow && t->curVisible && t->cur.row >= 0 && t->cur.row < t->rows;
@@ -128,17 +264,26 @@ int cbSetProp(VTermProp prop, VTermValue* val, void* u) {
 /* A line scrolled off the top of the live screen — keep it for scrollback. */
 int cbSbPushline(int cols, const VTermScreenCell* cells, void* u) {
     auto* t = (lcd_term_t*)u;
-    std::string s;
-    s.reserve((size_t)cols + 4);
+    std::vector<Run> runs;
     for (int c = 0; c < cols; c++) {
-        uint32_t ch = cells[c].chars[0];
-        if (ch == 0 || ch == (uint32_t)-1) s.push_back(' ');
-        else                               utf8Append(s, ch);
+        int w = cells[c].width < 1 ? 1 : cells[c].width;
+        runAppendCell(t, runs, cells[c], w);
+        c += w - 1;
     }
-    /* trim trailing blanks to save memory; keep at least empty */
-    size_t end = s.find_last_not_of(' ');
-    s.erase(end == std::string::npos ? 0 : end + 1);
-    t->sb.push_back(std::move(s));
+    /* Trim trailing blanks to save memory — but only where the background is
+     * default (a coloured-bg run of spaces is visible ink). */
+    while (!runs.empty()) {
+        Run& last = runs.back();
+        if (last.bg != TERM_DEFAULT) break;
+        size_t end = last.text.find_last_not_of(' ');
+        if (end == std::string::npos) { runs.pop_back(); continue; }
+        if (end + 1 < last.text.size()) {
+            last.cols = (uint16_t)(last.cols - (last.text.size() - (end + 1)));
+            last.text.erase(end + 1);
+        }
+        break;
+    }
+    t->sb.push_back(sbEncode(runs));
     if (t->sb.size() > SB_CAP) {
         t->sb.pop_front();
         if (!t->follow && t->top > 0) t->top--;   /* keep the scrolled-back view stable */
@@ -190,6 +335,7 @@ lcd_term_t* lcdTermCreate(lv_obj_t* parent, int32_t w, int32_t h,
                           lcd_term_output_cb onOutput, void* user) {
     auto* t = new lcd_term_t();
     t->font = font; t->fg = fg; t->out = onOutput; t->user = user;
+    t->fgRgb = lv_color_to_u32(fg) & 0xFFFFFF;
     t->rowH  = lv_font_get_line_height(font);  if (t->rowH  < 1) t->rowH  = 8;
     t->charW = lv_font_get_glyph_width(font, 'M', 0); if (t->charW < 1) t->charW = 5;
     t->cols = w / t->charW; if (t->cols < 1) t->cols = 1;
@@ -206,20 +352,9 @@ lcd_term_t* lcdTermCreate(lv_obj_t* parent, int32_t w, int32_t h,
     lv_obj_add_event_cb(t->cont, onPress,    LV_EVENT_PRESSED,  t);
     lv_obj_add_event_cb(t->cont, onPressing, LV_EVENT_PRESSING, t);
 
+    /* Per-row label pools start empty; paintRow creates labels as runs need
+     * them (a monochrome row costs one label, same as the old design). */
     t->rowLbl.resize(t->rows);
-    for (int r = 0; r < t->rows; r++) {
-        lv_obj_t* l = lv_label_create(t->cont);
-        lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
-        lv_obj_set_pos(l, 0, r * t->rowH);
-        lv_obj_set_width(l, w);
-        lv_obj_set_style_text_font(l, font, 0);
-        lv_obj_set_style_text_color(l, fg, 0);
-        lv_obj_set_style_text_line_space(l, 0, 0);
-        lv_obj_set_style_text_letter_space(l, 0, 0);
-        lv_label_set_text(l, "");
-        t->rowLbl[r] = l;
-    }
 
     t->cursor = lv_obj_create(t->cont);
     lv_obj_remove_style_all(t->cursor);

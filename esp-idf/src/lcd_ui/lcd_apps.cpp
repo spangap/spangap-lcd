@@ -20,11 +20,13 @@
  * run on the lcd task (dispatched by its itsPoll loop), so they touch LVGL
  * directly and are guarded by the view handle being non-null.
  *
- * Plain text: both connect to the packet-mode DC ports. Log connects with
- * {"ansi":0} so it gets paste-back + live lines WITHOUT ANSI colour escapes
- * (LVGL can't render them); CLI uses LINE mode (the device echoes nothing, we
- * echo locally). Scrollback is capped to s.log.file.paste kB — the same knob
- * that sizes the log paste-back.
+ * Both connect to the packet-mode DC ports. Log connects with {"ansi":0} —
+ * plain text keeps the text view's column math escape-free; severity colours
+ * are applied per line at render time instead (lcdTextViewSetLineColor +
+ * logLineColor below). The CLI session runs in CLI_ANSI: lcd_term's libvterm
+ * parses the SGR colours and the terminal renders them per cell run.
+ * Scrollback is capped to s.log.file.paste kB — the same knob that sizes the
+ * log paste-back.
  */
 #include "lcd_internal.h"
 #include "lcd_term.h"
@@ -41,6 +43,28 @@ namespace {
 
 lv_color_t logFg() { return lv_color_hex(0xC8C8C8); }   /* light grey */
 lv_color_t cliFg() { return lv_color_hex(0xC8E8C8); }   /* pale green */
+
+/* Per-line severity colour for the Log view. Lines are the plain-mode log
+ * format "L [task] tag: msg" with an optional wall-clock prefix
+ * ("Mar 27 16:23:15.342 ", ~20 chars — log.cpp logReformat), so scan past
+ * it for a word-bounded level letter followed by " [" (lineLevel()'s
+ * heuristic, tightened by the bracket). Info keeps the default fg (it's
+ * the bulk); anomalies and debug stand out. */
+uint32_t logLineColor(const char* s, size_t n) {
+    for (size_t k = 0; k + 2 < n && k < 28; k++) {
+        if (k > 0 && s[k - 1] != ' ') continue;       /* level char is its own word */
+        if (s[k + 1] != ' ' || s[k + 2] != '[') continue;
+        switch (s[k]) {
+            case 'E': return 0xE06A6A;   /* red */
+            case 'W': return 0xD8B860;   /* yellow */
+            case 'I': return LCD_TEXTVIEW_DEFAULT;
+            case 'D': return 0x8890A0;   /* dimmed blue-grey */
+            case 'V': return 0x687078;   /* dimmer still */
+            default:  break;
+        }
+    }
+    return LCD_TEXTVIEW_DEFAULT;
+}
 
 /* Scrollback budget in bytes, from the shared backlog knob (kB), floored. */
 size_t scrollbackBudget() {
@@ -95,6 +119,7 @@ void logFn(void* arg) {
     lv_obj_t* layer = (lv_obj_t*)arg;
     s_log.tv = lcdTextViewCreate(layer, lcdScreenW(), termBodyH(),
                                  &lv_font_spleen_5x8, logFg(), scrollbackBudget());
+    lcdTextViewSetLineColor(s_log.tv, logLineColor);
     s_log.primed = false;
     lv_obj_add_event_cb(layer, logOnDelete, LV_EVENT_DELETE, nullptr);
 

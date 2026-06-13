@@ -259,6 +259,17 @@ bool lcdTextViewAtBottom(lcd_textview_t* v);
  *  attach your own event callbacks (e.g. a CLI line editor on LV_EVENT_KEY). */
 lv_obj_t* lcdTextViewObj(lcd_textview_t* v);
 
+/** Per-line colour callback: given one logical line of the scrollback (up to,
+ *  not including, its newline), return 0xRRGGBB — or LCD_TEXTVIEW_DEFAULT to
+ *  use the view's fg. Called at render time for the visible band only, so it
+ *  must be cheap and pure (same line → same colour). */
+#define LCD_TEXTVIEW_DEFAULT 0xFFFFFFFFu
+typedef uint32_t (*lcd_textview_line_color_cb)(const char* line, size_t len);
+
+/** Install (or clear, with NULL) the per-line colour callback and repaint.
+ *  The view stores plain text either way — colour is applied at render. */
+void lcdTextViewSetLineColor(lcd_textview_t* v, lcd_textview_line_color_cb cb);
+
 /** Destroy the view (deletes its container). Optional — deleting the parent
  *  layer frees it automatically. */
 void lcdTextViewDelete(lcd_textview_t* v);

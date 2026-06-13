@@ -13,7 +13,14 @@ The launcher tile grid (`lcd_launcher.cpp`), the status bar
 (`lcd_settings.cpp`) are LVGL widgets the lcd task paints. The built-in
 Log + CLI programs (`lcd_apps.cpp` + `lcd_textview.cpp`) act as ITS
 clients to `log:1` / `cli:1` and stream into a Spleen 5×8 terminal
-view.
+view. Both render colour: the Log view applies per-line severity
+colours at render time (`lcdTextViewSetLineColor` — the scrollback
+stays plain text, so the column math never sees escapes), and the CLI
+terminal (`lcd_term.cpp`, libvterm) paints per-cell SGR colours —
+including backgrounds and reverse video — as one label per same-colour
+run. LVGL's label "recolor" is deliberately not used anywhere: its '#'
+escape is broken in LVGL 9.5 (`lv_text_is_cmd`'s escape branch is dead
+code), and terminal text is full of literal `#`.
 
 ## Activator: folding LCD slices into straddles
 
