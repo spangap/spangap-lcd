@@ -48,3 +48,13 @@ foreach(_lcd_dep IN ITEMS esp_lcd espressif__esp_lcd_ili9341)
     idf_component_get_property(_lcd_lib ${_lcd_dep} COMPONENT_LIB)
     target_link_libraries(${COMPONENT_LIB} PRIVATE ${_lcd_lib})
 endforeach()
+
+# LVGL custom-malloc backend (src/lcd_ui/lv_mem_spangap.cpp, gated on
+# CONFIG_LV_USE_CUSTOM_MALLOC) is referenced ONLY by the lvgl component, which is
+# linked before this one — single-pass linking therefore won't pull our object in
+# to satisfy lvgl's lv_mem_init/lv_*_core. Force it: -u makes the linker treat
+# lv_mem_init as needed from the start, pulling our backend (and with it all the
+# other lv_*_core symbols) regardless of link order.
+if(CONFIG_LV_USE_CUSTOM_MALLOC)
+    target_link_options(${COMPONENT_LIB} INTERFACE "-u" "lv_mem_init")
+endif()

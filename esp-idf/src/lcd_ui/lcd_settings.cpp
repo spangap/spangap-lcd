@@ -14,6 +14,7 @@
  * so we deliberately don't strdup).
  */
 #include "lcd_internal.h"
+#include "mem.h"
 
 #include "storage.h"
 #include "log.h"
@@ -569,7 +570,7 @@ lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, b
     lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
     setValueText(val, storageGetStr(key, ""), secret);
 
-    auto* tr = static_cast<TextRef*>(malloc(sizeof(TextRef)));
+    auto* tr = static_cast<TextRef*>(gp_alloc(sizeof(TextRef)));
     safeStrncpy(tr->key, key, sizeof(tr->key));
     tr->secret = secret;
     tr->valLbl = val;
