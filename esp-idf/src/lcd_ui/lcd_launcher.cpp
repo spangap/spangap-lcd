@@ -25,6 +25,7 @@ struct Entry {
     std::string basename;
     lcd_fn_t    fn  = nullptr;
     lv_obj_t*   img = nullptr;   /* icon image inside the tile */
+    lv_obj_t*   savedFocus = nullptr;  /* keypad focus to restore when re-shown */
 };
 
 std::vector<Entry> s_entries;
@@ -70,6 +71,8 @@ void onLayerDelete(lv_event_t* e) {
     lv_obj_t* t = (lv_obj_t*)lv_event_get_target(e);
     if (t == s_current)         s_current = nullptr;
     if (t == s_fullscreenLayer) s_fullscreenLayer = nullptr;
+    size_t tag = (size_t)(intptr_t)lv_obj_get_user_data(t);   /* clear stale saved focus */
+    if (tag >= 1 && tag <= s_entries.size()) s_entries[tag - 1].savedFocus = nullptr;
 }
 
 /* Status bar + current-layer geometry both follow whichever layer (if any) asked
@@ -120,6 +123,31 @@ void setHidden(lv_obj_t* o, bool hidden) {
 void showHomebar(bool on) { setHidden(s_homebar, !on); }    /* pill: visible whenever an app is up */
 void showLine(bool on)    { setHidden(s_bottomLine, !on); } /* edge: only while dragging the window up */
 
+/* Per-program keypad focus. The input group is shared by every program, but
+ * focus is logically per-app: save the focused widget when a layer leaves the
+ * screen and restore it when that layer returns. This stops a program from
+ * stranding the group's focus on its own (now hidden) widget — which silently
+ * stole the CLI/terminal keyboard. Programs just add widgets to lcdInputGroup()
+ * and need do nothing on hide. */
+size_t layerTag(lv_obj_t* layer) {
+    size_t t = (size_t)(intptr_t)lv_obj_get_user_data(layer);
+    return (t == 0 || t > s_entries.size()) ? 0 : t;   /* 1-based entry idx; 0 = none */
+}
+void saveLayerFocus(lv_obj_t* layer) {
+    size_t t = layer ? layerTag(layer) : 0;
+    if (!t || !lcdInputGroup()) return;
+    s_entries[t - 1].savedFocus = nullptr;
+    lv_obj_t* f = lv_group_get_focused(lcdInputGroup());
+    for (lv_obj_t* p = f; p; p = lv_obj_get_parent(p))
+        if (p == layer) { s_entries[t - 1].savedFocus = f; break; }
+}
+void restoreLayerFocus(lv_obj_t* layer) {
+    size_t t = layer ? layerTag(layer) : 0;
+    if (!t || !lcdInputGroup()) return;
+    lv_obj_t* f = s_entries[t - 1].savedFocus;
+    if (f && lv_obj_is_valid(f)) lv_group_focus_obj(f);
+}
+
 void openEntry(size_t idx) {
     if (idx >= s_entries.size()) return;
     lv_obj_t* layer = findProgramLayer(idx);
@@ -135,10 +163,13 @@ void openEntry(size_t idx) {
      * them bind to this layer. */
     s_current = layer;
     if (firstBuild && s_entries[idx].fn) s_entries[idx].fn(layer);   /* build into it, once */
-    if (prev && prev != layer)
+    if (prev && prev != layer) {
+        saveLayerFocus(prev);                        /* remember prev app's keypad focus */
         lv_obj_add_flag(prev, LV_OBJ_FLAG_HIDDEN);
+    }
     applyFullscreen();                               /* pos/size + status bar for this layer */
     lv_obj_remove_flag(layer, LV_OBJ_FLAG_HIDDEN);
+    restoreLayerFocus(layer);                         /* re-show: restore its keypad focus */
     showHomebar(true);                               /* pill belongs to a shown app (edge stays hidden) */
     placeChrome();
 }
@@ -370,6 +401,7 @@ void lcdLauncherReload(void) {
 void lcdGoHomeInternal(void) {
     if (!s_current) return;
     lv_obj_t* layer = s_current;
+    saveLayerFocus(layer);                /* remember this app's keypad focus for re-open */
     int fromY = lv_obj_get_y(layer);      /* 0 if fullscreen, else LCD_STATUSBAR_H */
     s_current = nullptr;                  /* a second Home (or one at the launcher) is a no-op */
     showHomebar(false); showLine(false);  /* the window is leaving — drop its bar + edge */
