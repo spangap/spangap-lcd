@@ -70,7 +70,7 @@ bool lcdHasKeyboard(void) { return s_hasKeyboard; }
 /* ---- aux payloads (delivered on the lcd task) ---- */
 
 struct lcd_run_msg_t { lcd_fn_t fn; void* arg; };
-struct lcd_reg_msg_t { lcd_fn_t fn; char name[32]; char basename[32]; };
+struct lcd_reg_msg_t { lcd_fn_t fn; lcd_fn_t showFn; char name[32]; char basename[32]; };
 static_assert(sizeof(lcd_run_msg_t) <= ITS_MAX_MSG_DATA, "lcd_run_msg_t too big");
 static_assert(sizeof(lcd_reg_msg_t) <= ITS_MAX_MSG_DATA, "lcd_reg_msg_t too big");
 
@@ -83,7 +83,7 @@ static void onRunMsg(TaskHandle_t, const void* d, size_t len) {
 static void onRegMsg(TaskHandle_t, const void* d, size_t len) {
     if (len < sizeof(lcd_reg_msg_t)) return;
     auto* m = static_cast<const lcd_reg_msg_t*>(d);
-    lcdLauncherAdd(m->name, m->basename, m->fn);
+    lcdLauncherAdd(m->name, m->basename, m->fn, m->showFn);
 }
 
 /* ---- public API ---- */
@@ -95,10 +95,11 @@ void lcdRun(lcd_fn_t fn, void* arg) {
                            pdMS_TO_TICKS(200));
 }
 
-void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn) {
+void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn, lcd_fn_t onShow) {
     if (!lcdTaskHandle || !fn) return;
     lcd_reg_msg_t m{};
     m.fn = fn;
+    m.showFn = onShow;
     safeStrncpy(m.name,     name        ? name        : "", sizeof(m.name));
     safeStrncpy(m.basename, iconBasename ? iconBasename : "", sizeof(m.basename));
     itsSendAuxByTaskHandle(lcdTaskHandle, LCD_REG_PORT, &m, sizeof(m),

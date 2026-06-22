@@ -23,7 +23,8 @@ namespace {
 struct Entry {
     std::string name;
     std::string basename;
-    lcd_fn_t    fn  = nullptr;
+    lcd_fn_t    fn     = nullptr;
+    lcd_fn_t    showFn = nullptr;       /* called on every show (lcdRegister onShow) */
     lv_obj_t*   img = nullptr;   /* icon image inside the tile */
     lv_obj_t*   savedFocus = nullptr;  /* keypad focus to restore when re-shown */
 };
@@ -172,6 +173,7 @@ void openEntry(size_t idx) {
     restoreLayerFocus(layer);                         /* re-show: restore its keypad focus */
     showHomebar(true);                               /* pill belongs to a shown app (edge stays hidden) */
     placeChrome();
+    if (s_entries[idx].showFn) s_entries[idx].showFn(layer);
 }
 
 void onTileClick(lv_event_t* e) {
@@ -314,8 +316,11 @@ void lcdLauncherInit(lv_obj_t* screen) {
     lv_obj_remove_flag(pill, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
     lv_obj_set_size(pill, homebarW, 4);
     lv_obj_align(pill, LV_ALIGN_BOTTOM_MID, 0, -5);
-    lv_obj_set_style_bg_color(pill, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(pill, LV_OPA_40, 0);
+    /* Mid-grey, opaque: a white-at-40% pill vanished on light program
+     * backgrounds (e.g. the viewer's white page). Grey reads on both the dark
+     * launcher and a white page. */
+    lv_obj_set_style_bg_color(pill, lv_color_hex(0x808080), 0);
+    lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(pill, 2, 0);
 
     /* Full-width near-white hairline that rides the window's bottom edge, so the
@@ -336,7 +341,7 @@ void lcdLauncherInit(lv_obj_t* screen) {
     showHomebar(false); showLine(false);
 }
 
-void lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn) {
+void lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn, lcd_fn_t showFn) {
     if (!s_launcher) return;
     size_t idx = s_entries.size();
 
@@ -371,6 +376,7 @@ void lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn) {
     e.name     = name ? name : "";
     e.basename = basename ? basename : "";
     e.fn       = fn;
+    e.showFn   = showFn;
     e.img      = img;
     s_entries.push_back(std::move(e));
 

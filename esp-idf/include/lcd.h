@@ -49,7 +49,13 @@ void lcdRun(lcd_fn_t fn, void* arg = nullptr);
  *  that native size). `fn` runs on the lcd task with
  *  the program's layer (lv_obj_t*) the first time the icon is opened, or again
  *  if the layer was reclaimed. Safe to call from any task / any time. */
-void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn);
+/** `onShow` (optional) is a per-program "shown" callback, invoked every time the
+ *  program's layer is brought to the front (tile tap OR lcdShowProgram), AFTER it
+ *  is built and focus restored — distinct from the build-once `fn`. Lets a
+ *  program react to being opened (e.g. the viewer navigating to its home page on
+ *  a manual launch). Both run on the lcd task. */
+void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn,
+                 lcd_fn_t onShow = nullptr);
 
 /** Bring a registered program's layer to the front (building it on first use,
  *  exactly as a tile tap would) by its registered `name`. No-op if no program

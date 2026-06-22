@@ -104,8 +104,10 @@ bool        lcdIconResRefresh(void);
 
 /* ---- lcd_launcher.cpp ---- */
 void        lcdLauncherInit(lv_obj_t* screen);
-/** Add (or refresh) a program tile. Runs on the lcd task. */
-void        lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn);
+/** Add (or refresh) a program tile, with an optional per-show callback. Runs on
+ *  the lcd task. */
+void        lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn,
+                           lcd_fn_t showFn = nullptr);
 /** A basename's bytes just landed in the cache — set the real image. */
 void        lcdLauncherIconLoaded(const char* basename);
 /** Re-resolve every tile's icon src after an icon_res change. */
