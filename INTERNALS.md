@@ -139,5 +139,10 @@ locates the scrollable depth-first within the shown layer — the first visible
 descendant with range in that direction — and uses `lv_obj_scroll_by_bounded`, so
 it clamps to the real extent and no-ops when nothing can scroll. The virtualized
 text view works through this unchanged (its container carries the true content
-height via its spacer child). Distinct from `lcdProgramScrollwheelArrows`, which
+height via its spacer child). A program whose content isn't an LVGL scroll
+container — e.g. the maps canvas, which it repositions itself — registers a pan
+handler with `lcdProgramScrollHandler()`; while that program is the shown one,
+`lcdScroll()` hands the delta to the handler instead of scrolling a widget (the
+delta uses the finger-drag sign convention, so the handler folds it into the pan
+it already tracks from touch). Distinct from `lcdProgramScrollwheelArrows`, which
 diverts the whole trackball to arrow keys for the on-device terminal.

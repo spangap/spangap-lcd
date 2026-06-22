@@ -25,6 +25,7 @@ struct Entry {
     std::string basename;
     lcd_fn_t    fn     = nullptr;
     lcd_fn_t    showFn = nullptr;       /* called on every show (lcdRegister onShow) */
+    lcd_scroll_fn_t scrollFn = nullptr; /* edge-pan handler (lcdProgramScrollHandler) */
     lv_obj_t*   img = nullptr;   /* icon image inside the tile */
     lv_obj_t*   savedFocus = nullptr;  /* keypad focus to restore when re-shown */
 };
@@ -283,13 +284,10 @@ void lcdShowProgram(const char* name) {
 
 void lcdScroll(lcd_scroll_dir_t dir, int amount) {
     if (amount <= 0) return;
-    /* The active program's layer, or the launcher grid when sitting at home. */
-    lv_obj_t* root = s_current ? s_current : s_launcher;
-    lv_obj_t* o    = findScrollable(root, dir);
-    if (!o) return;
     /* Move the content the opposite way to the side being revealed: scrolling
      * DOWN (showing lower content) drives the scroll position down, i.e. a
-     * negative dy in LVGL's frame. */
+     * negative dy in LVGL's frame. Same signs as a finger-drag vector, so a
+     * program's pan handler can use the delta directly. */
     int dx = 0, dy = 0;
     switch (dir) {
         case LCD_SCROLL_UP:    dy =  amount; break;
@@ -297,7 +295,20 @@ void lcdScroll(lcd_scroll_dir_t dir, int amount) {
         case LCD_SCROLL_LEFT:  dx =  amount; break;
         case LCD_SCROLL_RIGHT: dx = -amount; break;
     }
-    lv_obj_scroll_by_bounded(o, dx, dy, LV_ANIM_OFF);
+    /* A program that pans its own content (e.g. the maps canvas) takes the delta
+     * itself; otherwise scroll the main scrollable widget under the cursor. */
+    if (s_current) {
+        size_t t = layerTag(s_current);
+        if (t && s_entries[t - 1].scrollFn) { s_entries[t - 1].scrollFn(dx, dy); return; }
+    }
+    lv_obj_t* root = s_current ? s_current : s_launcher;
+    lv_obj_t* o    = findScrollable(root, dir);
+    if (o) lv_obj_scroll_by_bounded(o, dx, dy, LV_ANIM_OFF);
+}
+
+void lcdProgramScrollHandler(lcd_scroll_fn_t fn) {
+    size_t t = s_current ? layerTag(s_current) : 0;
+    if (t) s_entries[t - 1].scrollFn = fn;
 }
 
 void lcdLauncherInit(lv_obj_t* screen) {

@@ -74,6 +74,26 @@ Settings panes register via:
 Build the pane with the `lcdSetting*` helpers (the on-device cousin of
 the browser's `Setting*` components — config-bound).
 
+**Scrolling on a cursor-only board.** On a touchless, trackball-only
+deck the user reaches offscreen content by driving the pointer into a
+screen edge; the board reports that as `lcdScroll()`, which pans the
+shown program's main scroll area (or the launcher) — so any program
+built from ordinary LVGL scroll containers (a flex column, a text view)
+just works, nothing to do. A program whose content is **not** an LVGL
+scroll container — e.g. a canvas it repositions itself — registers a pan
+handler from its run fn instead and folds the delta into its own pan:
+
+```cpp
+#if CONFIG_SPANGAP_LCD
+    lcdProgramScrollHandler(myPanFn);   // void myPanFn(int dx, int dy)
+#endif
+```
+
+The `(dx, dy)` use the finger-drag sign convention (the same vector a
+touch drag yields), and the hook is active only while that program is the
+one on screen. (Unrelated: `lcdProgramScrollwheelArrows(true)` instead
+diverts the whole trackball to arrow keys, for an on-device terminal.)
+
 ## How others use it — activator
 
 `spangap-lcd` is **the LCD-side UI activator**. When this straddle is in

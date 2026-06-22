@@ -109,9 +109,26 @@ typedef enum { LCD_SCROLL_UP, LCD_SCROLL_DOWN, LCD_SCROLL_LEFT, LCD_SCROLL_RIGHT
  *  pans the widget under the cursor / pages the launcher icons instead of the
  *  motion being swallowed by the clamp. It locates the relevant scrollable
  *  widget within the active layer and clamps to its range, so it is a no-op when
- *  nothing can scroll that way. Runs on the lcd task — call from a board
- *  pointer_read (already on the lcd task) or an lcdRun() callback. */
+ *  nothing can scroll that way — UNLESS the shown program registered its own pan
+ *  handler (lcdProgramScrollHandler), which then takes the delta instead. Runs on
+ *  the lcd task — call from a board pointer_read (already on the lcd task) or an
+ *  lcdRun() callback. */
 void lcdScroll(lcd_scroll_dir_t dir, int amount);
+
+/** Pan handler a program registers when its content isn't an LVGL scroll
+ *  container — e.g. a map canvas it repositions itself. While that program is
+ *  shown, lcdScroll() hands it the delta (in pixels) instead of scrolling a
+ *  widget. The signs match lv_obj_scroll_by()/lv_indev_get_vect(): +dx reveals
+ *  content to the left, -dx to the right, +dy reveals content above, -dy below —
+ *  i.e. the same vector a finger drag would produce, so a handler can just add it
+ *  to the pan it already accumulates from touch. Runs on the lcd task. */
+typedef void (*lcd_scroll_fn_t)(int dx, int dy);
+
+/** Make the current program handle edge-pan itself via `fn` (null clears it),
+ *  for content lcdScroll()'s generic widget-scroll can't drive. Like
+ *  lcdProgramScrollwheelArrows the binding is per-program and active only while
+ *  that program is shown. Call from a registered fn. */
+void lcdProgramScrollHandler(lcd_scroll_fn_t fn);
 
 /** The shared keypad focus group that hardware button / keyboard indevs target.
  *  Add focusable widgets you build in a program (e.g. a textarea) with
