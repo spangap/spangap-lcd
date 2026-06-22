@@ -127,6 +127,24 @@ Kconfig (`CONFIG_LCD_*`) and brought up by `lcd_panel.cpp`. For the LilyGo
 T-Deck Plus, the hw-tdeck straddle provides the input HAL in `tdeck.cpp` and sets
 the panel pins in its `sdkconfig.defaults`.
 
+**`lcdScroll()` is for the board HAL, not app builders.** A cursor-only board has
+no way to reach content past the screen edge once the pointer is clamped there, so
+the HAL turns "still pushing at the edge" into a scroll request. hw-tdeck's
+trackball `pointer_read` is the worked example: when the cursor is already pinned
+against an edge and the ball keeps rolling that way, it calls
+`lcdScroll(dir, amount)` with the step px the clamp would otherwise swallow —
+
+```cpp
+// in the board's pointer_read (runs on the lcd task):
+if (dx > 0 && ptrX >= scrW - 1) lcdScroll(LCD_SCROLL_RIGHT, dx);   // pinned at right, still pushing
+// ...one such test per edge
+```
+
+— and the component pans whatever's shown (a scroll-container program, the
+launcher, or a program's own `lcdProgramScrollHandler`, per the programs section
+above). It clamps to the content, so it's a no-op when nothing can scroll. Boards
+with a touchscreen never need it (a finger drag scrolls directly).
+
 ## What it does NOT own
 
 - The touch/cursor/button hardware reads — those live in the consuming
