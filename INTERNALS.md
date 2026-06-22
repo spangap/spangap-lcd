@@ -129,3 +129,15 @@ input HAL — `touch_read` (raw native points), `pointer_read` (cursor device),
 and `click_read` (centre/Home button; the board owns the click-vs-hold policy and
 calls `lcdGoHome()` on a hold). All optional. The hw-tdeck straddle provides this
 in `tdeck.cpp` for the LilyGo T-Deck Plus (GT911 touch, trackball, centre button).
+
+A cursor-only board (a touchless trackball deck) can't reach content past the
+screen edge by moving the pointer alone, so `lcd.h` exposes `lcdScroll(dir,
+amount)`: the board's `pointer_read` calls it when the cursor is pinned against
+an edge and the device keeps pushing that way, and the component pans the active
+program's main scrollable (or the launcher grid at home) `amount` px in `dir`. It
+locates the scrollable depth-first within the shown layer — the first visible
+descendant with range in that direction — and uses `lv_obj_scroll_by_bounded`, so
+it clamps to the real extent and no-ops when nothing can scroll. The virtualized
+text view works through this unchanged (its container carries the true content
+height via its spacer child). Distinct from `lcdProgramScrollwheelArrows`, which
+diverts the whole trackball to arrow keys for the on-device terminal.

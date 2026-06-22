@@ -236,6 +236,34 @@ void homebarReleased(lv_event_t* e) {
     lv_anim_start(&a);
 }
 
+/* Whether `o` has any hidden content in `dir` it could still scroll into view.
+ * lv_obj_get_scroll_* report the px of content currently clipped on that side. */
+bool canScrollDir(lv_obj_t* o, lcd_scroll_dir_t dir) {
+    switch (dir) {
+        case LCD_SCROLL_UP:    return lv_obj_get_scroll_top(o)    > 0;
+        case LCD_SCROLL_DOWN:  return lv_obj_get_scroll_bottom(o) > 0;
+        case LCD_SCROLL_LEFT:  return lv_obj_get_scroll_left(o)   > 0;
+        case LCD_SCROLL_RIGHT: return lv_obj_get_scroll_right(o)  > 0;
+    }
+    return false;
+}
+
+/* Depth-first hunt for the widget the edge-pan should drive: `root` itself, or
+ * its first visible descendant, that can still scroll in `dir`. Programs build a
+ * single main scroll area (a settings pane, a viewer page, the virtualized text
+ * view's container), so the first match is the one the user means; hidden
+ * subtrees (e.g. the text view's back band) are skipped. */
+lv_obj_t* findScrollable(lv_obj_t* root, lcd_scroll_dir_t dir) {
+    if (!root || lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN)) return nullptr;
+    if (canScrollDir(root, dir)) return root;
+    uint32_t n = lv_obj_get_child_count(root);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t* hit = findScrollable(lv_obj_get_child(root, i), dir);
+        if (hit) return hit;
+    }
+    return nullptr;
+}
+
 /* Home slide-up: once the animation finishes, hide the layer and re-park it at
  * its normal position so the next open shows it in place. */
 void homeSlideDone(lv_anim_t* a) {
@@ -251,6 +279,25 @@ void lcdShowProgram(const char* name) {
     if (!name) return;
     for (size_t i = 0; i < s_entries.size(); i++)
         if (s_entries[i].name == name) { openEntry(i); return; }
+}
+
+void lcdScroll(lcd_scroll_dir_t dir, int amount) {
+    if (amount <= 0) return;
+    /* The active program's layer, or the launcher grid when sitting at home. */
+    lv_obj_t* root = s_current ? s_current : s_launcher;
+    lv_obj_t* o    = findScrollable(root, dir);
+    if (!o) return;
+    /* Move the content the opposite way to the side being revealed: scrolling
+     * DOWN (showing lower content) drives the scroll position down, i.e. a
+     * negative dy in LVGL's frame. */
+    int dx = 0, dy = 0;
+    switch (dir) {
+        case LCD_SCROLL_UP:    dy =  amount; break;
+        case LCD_SCROLL_DOWN:  dy = -amount; break;
+        case LCD_SCROLL_LEFT:  dx =  amount; break;
+        case LCD_SCROLL_RIGHT: dx = -amount; break;
+    }
+    lv_obj_scroll_by_bounded(o, dx, dy, LV_ANIM_OFF);
 }
 
 void lcdLauncherInit(lv_obj_t* screen) {

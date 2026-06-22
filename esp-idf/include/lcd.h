@@ -99,6 +99,20 @@ void lcdProgramScrollwheelArrows(bool on);
  *  arrows to lcdInputGroup(). Lcd task. */
 bool lcdScrollwheelArrowsActive(void);
 
+/** Direction for lcdScroll(): the way the content moves to reveal what's
+ *  offscreen (DOWN = show the content below, etc.). */
+typedef enum { LCD_SCROLL_UP, LCD_SCROLL_DOWN, LCD_SCROLL_LEFT, LCD_SCROLL_RIGHT } lcd_scroll_dir_t;
+
+/** Pan the currently shown program's content (or the launcher when none is up)
+ *  `amount` pixels in `dir`. For a touchless, trackball-only board: when the
+ *  pointer is driven into a screen edge the board calls this so the trackball
+ *  pans the widget under the cursor / pages the launcher icons instead of the
+ *  motion being swallowed by the clamp. It locates the relevant scrollable
+ *  widget within the active layer and clamps to its range, so it is a no-op when
+ *  nothing can scroll that way. Runs on the lcd task — call from a board
+ *  pointer_read (already on the lcd task) or an lcdRun() callback. */
+void lcdScroll(lcd_scroll_dir_t dir, int amount);
+
 /** The shared keypad focus group that hardware button / keyboard indevs target.
  *  Add focusable widgets you build in a program (e.g. a textarea) with
  *  lv_group_add_obj() so a physical keyboard can type into them. Lcd task. */
