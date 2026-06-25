@@ -276,6 +276,8 @@ void homeSlideDone(lv_anim_t* a) {
 
 }  // namespace
 
+bool lcdAtLauncher(void) { return s_current == nullptr; }
+
 void lcdShowProgram(const char* name) {
     if (!name) return;
     for (size_t i = 0; i < s_entries.size(); i++)
@@ -448,6 +450,7 @@ void lcdLauncherIconLoaded(const char* basename) {
     for (auto& e : s_entries)
         if (e.img && e.basename == basename)
             lv_image_set_src(e.img, src);
+    lcdBootSettleKick();   /* an icon landed — push the boot backlight reveal out */
 }
 
 void lcdLauncherReload(void) {

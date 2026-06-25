@@ -78,6 +78,20 @@ bool lcdNotifyActivity(void);
  *  task; safe to call from a registered fn (e.g. a Back button). */
 void lcdGoHome(void);
 
+/** True when the launcher is the current view (no program layer shown) — so a
+ *  board's Home gesture/button can tell that lcdGoHome() would be a no-op and act
+ *  differently (e.g. go straight to standby). Lcd task. */
+bool lcdAtLauncher(void);
+
+/** Put the display into / out of standby: backlight off + panel display off (GRAM
+ *  retained, so wake is instant) / panel back on with a 300 ms backlight fade-in.
+ *  The board owns the standby *policy* — the lcd component's inactivity timeout and
+ *  the board's own button only set the ephemeral `sys.standby` key; the board
+ *  subscribes to it and calls these (and powers its own input down/up). While
+ *  asleep the lcd loop stops rendering so the chip can light-sleep. Lcd task. */
+void lcdScreenSleep(void);
+void lcdScreenWake(void);
+
 /** Hide the status bar and grow the current program layer to the full screen
  *  height (`on`), or restore both. For an immersive program screen (e.g. a chat
  *  thread). The launcher remembers which layer asked: the bar stays hidden only

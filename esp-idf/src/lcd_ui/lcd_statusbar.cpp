@@ -6,7 +6,9 @@
  *            lv_timer (the clock inherently needs a tick).
  * Top-right: wifi signal glyph (LV_SYMBOL_WIFI) whose opacity tracks RSSI,
  *            driven event-driven off storage (wifi.sta.state / wifi.sta.rssi,
- *            published by net) — no net call, no polling.
+ *            published by net) — no net call, no polling. A battery glyph sits
+ *            just left of it, shown only when a board publishes battery.percent
+ *            (e.g. the T-Deck tdeck task) and updated event-driven off it.
  */
 #include "lcd_internal.h"
 
@@ -21,6 +23,7 @@ namespace {
 lv_obj_t* s_bar   = nullptr;
 lv_obj_t* s_clock = nullptr;
 lv_obj_t* s_wifi  = nullptr;
+lv_obj_t* s_batt  = nullptr;
 
 void updateClock(lv_timer_t* t) {
     char fmt[64];
@@ -70,6 +73,27 @@ void updateWifi(const char*, const char*) {
     lv_obj_set_style_text_opa(s_wifi, opa, 0);
 }
 
+/* storage ON_CHANGE handler for battery.percent. Hidden until a board publishes
+ * the key (boards without a battery sense never set it); then a glyph keyed to
+ * the charge level, reddened when nearly flat. */
+void updateBattery(const char*, const char*) {
+    if (!storageExists("battery.percent")) {
+        lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    int pct = storageGetInt("battery.percent", 0);
+    const char* glyph;
+    if      (pct >= 88) glyph = LV_SYMBOL_BATTERY_FULL;
+    else if (pct >= 63) glyph = LV_SYMBOL_BATTERY_3;
+    else if (pct >= 38) glyph = LV_SYMBOL_BATTERY_2;
+    else if (pct >= 13) glyph = LV_SYMBOL_BATTERY_1;
+    else                glyph = LV_SYMBOL_BATTERY_EMPTY;
+    lv_label_set_text(s_batt, glyph);
+    lv_obj_set_style_text_color(s_batt,
+        pct <= 12 ? lv_color_hex(0xFF5555) : lv_color_white(), 0);
+    lv_obj_remove_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
+}
+
 }  // namespace
 
 void lcdStatusbarInit(void) {
@@ -91,12 +115,25 @@ void lcdStatusbarInit(void) {
     lv_obj_set_style_text_color(s_wifi, lv_color_white(), 0);
     lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
 
+    /* Battery glyph anchored to the left edge of the wifi icon (so its right edge
+     * stays put as the glyph changes width). Created hidden; updateBattery shows
+     * it once battery.percent exists. */
+    s_batt = lv_label_create(s_bar);
+    lv_obj_align_to(s_batt, s_wifi, LV_ALIGN_OUT_LEFT_MID, -6, 0);
+    lv_obj_set_style_text_color(s_batt, lv_color_white(), 0);
+    lv_label_set_text(s_batt, LV_SYMBOL_BATTERY_EMPTY);
+    lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
+
     updateClock(nullptr);
     lv_timer_create(updateClock, 1000, nullptr);
 
     /* Event-driven wifi icon: publishWifiStatus() does storageSet on wifi.sta.* */
     storageSubscribeChanges("wifi.sta", updateWifi);
     updateWifi(nullptr, nullptr);                  /* apply current state once */
+
+    /* Event-driven battery icon: the board's battery task sets battery.percent. */
+    storageSubscribeChanges("battery.percent", updateBattery);
+    updateBattery(nullptr, nullptr);               /* apply current state once */
 
     /* Event-driven clock visibility: ntp flips sys.time.valid on first sync. */
     storageSubscribeChanges("sys.time.valid", updateTimeVisible);

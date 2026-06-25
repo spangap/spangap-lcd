@@ -151,14 +151,16 @@ static void lcdTaskFn(void*) {
      * light sleep (board HAL clocks it from RC_FAST with LEDC keep-alive). The
      * device can light-sleep with the screen on. */
 
-    /* Live config. Backlight applies on this task; icon_res change reloads the
-     * launcher tiles (loader does the flash reads, never us). */
-    NOW_AND_ON_CHANGE("s.lcd.backlight", { lcdPanelBacklight((uint8_t)atoi(val)); });
+    /* Live config. Backlight target applies on this task (held dark until the boot
+     * reveal); icon_res change reloads the launcher tiles (loader does the flash
+     * reads, never us). */
+    NOW_AND_ON_CHANGE("s.lcd.backlight", { lcdBacklightSetTarget((uint8_t)atoi(val)); });
     storageSubscribeChanges("s.lcd.icon_res", ON_CHANGE {
         if (lcdIconResRefresh()) lcdLauncherReload();
     });
-    /* Inactivity blank: after s.lcd.inactivity_timeout s with no input the screen
-     * goes to standby (backlight off + panel sleep); any input wakes it. */
+    /* Inactivity: after s.lcd.inactivity_timeout s with no input we set the
+     * ephemeral sys.standby key; the board decides what standby means (and clears
+     * the key to wake). 0 = never. */
     NOW_AND_ON_CHANGE("s.lcd.inactivity_timeout", { lcdInactivitySetTimeout(atoi(val)); });
 
     info("ready (%dx%d)\n", lcdScreenW(), lcdScreenH());
@@ -180,14 +182,11 @@ static void lcdTaskFn(void*) {
         while (itsPoll(0)) {}              /* drain aux / storage callbacks */
         if (s_inputPending) {             /* woke on a touch/button/trackball edge */
             s_inputPending = false;
-            /* lcdActivity() resets the inactivity timer and, if the screen was in
-             * standby, wakes it and returns true — in which case this edge only
-             * served to wake, so we consume it (don't feed the indevs, so it can't
-             * click / go-home / move the cursor on wake). The button/trackball wake
-             * is fully handled by skipping this poll; touch isn't (the GT911 keeps
-             * firing while the finger is down), so arm a swallow for the rest of it. */
-            if (lcdActivity()) lcdSwallowTouch();
-            else               while (lcdInputPoll()) {}   /* drain click / keystroke */
+            lcdActivity();                 /* re-arm the inactivity timer */
+            /* Drain click / keystroke. A press while in standby is handled by the
+             * board: its click_read clears sys.standby (waking us) and absorbs the
+             * press, so it never lands as a click / go-home / cursor move on wake. */
+            while (lcdInputPoll()) {}
         }
         /* While blanked, skip rendering entirely and sleep until the next input
          * edge or ITS message — no 1 Hz status-clock wake, so the chip can

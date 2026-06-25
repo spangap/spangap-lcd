@@ -128,7 +128,19 @@ rotation are config; the same rotation is applied to raw touch.
 input HAL — `touch_read` (raw native points), `pointer_read` (cursor device),
 and `click_read` (centre/Home button; the board owns the click-vs-hold policy and
 calls `lcdGoHome()` on a hold). All optional. The hw-tdeck straddle provides this
-in `tdeck.cpp` for the LilyGo T-Deck Plus (GT911 touch, trackball, centre button).
+in `tdeck_lcd.cpp` for the LilyGo T-Deck Plus (GT911 touch, trackball, centre
+button).
+
+**Standby is the board's policy, not the component's.** After
+`s.lcd.inactivity_timeout` seconds with no input the component does *not* blank
+itself — it only sets the ephemeral `sys.standby` key (and the board's button
+sets/clears the same key, so timeout and button share one path). A board
+subscribes to `sys.standby` and calls `lcdScreenSleep()` / `lcdScreenWake()`
+(backlight off + panel display off, GRAM retained, → instant fade-in wake) and
+powers its own input down/up — so it's free to dim-first or show something first.
+The backlight is faded on wake and held dark from boot until the launcher settles
+with its icons placed (debounced on icon loads, with a hard cap), so the UI never
+flashes on half-built.
 
 A cursor-only board (a touchless trackball deck) can't reach content past the
 screen edge by moving the pointer alone, so `lcd.h` exposes `lcdScroll(dir,

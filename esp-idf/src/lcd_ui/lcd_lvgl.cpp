@@ -20,6 +20,8 @@
 #include "esp_heap_caps.h"
 #include "freertos/semphr.h"
 
+#include <algorithm>          /* std::clamp */
+
 /* Draw-strip byte budget. Each flush is one SPI transfer, so a strip must fit
  * the shared-bus max_transfer_sz — the SD driver brings the bus up at 4096
  * (fs.cpp) before us, and spiHelperInitBus is first-caller-wins. Strip line
@@ -40,7 +42,6 @@ static SemaphoreHandle_t      s_dmaDone = nullptr;   /* given when a strip's DMA
  * are LV_INDEV_MODE_EVENT, so they only read when lcdInputPoll() drives them. */
 static lv_timer_t*            s_touchTrack = nullptr; /* 10ms re-read while a finger is down */
 static bool                   s_inputAgain = false;   /* a read cb wants an immediate follow-up read */
-static bool                   s_touchSwallow = false; /* drop the touch that woke the screen until it lifts */
 
 /* Multi-touch / gestures (off by default — single-touch is the cheapest path).
  * When on, touchReadCb reads all fingers and dispatches to gesture handlers;
@@ -53,6 +54,7 @@ static lcd_gesture_cb_t       s_gestureCb[4] = {};
  * own the LVGL pointer indev, the cursor object, and its show-on-move/auto-hide. */
 static lv_indev_t*            s_ptrIndev   = nullptr;
 static lv_obj_t*              s_cursor     = nullptr;
+#define LCD_CURSOR_SIZE        14                            /* px; square cursor side */
 static lv_timer_t*            s_ptrHide    = nullptr; /* one-shot: hide the cursor after inactivity */
 static int                    s_ptrVisMs   = 2000;    /* <0 = always visible */
 
@@ -105,11 +107,10 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
     }
 
     /* Keep re-reading while any finger is down (the GT911 INT only guarantees the
-     * first edge) — also how a swallowed wake-touch is polled to release. */
+     * first edge). */
     if (n > 0) {
         if (!s_touchTrack) s_touchTrack = lv_timer_create(touchTrackCb, 10, nullptr);
     } else {
-        s_touchSwallow = false;   /* finger lifted — the next touch is a real one */
         if (s_touchTrack) { lv_timer_delete(s_touchTrack); s_touchTrack = nullptr; }
     }
 
@@ -118,12 +119,10 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
         for (auto cb : s_gestureCb) if (cb) cb(gp, n);
 
     /* Single pointer for LVGL: point 0 drives it, but >=2 fingers (multipoint)
-     * suppress it so the gesture owner has the interaction; a screen-waking touch
-     * is swallowed until lift (the GT911 re-fires its INT every frame the finger
-     * stays down, which would otherwise land as a real press). */
+     * suppress it so the gesture owner has the interaction. */
     static bool wasDown = false;
     bool suppress = (s_multipoint && n >= 2);
-    if (n > 0 && !suppress && !s_touchSwallow) {
+    if (n > 0 && !suppress) {
         data->point.x = gp[0].x;
         data->point.y = gp[0].y;
         data->state   = LV_INDEV_STATE_PRESSED;
@@ -179,6 +178,17 @@ static void cursorPoke(void) {
  * from wherever it last was. We own the position (no lv_indev_set_cursor). */
 static void cursorGlideTo(int x, int y, bool snap) {
     if (!s_cursor) return;
+
+    /* The board clamps the logical point (the click position, also its edge-pan
+     * trigger) to the screen edge, but the cursor is drawn from its top-left, so
+     * at the right/bottom edge the box would spill off. Clamp the *drawn* position
+     * to [0, scr - size] to keep the whole cursor visible; the logical point the
+     * caller passes on to LVGL is left at the edge. */
+    int scrW = 0, scrH = 0;
+    lcdDisplaySize(&scrW, &scrH);
+    x = std::clamp(x, 0, (scrW > LCD_CURSOR_SIZE ? scrW : LCD_CURSOR_SIZE) - LCD_CURSOR_SIZE);
+    y = std::clamp(y, 0, (scrH > LCD_CURSOR_SIZE ? scrH : LCD_CURSOR_SIZE) - LCD_CURSOR_SIZE);
+
     if (snap) { lv_anim_delete(s_cursor, nullptr); lv_obj_set_pos(s_cursor, x, y); return; }
     lv_anim_t a;
     lv_anim_init(&a);
@@ -222,38 +232,108 @@ void lcdPointerSetVisibleMs(int ms) {
     }
 }
 
-/* ---- inactivity blank / screen standby ----
- * After s.lcd.inactivity_timeout seconds with no user input the screen blanks:
- * backlight off + (if the board supports it) panel standby, GRAM retained. Any
- * input wakes it (lcdActivity); the lcd loop skips rendering while off so the
- * chip can light-sleep. Same one-shot lv_timer pattern as the cursor auto-hide. */
+/* ---- inactivity timeout -> standby, backlight fade, boot reveal ----
+ * After s.lcd.inactivity_timeout seconds with no user input the lcd component does
+ * NOT itself blank — it only sets the ephemeral `sys.standby` key. The board owns
+ * what standby means: it subscribes to sys.standby and calls lcdScreenSleep() /
+ * lcdScreenWake() (and powers its own input down/up). The board's centre button
+ * sets/clears the same key, so the timeout and the button share one path. While
+ * asleep the lcd loop stops rendering so the chip can light-sleep.
+ *
+ * The backlight is faded (not snapped) on wake and on the one-shot boot reveal, and
+ * is held dark from boot until the launcher has settled with its icons placed — so
+ * the UI never flashes on half-built. lcdScreenSleep snaps it to 0 (dark fast). */
 static lv_timer_t* s_blankTimer = nullptr;
-static int         s_blankMs    = 0;       /* <=0 = never blank */
-static bool        s_screenOff  = false;
+static int         s_blankMs    = 0;       /* <=0 = never time out */
+static bool        s_screenOff  = false;   /* true == fully asleep: panel off, loop skips render */
+static bool        s_fadingOut  = false;   /* backlight ramping down; still rendering to drive it */
 
-static void screenSleep(void);
+/* Backlight: s_blTarget is the configured on-level (s.lcd.backlight); s_blCur is
+ * the live duty an lv_anim eases toward it (starts dark — backlightInit duty 0). */
+static uint8_t     s_blTarget   = 200;
+static int32_t     s_blCur      = 0;
+static bool        s_booted     = false;   /* boot reveal done (backlight allowed up) */
+static lv_timer_t* s_settle     = nullptr; /* debounce: reveal once icon loads quiesce */
+static lv_timer_t* s_revealCap  = nullptr; /* hard cap so boot always reveals */
+
+static void blAnimExec(void* var, int32_t v) { (void)var; lcdPanelBacklight((uint8_t)v); s_blCur = v; }
+
+static void backlightFadeTo(int32_t level, uint32_t ms, lv_anim_completed_cb_t done = nullptr) {
+    lv_anim_delete(&s_blCur, blAnimExec);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &s_blCur);
+    lv_anim_set_exec_cb(&a, blAnimExec);
+    lv_anim_set_values(&a, s_blCur, level);
+    lv_anim_set_duration(&a, ms);
+    lv_anim_set_path_cb(&a, lv_anim_path_linear);
+    if (done) lv_anim_set_completed_cb(&a, done);
+    lv_anim_start(&a);
+}
+
+void lcdBacklightSetTarget(uint8_t level) {
+    s_blTarget = level;
+    /* Live slider change: apply at once while awake and past the boot reveal;
+     * before the reveal (or while asleep) just remember it — the fade-in uses it. */
+    if (s_booted && !s_screenOff) {
+        lv_anim_delete(&s_blCur, blAnimExec);
+        lcdPanelBacklight(level);
+        s_blCur = level;
+    }
+}
+
+static void bootReveal(void) {
+    if (s_booted) return;
+    s_booted = true;
+    if (s_settle)    { lv_timer_delete(s_settle);    s_settle = nullptr; }
+    if (s_revealCap) { lv_timer_delete(s_revealCap); s_revealCap = nullptr; }
+    if (!s_screenOff) backlightFadeTo(s_blTarget, 300);
+}
+
+/* Each launcher icon that lands pushes the reveal out a little; when the loads go
+ * quiet the screen lights with everything already placed. lcdLvglInit arms a hard
+ * cap so a board with no icons (or a stuck loader) still reveals. */
+void lcdBootSettleKick(void) {
+    if (s_booted) return;
+    if (s_settle) { lv_timer_reset(s_settle); return; }
+    s_settle = lv_timer_create([](lv_timer_t*) { s_settle = nullptr; bootReveal(); }, 200, nullptr);
+    lv_timer_set_repeat_count(s_settle, 1);
+}
 
 static void armBlankTimer(void) {
     if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
     if (s_blankMs <= 0 || s_screenOff) return;
-    s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; screenSleep(); },
+    s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; storageSet("sys.standby", 1); },
                                    (uint32_t)s_blankMs, nullptr);
     lv_timer_set_repeat_count(s_blankTimer, 1);   /* one-shot: fires once, self-deletes */
 }
 
-static void screenSleep(void) {
-    if (s_screenOff) return;
+/* End of the sleep fade-out: now that the backlight is at 0, actually power the
+ * panel off and let the loop stop rendering. Powering off mid-fade would cut to
+ * black instead of ramping, so it has to wait for the anim to finish. */
+static void blSleepDone(lv_anim_t*) {
+    if (!s_fadingOut) return;   /* a wake cancelled the fade-out before it landed */
+    s_fadingOut = false;
     s_screenOff = true;
-    if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
-    lcdPanelBacklight(0);
     lcdPanelDisplayPower(false);   /* panel standby, GRAM retained */
 }
 
-static void screenWake(void) {
-    if (!s_screenOff) return;
+void lcdScreenSleep(void) {
+    if (s_screenOff || s_fadingOut) return;
+    if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+    /* Ramp the backlight down (the loop keeps rendering to drive the anim while
+     * s_screenOff is still false); blSleepDone powers the panel off at 0. */
+    s_fadingOut = true;
+    backlightFadeTo(0, 300, blSleepDone);
+}
+
+void lcdScreenWake(void) {
+    if (!s_screenOff && !s_fadingOut) return;   /* already awake / fading in */
+    bool wasOff = s_screenOff;
+    s_fadingOut = false;                          /* cancel a fade-out in progress */
     s_screenOff = false;
-    lcdPanelDisplayPower(true);
-    lcdPanelBacklight((uint8_t)storageGetInt("s.lcd.backlight", 200));
+    if (wasOff) lcdPanelDisplayPower(true);       /* panel was off — bring it back */
+    backlightFadeTo(s_blTarget, 300);             /* fade up from the current duty */
     armBlankTimer();
 }
 
@@ -262,22 +342,16 @@ void lcdInactivitySetTimeout(int seconds) {
     armBlankTimer();
 }
 
+/* Register user input: just re-arm the inactivity timer. Waking from standby is the
+ * board's job (it clears sys.standby), not ours, so this no longer wakes and always
+ * returns false — kept bool for lcdNotifyActivity's callers. */
 bool lcdActivity(void) {
-    if (s_screenOff) { screenWake(); return true; }
     if (s_blankTimer) lv_timer_reset(s_blankTimer);
     else              armBlankTimer();   /* (re)arm if a setting change left it off */
     return false;
 }
 
 bool lcdScreenIsOff(void) { return s_screenOff; }
-
-/* Called from the lcd loop when an input edge woke the screen. The button/trackball
- * wake edge is already dropped (the loop skips that poll); touch needs more, since
- * the GT911 re-fires its INT every frame the finger stays down. Arm a swallow so
- * touchReadCb drops the rest of the waking press; it self-clears when the finger
- * lifts. No-op for a button/trackball wake (no finger down → cleared on the next
- * touch read). */
-void lcdSwallowTouch(void) { s_touchSwallow = true; }
 
 /* The hardware keyboard, if any, is a CONSUMER concern (its quirks vary per
  * board): the consumer creates its own keypad indev, joins it to lcdInputGroup(),
@@ -354,7 +428,7 @@ bool lcdLvglInit(void) {
         s_cursor = lv_obj_create(lv_layer_sys());      /* above the status bar */
         lv_obj_remove_style_all(s_cursor);
         lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_CLICKABLE);   /* never a hit target */
-        lv_obj_set_size(s_cursor, 14, 14);
+        lv_obj_set_size(s_cursor, LCD_CURSOR_SIZE, LCD_CURSOR_SIZE);
         lv_obj_set_style_radius(s_cursor, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(s_cursor, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(s_cursor, LV_OPA_50, 0);
@@ -389,6 +463,12 @@ bool lcdLvglInit(void) {
     /* A hardware keyboard, if present, is set up by the consumer (its own keypad
      * indev joined to s_group via lcdInputGroup()) — see lcdSetHasKeyboard() and
      * reticulous/main/tdeck.cpp. The lcd component creates no keyboard indev. */
+
+    /* Boot reveal hard cap: the backlight stays dark until the launcher settles
+     * (lcdBootSettleKick as icons land), but light it regardless after this so a
+     * board with no icons or a stuck loader never boots to a black screen. */
+    s_revealCap = lv_timer_create([](lv_timer_t*) { s_revealCap = nullptr; bootReveal(); }, 3000, nullptr);
+    lv_timer_set_repeat_count(s_revealCap, 1);
 
     return true;
 }

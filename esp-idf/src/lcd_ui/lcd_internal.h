@@ -59,21 +59,25 @@ bool        lcdInputPoll(void);
  *  Called each lcd-loop pass; keeps the task idle when nothing is held. */
 void        lcdPauseIdleInputTimers(void);
 
-/* ---- inactivity blank / screen standby (lcd_lvgl.cpp; lcd task only) ---- */
-/** Set the inactivity timeout (seconds; <=0 disables blanking) and (re)arm the
- *  blank timer. Driven by the s.lcd.inactivity_timeout subscription. */
+/* ---- inactivity timeout / standby / backlight (lcd_lvgl.cpp; lcd task only) ----
+ * lcdScreenSleep/lcdScreenWake are the standby primitives — declared in lcd.h, as
+ * the board (not the lcd component) drives them off the sys.standby key. */
+/** Set the inactivity timeout (seconds; <=0 = never) and (re)arm the timer. On
+ *  expiry the lcd component sets the ephemeral sys.standby key; the board acts on
+ *  it. Driven by the s.lcd.inactivity_timeout subscription. */
 void        lcdInactivitySetTimeout(int seconds);
-/** Register user input. Resets the blank timer; if the screen is in standby it
- *  is woken. Returns true iff this call woke the screen (so the caller can
- *  consume the waking edge instead of delivering it to the UI). */
+/** Register user input: re-arms the inactivity timer. Always returns false (waking
+ *  from standby is the board's job, via sys.standby); kept bool for callers. */
 bool        lcdActivity(void);
-/** True while the screen is blanked (backlight off + panel in standby). The lcd
- *  loop skips rendering and sleeps until input while this holds. */
+/** True while the screen is in standby (lcdScreenSleep). The lcd loop skips
+ *  rendering and sleeps until input while this holds. */
 bool        lcdScreenIsOff(void);
-/** Arm a touch-swallow after an input edge woke the screen, so the rest of the
- *  waking touch is dropped (the GT911 re-fires while the finger stays down).
- *  Self-clears when the finger lifts; no-op without touch. lcd task only. */
-void        lcdSwallowTouch(void);
+/** Set the backlight target (s.lcd.backlight). Applied at once while awake and past
+ *  the boot reveal; otherwise remembered for the next fade-in. */
+void        lcdBacklightSetTarget(uint8_t level);
+/** Nudge the one-shot boot reveal: the backlight is held dark from boot and fades
+ *  up once launcher icon loads go quiet (or a hard cap fires). Called as icons land. */
+void        lcdBootSettleKick(void);
 /** Focus group for non-pointer indevs (encoder/keypad). Launcher icons join
  *  it so a trackball-only board navigates the same UI. */
 lv_group_t* lcdInputGroup(void);
