@@ -14,6 +14,7 @@
  * so we deliberately don't strdup).
  */
 #include "lcd_internal.h"
+#include "lcd_app.h"
 #include "mem.h"
 
 #include "storage.h"
@@ -645,7 +646,20 @@ lv_obj_t* lcdSettingButton(lv_obj_t* parent, const char* label, lcd_fn_t onClick
 
 /* ================= gear program ================= */
 
+/* SettingsApp — a thin LcdApp host around the existing page-stack. onCreate
+ * builds the menu tree (settingsOpen) into the app's root; the slash-path
+ * registry, the lcdSetting* builders, two-way storage binding, scroll pills and
+ * every straddle's pane hook are byte-for-byte the code that shipped before. */
+namespace {
+class SettingsApp : public LcdApp {
+public:
+    SettingsApp() : LcdApp({ .name = "Settings", .iconBasename = "gear", .launcherPage = 0 }) {}
+    void onCreate(lv_obj_t* root) override { settingsOpen(root); }
+    void onClose() override { s_pages.clear(); }   /* drop dangling page pointers */
+};
+}  // namespace
+
 void lcdSettingsInit(void) {
     s_root.label = "Settings";
-    lcdLauncherAdd("Settings", "gear", settingsOpen);
+    lcdInstall(new SettingsApp());
 }

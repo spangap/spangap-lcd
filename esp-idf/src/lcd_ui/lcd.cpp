@@ -12,6 +12,7 @@
 #include "lcd.h"
 #include "lcd_input.h"
 #include "lcd_internal.h"
+#include "shell_internal.h"   /* shellInit — the phone-style shell */
 
 #include "storage.h"
 #include "its.h"
@@ -23,9 +24,8 @@
 
 #include <cstdlib>
 
-/* lcd-task aux ports (must not clash with storage's 1/42/43). */
+/* lcd-task aux port (must not clash with storage's 1/42/43). */
 static constexpr uint16_t LCD_RUN_PORT = 10;
-static constexpr uint16_t LCD_REG_PORT = 11;
 
 TaskHandle_t lcdTaskHandle = nullptr;
 
@@ -70,20 +70,12 @@ bool lcdHasKeyboard(void) { return s_hasKeyboard; }
 /* ---- aux payloads (delivered on the lcd task) ---- */
 
 struct lcd_run_msg_t { lcd_fn_t fn; void* arg; };
-struct lcd_reg_msg_t { lcd_fn_t fn; lcd_fn_t showFn; char name[32]; char basename[32]; };
 static_assert(sizeof(lcd_run_msg_t) <= ITS_MAX_MSG_DATA, "lcd_run_msg_t too big");
-static_assert(sizeof(lcd_reg_msg_t) <= ITS_MAX_MSG_DATA, "lcd_reg_msg_t too big");
 
 static void onRunMsg(TaskHandle_t, const void* d, size_t len) {
     if (len < sizeof(lcd_run_msg_t)) return;
     auto* m = static_cast<const lcd_run_msg_t*>(d);
     if (m->fn) m->fn(m->arg);
-}
-
-static void onRegMsg(TaskHandle_t, const void* d, size_t len) {
-    if (len < sizeof(lcd_reg_msg_t)) return;
-    auto* m = static_cast<const lcd_reg_msg_t*>(d);
-    lcdLauncherAdd(m->name, m->basename, m->fn, m->showFn);
 }
 
 /* ---- public API ---- */
@@ -92,17 +84,6 @@ void lcdRun(lcd_fn_t fn, void* arg) {
     if (!lcdTaskHandle || !fn) return;
     lcd_run_msg_t m{ fn, arg };
     itsSendAuxByTaskHandle(lcdTaskHandle, LCD_RUN_PORT, &m, sizeof(m),
-                           pdMS_TO_TICKS(200));
-}
-
-void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn, lcd_fn_t onShow) {
-    if (!lcdTaskHandle || !fn) return;
-    lcd_reg_msg_t m{};
-    m.fn = fn;
-    m.showFn = onShow;
-    safeStrncpy(m.name,     name        ? name        : "", sizeof(m.name));
-    safeStrncpy(m.basename, iconBasename ? iconBasename : "", sizeof(m.basename));
-    itsSendAuxByTaskHandle(lcdTaskHandle, LCD_REG_PORT, &m, sizeof(m),
                            pdMS_TO_TICKS(200));
 }
 
@@ -131,7 +112,6 @@ static void lcdTaskFn(void*) {
     itsServerInit();                       /* inbox for aux + storage subs */
     itsClientInit(2);                      /* client side: Log + CLI programs dial log:1/cli:1 */
     itsOnAux(LCD_RUN_PORT, onRunMsg);
-    itsOnAux(LCD_REG_PORT, onRegMsg);
 
     if (!lcdLvglInit()) {
         err("lvgl bring-up failed\n");
@@ -141,10 +121,10 @@ static void lcdTaskFn(void*) {
     lcdIconsInit();
 
     lv_obj_t* scr = lv_screen_active();
-    lcdLauncherInit(scr);                  /* bottom: program icons */
-    lcdSettingsInit();                     /* built-in Settings (gear) tile */
-    lcdAppsInit();                          /* built-in Log + CLI program tiles */
-    lcdStatusbarInit();                    /* top: opaque status bar (lv_layer_top) */
+    /* The phone-style shell: status bar + paged launcher + LcdApp lifecycle.
+     * Installs the built-in Settings/Log/CLI apps; other straddles install their
+     * programs from their *LcdRegister hooks via lcdRun(lcdInstall(...)). */
+    shellInit(scr);
 
     /* No NO_LIGHT_SLEEP lock: the panel holds its own GRAM, touch wakes the task
      * via a GPIO wake source, and the board keeps the backlight PWM alive across

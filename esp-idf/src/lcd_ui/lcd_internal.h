@@ -106,12 +106,7 @@ const char* lcdIconRes(void);
  *  s.lcd.icon_res subscription wiring in lcd.cpp. */
 bool        lcdIconResRefresh(void);
 
-/* ---- lcd_launcher.cpp ---- */
-void        lcdLauncherInit(lv_obj_t* screen);
-/** Add (or refresh) a program tile, with an optional per-show callback. Runs on
- *  the lcd task. */
-void        lcdLauncherAdd(const char* name, const char* basename, lcd_fn_t fn,
-                           lcd_fn_t showFn = nullptr);
+/* ---- shell/launcher.cpp ---- */
 /** A basename's bytes just landed in the cache — set the real image. */
 void        lcdLauncherIconLoaded(const char* basename);
 /** Re-resolve every tile's icon src after an icon_res change. */
@@ -119,21 +114,19 @@ void        lcdLauncherReload(void);
 /** Hide the current program layer and reveal the launcher. */
 void        lcdGoHomeInternal(void);
 
-/* ---- lcd_statusbar.cpp ---- */
+/* ---- shell/statusbar.cpp ---- */
 void        lcdStatusbarInit(void);
 /** Show/hide the opaque top status bar (e.g. for an immersive program screen).
- *  The launcher coordinates this with the current layer's geometry — programs
+ *  The shell coordinates this with the foreground app's geometry — programs
  *  should call lcdProgramFullscreen(), not this, to reclaim the bar's space. */
 void        lcdStatusbarSetVisible(bool visible);
 
 /* ---- lcd_settings.cpp ---- */
-/** Register the built-in Settings (gear) program with the launcher. */
+/** Install the built-in Settings (gear) program (an LcdApp hosting the existing
+ *  page-stack). Call on the lcd task (from shellInit). */
 void        lcdSettingsInit(void);
 
-/* ---- lcd_apps.cpp: built-in Log + CLI programs ---- */
-/** Register the built-in Log + CLI programs. Call from the lcd task after the
- *  launcher exists; needs itsClientInit() (the lcd task is an ITS client). */
-void        lcdAppsInit(void);
+/* ---- fonts (generated, in src/lcd_ui/) ---- */
 /** Spleen 5x8 monospace bitmap font (generated lv_font_spleen_5x8.c). */
 extern const lv_font_t lv_font_spleen_5x8;
 /** Tom Thumb 4x6 monospace bitmap font (generated lv_font_tomthumb_4x6.c). */

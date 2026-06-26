@@ -43,19 +43,10 @@ void lcdInit(void);
  *  once queued; fn runs shortly after on the lcd task. Safe from any task. */
 void lcdRun(lcd_fn_t fn, void* arg = nullptr);
 
-/** Register a launcher program. `name` is the icon label; `iconBasename`
- *  names a file under /fixed/lcd/icons/<res>/<iconBasename>.bin (no extension,
- *  no size — <res> is fixed to the launcher tile size, "36x36"; icons render at
- *  that native size). `fn` runs on the lcd task with
- *  the program's layer (lv_obj_t*) the first time the icon is opened, or again
- *  if the layer was reclaimed. Safe to call from any task / any time. */
-/** `onShow` (optional) is a per-program "shown" callback, invoked every time the
- *  program's layer is brought to the front (tile tap OR lcdShowProgram), AFTER it
- *  is built and focus restored — distinct from the build-once `fn`. Lets a
- *  program react to being opened (e.g. the viewer navigating to its home page on
- *  a manual launch). Both run on the lcd task. */
-void lcdRegister(const char* name, const char* iconBasename, lcd_fn_t fn,
-                 lcd_fn_t onShow = nullptr);
+/* Launcher programs are LcdApp objects (lcd_app.h): subclass LcdApp and hand an
+ * instance to lcdInstall(). The old lcdRegister(name, icon, fn) free-function
+ * model has been retired. lcdShowProgram() (below) still opens a program by its
+ * LcdApp::Config::name. */
 
 /** Bring a registered program's layer to the front (building it on first use,
  *  exactly as a tile tap would) by its registered `name`. No-op if no program

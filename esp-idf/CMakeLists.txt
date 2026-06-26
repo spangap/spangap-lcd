@@ -1,4 +1,10 @@
-file(GLOB LCD_SRCS "src/lcd_ui/*.cpp" "src/lcd_ui/*.c")
+# The on-device UI is the phone-style shell: the LcdApp object model + chrome
+# (shell/) and the built-in apps (apps/), plus the retained display/LVGL/panel/
+# icon/text-view/terminal/settings core in src/lcd_ui/.
+file(GLOB LCD_SRCS
+    "src/lcd_ui/*.cpp" "src/lcd_ui/*.c"
+    "src/lcd_ui/shell/*.cpp" "src/lcd_ui/apps/*.cpp")
+
 # Vendored libvterm (neovim mirror, MIT) — the VT100/xterm state machine behind
 # the on-device terminal. Plain C, no autoconf; compiled straight into this
 # component. Its public header is private to us (only lcd_term.cpp uses it).
@@ -12,7 +18,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/spangap_requires.cmake)
 idf_component_register(
     SRCS ${LCD_SRCS} ${VTERM_SRCS}
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "src/lcd_ui" "libvterm/include" "libvterm/src"
+    PRIV_INCLUDE_DIRS "src/lcd_ui" "src/lcd_ui/shell" "libvterm/include" "libvterm/src"
     REQUIRES
         ${SPANGAP_REQUIRES}
         driver

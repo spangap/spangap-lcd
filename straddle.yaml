@@ -27,3 +27,9 @@ platforms: [idf]
 # needed for correctness.
 init:
   - call: lcdInit
+# Board-agnostic LVGL features this shell needs (collected into the buildable's
+# sdkconfig fragments like any other straddle's kconfig:). LV_USE_SNAPSHOT lets
+# the recents switcher paint each running app's screen to a PSRAM buffer for its
+# half-scale thumbnail (recents.cpp / LcdApp::_captureThumb).
+kconfig:
+  - CONFIG_LV_USE_SNAPSHOT=y
