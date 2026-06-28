@@ -120,4 +120,18 @@ config LCD_INVERT_COLOR
     bool "Invert colour (most ST7789 IPS panels need this)"
     default y
 
+# ─── settings UI ────────────────────────────────────────────────────────────
+config LCD_SETTINGS_MARQUEE
+    bool "Marquee long settings values on focus"
+    default y
+    help
+        In the Settings pane, a long read-only value (identity / destination
+        hashes, paths) is shown on a single line, ellipsized, and made keypad-
+        focusable: when you land on it with the trackball/keypad it horizontally
+        scrolls (LVGL LV_LABEL_LONG_SCROLL_CIRCULAR — Brookesia-watch style),
+        only the focused row, then re-ellipsizes when you move off. Turn this off
+        on touch-only boards to keep the older behaviour (long values wrap onto a
+        second line, tap-to-read) — those boards have no focus ring to drive the
+        marquee.
+
 endmenu

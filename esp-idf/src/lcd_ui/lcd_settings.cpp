@@ -596,11 +596,39 @@ lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* ke
     return row;
 }
 
+#if CONFIG_LCD_SETTINGS_MARQUEE
+/* Focus-driven marquee (Brookesia-watch style): only the focused row scrolls its
+ * full value, the rest stay ellipsized — a panel of hashes all marqueeing at once
+ * would be noise. Flips long-mode on the keypad focus ring's FOCUSED/DEFOCUSED. */
+static void marqueeFocusCb(lv_event_t* e) {
+    lv_obj_t* lbl = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    if (lv_event_get_code(e) == LV_EVENT_FOCUSED)
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    else
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+}
+
+/* Make a read-only value label single-line, ellipsized, keypad-focusable, and
+ * marquee-on-focus. flex_grow bounds its width to the row's free space (a
+ * content-sized label can't scroll — width must be < the text). */
+void valueLabelMarquee(lv_obj_t* lbl) {
+    lv_obj_set_flex_grow(lbl, 1);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), lbl);
+    lv_obj_add_event_cb(lbl, marqueeFocusCb, LV_EVENT_FOCUSED, nullptr);
+    lv_obj_add_event_cb(lbl, marqueeFocusCb, LV_EVENT_DEFOCUSED, nullptr);
+}
+#endif
+
 lv_obj_t* lcdSettingValue(lv_obj_t* parent, const char* label, const char* key) {
     std::string v = storageGetStr(key, "");
 
+#if !CONFIG_LCD_SETTINGS_MARQUEE
     /* Long values (identity / dest hashes, paths) overrun the shared single-line
-     * row and collide with the label — stack the label over a wrapped value. */
+     * row and collide with the label — stack the label over a wrapped value.
+     * (With the marquee tunable on, the focus-driven horizontal scroll below
+     * replaces this vertical stack.) */
     if (v.size() > 18) {
         lv_obj_t* row = lv_obj_create(parent);
         lv_obj_remove_style_all(row);
@@ -624,6 +652,7 @@ lv_obj_t* lcdSettingValue(lv_obj_t* parent, const char* label, const char* key) 
         bindAttach(val, key, BK_VALUE);
         return row;
     }
+#endif
 
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
@@ -631,6 +660,9 @@ lv_obj_t* lcdSettingValue(lv_obj_t* parent, const char* label, const char* key) 
     lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
     lv_label_set_text(val, v.empty() ? "\xE2\x80\x94" : v.c_str());
     bindAttach(val, key, BK_VALUE);   /* event-driven: storage change -> label (no poll) */
+#if CONFIG_LCD_SETTINGS_MARQUEE
+    valueLabelMarquee(val);
+#endif
     return row;
 }
 
