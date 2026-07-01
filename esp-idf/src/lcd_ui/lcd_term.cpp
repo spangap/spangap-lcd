@@ -67,6 +67,22 @@ struct Run {
     uint16_t    cols = 0;
     std::string text;
 };
+
+/* A colour that no real run carries (fg/bg are 24-bit or TERM_DEFAULT), used to
+ * force the first style application on a freshly created slot. */
+constexpr uint32_t COLOR_UNSET = 0xFFFFFFFEu;
+
+/* A pooled run label plus the state last applied to it. paintRow only touches an
+ * LVGL property (which invalidates the label's area) when it actually changed —
+ * so typing a character repaints only the run that grew, not the prompt or the
+ * rest of the row. */
+struct LabelSlot {
+    lv_obj_t*   obj = nullptr;
+    uint32_t    fg = COLOR_UNSET, bg = COLOR_UNSET;
+    int         col = -1, cols = -1;
+    std::string text;
+    bool        hidden = true;
+};
 }  // namespace
 
 struct lcd_term_t {
@@ -80,13 +96,19 @@ struct lcd_term_t {
     int rows = 0, cols = 0, charW = 5, rowH = 8;
     lcd_term_output_cb out = nullptr;
     void* user = nullptr;
-    std::vector<std::vector<lv_obj_t*>> rowLbl;  /* per visible row: pooled run labels */
+    std::vector<std::vector<LabelSlot>> rowLbl;  /* per visible row: pooled run labels + cache */
     std::deque<std::string> sb;           /* scrollback: encoded run lines (see sbEncode) */
     int      top  = 0;                    /* virtual row of the topmost visible row */
     bool     follow = true;               /* stick to the live screen (bottom)       */
     VTermPos cur{};                       /* cursor cell (live-screen coords)         */
     int      curVisible = 1;
-    bool     needRender = false;
+    /* Damage accounting for the current feed batch (all in visible-row coords,
+     * which equal live-screen rows while following). dmg[Lo,Hi) is the damaged
+     * row span; dmgAll forces a full repaint (a scroll shifts every row);
+     * needCursor repositions the cursor overlay without repainting any row. */
+    int      dmgLo = 0, dmgHi = 0;
+    bool     dmgAll = false;
+    bool     needCursor = false;
     /* drag-to-scroll */
     int      dragStartY = 0, dragStartTop = 0;
     bool     dragging = false;
@@ -192,73 +214,114 @@ std::vector<Run> sbDecode(const std::string& s) {
 
 int maxTop(lcd_term_t* t) { return (int)t->sb.size(); }   /* bottom = live screen at window top 0 */
 
-/* Paint one viewport row from its runs, reusing that row's label pool (labels
- * are created on demand, extras hidden). x advances by run cell counts. */
+/* Paint one viewport row from its runs, reusing that row's label pool. Each LVGL
+ * setter invalidates the label's area, so we apply one only when its cached
+ * value actually changed — a keystroke then repaints just the run that grew, not
+ * the whole row. Blank runs with the default (transparent) background get no
+ * label at all: the container's black shows through, and skipping them keeps the
+ * full-width trailing filler from repainting on every keystroke. x advances by
+ * run cell counts. */
 void paintRow(lcd_term_t* t, int r, const std::vector<Run>& runs) {
     auto& pool = t->rowLbl[r];
     size_t li = 0;
     int col = 0;
     for (const Run& run : runs) {
         if (run.cols == 0) continue;
-        if (li >= pool.size()) {
+        if (run.bg == TERM_DEFAULT && run.text.find_first_not_of(' ') == std::string::npos) {
+            col += run.cols;                    /* blank filler — no label needed */
+            continue;
+        }
+        if (li >= pool.size()) pool.push_back(LabelSlot{});
+        LabelSlot& sl = pool[li++];
+        if (!sl.obj) {
             lv_obj_t* l = lv_label_create(t->cont);
             lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
             lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
             lv_obj_set_style_text_font(l, t->font, 0);
             lv_obj_set_style_text_line_space(l, 0, 0);
             lv_obj_set_style_text_letter_space(l, 0, 0);
-            pool.push_back(l);
+            sl.obj = l;
             /* Labels are created lazily, i.e. after the cursor — keep the
              * cursor block composited above the run labels. */
             if (t->cursor) lv_obj_move_foreground(t->cursor);
         }
-        lv_obj_t* l = pool[li++];
-        lv_obj_remove_flag(l, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(l, col * t->charW, r * t->rowH);
-        lv_obj_set_size(l, run.cols * t->charW, t->rowH);
-        lv_obj_set_style_text_color(l, run.fg == TERM_DEFAULT ? t->fg : lv_color_hex(run.fg), 0);
-        if (run.bg == TERM_DEFAULT) {
-            lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
-        } else {
-            lv_obj_set_style_bg_color(l, lv_color_hex(run.bg), 0);
-            lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
+        lv_obj_t* l = sl.obj;
+        if (sl.hidden)                { lv_obj_remove_flag(l, LV_OBJ_FLAG_HIDDEN); sl.hidden = false; }
+        if (sl.col != col || sl.cols != run.cols) {
+            lv_obj_set_pos(l, col * t->charW, r * t->rowH);
+            lv_obj_set_size(l, run.cols * t->charW, t->rowH);
+            sl.col = col; sl.cols = run.cols;
         }
-        lv_label_set_text(l, run.text.c_str());
+        if (sl.fg != run.fg) {
+            lv_obj_set_style_text_color(l, run.fg == TERM_DEFAULT ? t->fg : lv_color_hex(run.fg), 0);
+            sl.fg = run.fg;
+        }
+        if (sl.bg != run.bg) {
+            if (run.bg == TERM_DEFAULT) {
+                lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
+            } else {
+                lv_obj_set_style_bg_color(l, lv_color_hex(run.bg), 0);
+                lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
+            }
+            sl.bg = run.bg;
+        }
+        if (sl.text != run.text) { lv_label_set_text(l, run.text.c_str()); sl.text = run.text; }
         col += run.cols;
     }
-    for (; li < pool.size(); li++) lv_obj_add_flag(pool[li], LV_OBJ_FLAG_HIDDEN);
+    for (; li < pool.size(); li++)
+        if (pool[li].obj && !pool[li].hidden) { lv_obj_add_flag(pool[li].obj, LV_OBJ_FLAG_HIDDEN); pool[li].hidden = true; }
 }
 
-/* Fill the visible rows from the window [top, top+rows) over the virtual
- * buffer (scrollback then live screen), and place the cursor. */
-void renderView(lcd_term_t* t) {
+/* Position the cursor overlay (a separate object composited above the run
+ * labels), or hide it. Cheap — no row repaint, so cursor-only moves take this
+ * path. Cursor shows only on the live screen (when following). */
+void placeCursor(lcd_term_t* t) {
+    bool curOnScreen = t->follow && t->curVisible && t->cur.row >= 0 && t->cur.row < t->rows;
+    if (!curOnScreen) { lv_obj_add_flag(t->cursor, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_obj_remove_flag(t->cursor, LV_OBJ_FLAG_HIDDEN);
+    const int nsb = (int)t->sb.size();
+    int winRow = (nsb - t->top) + t->cur.row;        /* live row 0 sits at window row (nsb-top) */
+    lv_obj_set_pos(t->cursor, t->cur.col * t->charW, winRow * t->rowH);
+}
+
+/* Repaint visible rows [lo, hi) from the window [top, top+rows) over the
+ * virtual buffer (scrollback then live screen), then place the cursor. Painting
+ * only the damaged span is the difference between a one-row keystroke update and
+ * a whole-viewport redraw (each paintRow invalidates its labels' areas). */
+void renderRows(lcd_term_t* t, int lo, int hi) {
     if (t->follow) t->top = maxTop(t);
     if (t->top < 0) t->top = 0;
     if (t->top > maxTop(t)) t->top = maxTop(t);
+    if (lo < 0) lo = 0;
+    if (hi > t->rows) hi = t->rows;
     const int nsb = (int)t->sb.size();
-    for (int r = 0; r < t->rows; r++) {
+    for (int r = lo; r < hi; r++) {
         int v = t->top + r;
         if (v < nsb)                 paintRow(t, r, sbDecode(t->sb[v]));
         else if (v < nsb + t->rows)  paintRow(t, r, screenRowRuns(t, v - nsb));
         else                         paintRow(t, r, {});
     }
-    /* Cursor shows only on the live screen (when following). */
-    bool curOnScreen = t->follow && t->curVisible && t->cur.row >= 0 && t->cur.row < t->rows;
-    if (!curOnScreen) { lv_obj_add_flag(t->cursor, LV_OBJ_FLAG_HIDDEN); return; }
-    lv_obj_remove_flag(t->cursor, LV_OBJ_FLAG_HIDDEN);
-    int winRow = (nsb - t->top) + t->cur.row;        /* live row 0 sits at window row (nsb-top) */
-    lv_obj_set_pos(t->cursor, t->cur.col * t->charW, winRow * t->rowH);
+    placeCursor(t);
 }
+
+/* Repaint every visible row (scroll, scroll-back navigation, first paint). */
+void renderView(lcd_term_t* t) { renderRows(t, 0, t->rows); }
 
 /* ---- libvterm screen callbacks (fire during vterm_input_write) ---- */
 
-int cbDamage(VTermRect, void* u)            { ((lcd_term_t*)u)->needRender = true; return 1; }
+int cbDamage(VTermRect rect, void* u) {
+    auto* t = (lcd_term_t*)u;
+    if (rect.start_row < t->dmgLo) t->dmgLo = rect.start_row;   /* end_row is exclusive */
+    if (rect.end_row   > t->dmgHi) t->dmgHi = rect.end_row;
+    return 1;
+}
 int cbMoveCursor(VTermPos pos, VTermPos, int visible, void* u) {
-    auto* t = (lcd_term_t*)u; t->cur = pos; t->curVisible = visible; t->needRender = true; return 1;
+    /* Cursor is an overlay object — moving it needs no row repaint. */
+    auto* t = (lcd_term_t*)u; t->cur = pos; t->curVisible = visible; t->needCursor = true; return 1;
 }
 int cbSetProp(VTermProp prop, VTermValue* val, void* u) {
     auto* t = (lcd_term_t*)u;
-    if (prop == VTERM_PROP_CURSORVISIBLE) { t->curVisible = val->boolean; t->needRender = true; }
+    if (prop == VTERM_PROP_CURSORVISIBLE) { t->curVisible = val->boolean; t->needCursor = true; }
     return 1;
 }
 /* A line scrolled off the top of the live screen — keep it for scrollback. */
@@ -288,7 +351,7 @@ int cbSbPushline(int cols, const VTermScreenCell* cells, void* u) {
         t->sb.pop_front();
         if (!t->follow && t->top > 0) t->top--;   /* keep the scrolled-back view stable */
     }
-    t->needRender = true;
+    t->dmgAll = true;   /* a line scrolled off → every visible row shifts up */
     return 1;
 }
 
@@ -381,12 +444,14 @@ lcd_term_t* lcdTermCreate(lv_obj_t* parent, int32_t w, int32_t h,
 
 void lcdTermFeed(lcd_term_t* t, const char* data, size_t len) {
     if (!t || !t->vt || !data || len == 0) return;
+    /* Start clean damage accounting; callbacks below accumulate into it. */
+    t->dmgLo = t->rows; t->dmgHi = 0; t->dmgAll = false; t->needCursor = false;
     vterm_input_write(t->vt, data, len);
     vterm_screen_flush_damage(t->scr);   /* deliver merged damage → our callbacks */
-    if (t->needRender) {
-        t->needRender = false;
-        if (t->follow) renderView(t);    /* scrolled-back view stays put until you return */
-    }
+    if (!t->follow) return;              /* scrolled-back view stays put until you return */
+    if (t->dmgAll)                renderView(t);
+    else if (t->dmgHi > t->dmgLo) renderRows(t, t->dmgLo, t->dmgHi);
+    else if (t->needCursor)       placeCursor(t);
 }
 
 void lcdTermKey(lcd_term_t* t, uint32_t k) {

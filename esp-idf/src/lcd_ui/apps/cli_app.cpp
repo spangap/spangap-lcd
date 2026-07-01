@@ -82,7 +82,7 @@ public:
         setScrollwheelArrows(true);   /* trackball -> arrows while the CLI is up */
 
         static const char hint[] =
-            "Press Alt-C <char> for Ctrl-<char>, trackball does arrows\r\n";
+            "Press Alt-C <char> for Ctrl-<char>, Alt-C Alt-C for ESC\r\nTrackball does arrows\r\n";
         lcdTermFeed(s_cliTerm, hint, sizeof(hint) - 1);
 
         int trows = 0, tcols = 0;

@@ -35,7 +35,7 @@ uint32_t logLineColor(const char* s, size_t n) {
         switch (s[k]) {
             case 'E': return 0xE06A6A;
             case 'W': return 0xD8B860;
-            case 'I': return LCD_TEXTVIEW_DEFAULT;
+            case 'I': return 0x6AC86A;
             case 'D': return 0x8890A0;
             case 'V': return 0x687078;
             default:  break;
