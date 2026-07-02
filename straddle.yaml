@@ -14,7 +14,7 @@
 schema_version: 1
 name: spangap/spangap-lcd
 prefix: lcd
-version: 0.1.0
+version: 0.0.0
 firmware: esp-idf
 platforms: [idf]
 # spangap-core is implicit (the empty-prefix platform foundation) — not listed.
