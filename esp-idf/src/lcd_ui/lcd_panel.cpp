@@ -68,7 +68,11 @@ static void backlightInit(void) {
  * screen dimmed across light sleep rather than freezing at a random duty phase. */
 void lcdPanelBacklight(uint8_t level) {
     if (!s_hasBacklight) return;
-    uint32_t duty = (level == 255) ? (1u << 8) : level;   /* 8-bit: 256 = true 100% */
+    /* Max duty is 255, NOT the 2^8 (=256) full-scale overflow. The overflow value is
+     * a special LEDC latch, not a plain duty register, and it is NOT retained across
+     * the KEEP_ALIVE light-sleep — a woken full-bright screen would drop to a lower
+     * duty on the next light sleep. 255/256 is visually identical to true 100%. */
+    uint32_t duty = level;
     ledc_set_duty(BL_MODE, BL_CH, duty);
     ledc_update_duty(BL_MODE, BL_CH);
 }
