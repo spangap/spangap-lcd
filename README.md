@@ -166,7 +166,6 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | `s.lcd.backlight` | `200` | Backlight 0..255 (0 = off); applied live. |
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before `sys.standby` is set; `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
-| `s.lcd.icon_res` | `"40x40"` | **Inert.** The launcher icon resolution is fixed in code to the tile size (`36x36`); this key is no longer read (`lcdIconResRefresh()` is a no-op). |
 | `sys.standby` | — | Ephemeral. Set by the component on inactivity, set/cleared by the board's button; the board acts on it. |
 
 The status bar also *reads* keys owned by other straddles to render its glyphs:
