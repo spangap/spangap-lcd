@@ -8,12 +8,18 @@ second LVGL context anywhere in the system. Tasks that want to drive
 the UI do so by registering programs / settings panes; they do NOT
 touch `lv_*` directly.
 
-The launcher tile grid (`lcd_launcher.cpp`), the status bar
-(`lcd_statusbar.cpp`), and the built-in Settings menu
-(`lcd_settings.cpp`) are LVGL widgets the lcd task paints. The built-in
-Log + CLI programs (`lcd_apps.cpp` + `lcd_textview.cpp`) act as ITS
-clients to `log:1` / `cli:1` and stream into a Spleen 5×8 terminal
-view. Both render colour: the Log view applies per-line severity
+The phone-style shell (`src/lcd_ui/shell/` — launcher grid, status bar,
+recents, navigation, the foreground/back/home state machine) and the
+built-in Settings menu (`lcd_settings.cpp`) are LVGL widgets the lcd
+task paints; see [docs/shell-internals.md](docs/shell-internals.md) for
+the shell. (Historically the launcher and status bar were standalone
+`lcd_launcher.cpp` / `lcd_statusbar.cpp`; those files are gone, folded
+into the shell, though their legacy free-function surface — `lcdRegister`,
+`lcdShowProgram`, `lcdProgram*`, `lcdLauncherAdd` — is retained there as
+a bridge for unconverted callers.) The built-in Log + CLI programs are
+now `LcdApp` subclasses (`apps/log_app.cpp` + `apps/cli_app.cpp`, over
+`lcd_textview.cpp`) acting as ITS clients to `log:1` / `cli:1` and
+streaming into a Spleen 5×8 terminal view. Both render colour: the Log view applies per-line severity
 colours at render time (`lcdTextViewSetLineColor` — the scrollback
 stays plain text, so the column math never sees escapes), and the CLI
 terminal (`lcd_term.cpp`, libvterm) paints per-cell SGR colours —
@@ -48,6 +54,11 @@ slice's straddle for now — the activator-driven source-list exclusion is
 a future build-CLI feature.
 
 ## Public API surface
+
+The current model is the `LcdApp` instance installed with `lcdInstall`
+(`include/lcd_app.h`); `lcdRegister` below survives as a compatibility
+bridge for unconverted callers. See
+[docs/shell-internals.md](docs/shell-internals.md).
 
 ```c
 // lcd.h (high-level)

@@ -19,11 +19,27 @@ display/LVGL/task foundation in `src/lcd_ui/`:
   + a dot row), `shellLauncherAddTile`, and the icon-loaded hook.
 - **statusbar.cpp** — the opaque top bar renderer (clock/wifi/upstream/battery),
   all event-driven off storage subscriptions.
-- **nav.cpp** — the ESC→Back producer.
+- **nav.cpp** — the ESC→Back producer. LVGL has no group-wide key hook, so it
+  tracks the focused object via the group's focus callback and keeps an
+  `LV_KEY_ESC` handler on whatever holds focus. ESC is passed *through* (not
+  consumed as Back) when the foreground app owns raw keys — a terminal/arrow-mode
+  app (`_arrows()`) or a focused textarea — so the gesture only means Back where
+  it would otherwise be inert.
 - **recents.cpp** — the app switcher (cards over the running set + a heap readout).
 - **stylesheet.{h,cpp}** + **stylesheet_320x240.cpp** — theme/geometry as data.
 - **lcd_app.cpp** — the `LcdApp` install registry and service methods (covered in
   [apps-internals.md](apps-internals.md)).
+
+Nothing on screen is special-cased chrome: even Settings is just another installed
+`LcdApp`. `lcd_settings.cpp`'s `lcdSettingsInit()` wraps the existing settings
+page-stack in a thin `SettingsApp` host and `lcdInstall`s it (gear icon,
+`launcherPage` 0), so it lifts, backgrounds, and appears in recents like any app.
+The built-in Log and CLI terminals are likewise `LcdApp` subclasses under
+`src/lcd_ui/apps/`. All of this compiles only when `CONFIG_LCD_PHONE=y`, which
+makes the shell the single UI: the standalone `lcd_launcher.cpp` / `lcd_apps.cpp`
+/ `lcd_statusbar.cpp` are gone, and the legacy free-function surface they exported
+(`lcdRegister` and friends, listed in the manager bullet above) now lives *inside*
+the shell as a bridge so unconverted straddles still link.
 
 ## 2. The lcd task & threading (foundation)
 
@@ -145,7 +161,11 @@ belongs to that app's tree**; `restoreFocus(app)` re-focuses it on return (if
 still valid). The saved focus is cleared when the app's root is deleted. App
 authors add their own focusable widgets to `inputGroup()` and otherwise do
 nothing — the save/restore is automatic (this is what `LcdApp::inputGroup()`
-fronts).
+fronts). One rule for them: don't focus a widget at build time (`onCreate`)
+unless the app should seize the keyboard the instant it opens — focus on tap
+instead. Auto-focusing on build hands the shared keypad group to that app the
+moment it is installed, which is the same failure the per-app save/restore
+guards against from the other side.
 
 ## 6. Recents thumbnails (recents.cpp + lcd_app.cpp)
 
@@ -219,6 +239,11 @@ user-driven via a recents swipe-up.
 - **`setStatusIcon` / `setRecentsSubtitle` are stubs/unrendered** — don't present
   them as working chrome.
 - **PSRAM-stack tasks must not `printf`** — use `info()`/`warn()`/etc.
+- **A stylesheet sheet must be `extern const`** — a namespace-scope `const` has
+  internal linkage by default, so `stylesheet.cpp`'s registry can't see a sheet
+  defined in another TU (`stylesheet_320x240.cpp`) unless that definition is
+  declared `extern const`. A new board's sheet has to do the same or it won't
+  link into the registry.
 - **The status bar lives on `lv_layer_top()`**, always frontmost; program layers
   and the launcher are screen children below `statusBar.h`. The top layer is kept
   click-through except the small home-bar patch.
