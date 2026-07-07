@@ -7,12 +7,19 @@ shell state machine that drives these calls is in
 
 ## 1. What the app model adds
 
-- **`LcdApp`** ([lcd_app.h](../esp-idf/include/lcd_app.h)) — the base class: a
-  `Config`, the lifecycle virtuals (`onCreate`/`onShow`/`onHide`/`onBack`/
-  `onClose`), the per-app service methods, the resource ledger, and shell-private
-  accessors (the `_`-prefixed ones).
+- **`LcdApp`** ([lcd_app.h](../esp-idf/include/lcd_app.h)) — the base class. It is
+  a boot-registered `Service` (service.h): the UI lifecycle virtuals
+  (`onCreate`/`onShow`/`onHide`/`onBack`/`onClose`) plus a `Config`, the per-app
+  service methods, the resource ledger, and shell-private accessors (the
+  `_`-prefixed ones). Its **boot** lifecycle is fixed: `onInit()` is `final` — it
+  hops onto the lcd task and calls `lcdInstall(this)`, so a straddle installs an
+  app purely by listing the class in `services:` (no install hook). App-level boot
+  wiring (CLI verbs, worker spawn) goes in the `appInit()` override, run on the
+  boot task straight after the tile is installed.
 - **`lcdInstall(LcdApp*)`** (`lcd_app.cpp`) — the install registry: pushes the app
   onto the file-static `s_apps`, assigns an id, and calls `shellLauncherAddTile`.
+  Called from `LcdApp::onInit` for registered apps, and directly by `shellInit`
+  for the built-ins (constructed on the lcd task, never registered as services).
 - **`NavIntent`** — the navigation request enum (`BACK`/`HOME`/`RECENTS`),
   decoupling producers (gesture, ESC, board button, nav bar) from the single
   consumer `shellNavigate`.
@@ -53,6 +60,12 @@ Objects are deliberately *not* ledgered — `lv_obj_delete(root)` frees the subt
 A one-shot self-deleting timer (repeat count 1) needs no ledger; the CLI app uses
 one for deferred focus (§5).
 
+The ledger is the deliberate alternative to how the Brookesia donor frees a
+closed app's resources: walking LVGL's *private* `_lv_anim_ll` linked list (its
+`core/esp_brookesia_core_app.cpp`) — the donor's one coupling to LVGL internals,
+and brittle across LVGL 9.x. The ledger gives the same guarantee — a closed app
+can't leak — with zero LVGL-internals coupling.
+
 ## 4. Service method delegation
 
 The service methods are thin delegators to the manager so an app never touches
@@ -79,7 +92,8 @@ recv/disconnect callbacks carry no user pointer, so each app's connection state
 lives in a file-static (there is exactly one instance of each).
 
 - **`log_app.cpp`** — a virtualized text view ([terminal.md](terminal.md)) in
-  Spleen 5×8, an ITS client of the log task's `log:1` DC port with connect
+  `lcdFont(LcdFace::MONO, 8)` (which resolves to Spleen 5×8 through the
+  small-mono bitmap band), an ITS client of the log task's `log:1` DC port with connect
   payload `{"ansi":0}` (plain text, no ANSI escapes LVGL can't render).
   Per-line severity colour via `lcdTextViewSetLineColor` (the scrollback stays
   plain text, so the column math never sees colour). Scrollback is capped to
@@ -104,4 +118,4 @@ lives in a file-static (there is exactly one instance of each).
   singletons (file-static connection state). A multi-instance app would need its
   own correlation.
 - **`Config::navBar`/`fullscreen`, `setStatusIcon`, `setRecentsSubtitle` are not
-  wired** — see shell-internals §10.
+  wired** — see shell-internals §11.

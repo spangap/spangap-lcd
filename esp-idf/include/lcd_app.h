@@ -21,6 +21,7 @@
 
 #include "lvgl.h"
 #include "lcd.h"      /* lcd_scroll_fn_t, fonts, text view, lcdRun/ON_LCD */
+#include "service.h"  /* Service base: an LcdApp is a boot-registered service */
 
 #include <vector>
 #include <string>
@@ -31,10 +32,16 @@
  *  shellNavigate(). */
 enum class NavIntent { BACK, HOME, RECENTS };
 
-/** Base class for an on-device app. Subclass it, override the lifecycle, and
- *  hand an instance to lcdInstall(). The shell owns the instance thereafter
- *  (never deletes it — only its root layer is evictable). */
-class LcdApp {
+/** Base class for an on-device app. An LcdApp IS a Service (service.h): declare
+ *  it in a straddle's `services:` list and the generated boot registration
+ *  constructs it and the onInit below installs its launcher tile — no
+ *  lcdInstall() hook to hand-wire. (A shell-constructed built-in — Settings,
+ *  the launcher — is an LcdApp that simply never registers: its boot virtuals
+ *  never fire, and shellInit still calls lcdInstall() directly for the id.)
+ *  Subclass it, override the UI lifecycle, put boot-task wiring in appInit().
+ *  The shell owns the instance thereafter (never deletes it — only its root
+ *  layer is evictable). */
+class LcdApp : public Service {
 public:
     struct Config {
         const char* name         = "";    /* launcher label + lookup key (string literal) */
@@ -58,6 +65,17 @@ public:
     virtual void onHide() {}                     /* sent to background */
     virtual bool onBack() { return false; }      /* true = handled; false = go Home */
     virtual void onClose() {}                     /* evicted; ledger auto-freed after */
+
+    /* ---- Boot lifecycle (Service; on the boot task) ----
+     * onInit is the ONE thing a registered LcdApp does at boot: hop onto the lcd
+     * task and install its launcher tile. It is `final` — a registered LcdApp
+     * always gets its tile, so forgetting a base call can't silently drop it.
+     * The platform band brings the lcd task up before any straddle-band service's
+     * onInit runs, so the hop always has a live task. App-specific boot wiring
+     * (CLI verbs, mutexes, worker tasks) goes in appInit(), which runs on the
+     * boot task right after — the safe place for cliRegister/spawnTask.
+     * Defined out-of-line below (needs lcdInstall, declared after the class). */
+    void onInit() final;
 
     /* ---- Services the app calls (replace the old free functions) ----
      * Valid from onCreate onward (root exists). They operate on THIS app, not on
@@ -110,6 +128,14 @@ public:
     /** Free every ledgered timer/anim. Called by the shell after onClose(). */
     void          _reclaimLedger();
 
+protected:
+    /** Boot-task wiring, run once from onInit() after the tile is installed:
+     *  CLI verbs, mutex creation, worker-task spawn, storage subscriptions.
+     *  Runs on the boot task (not the lcd task), so cliRegister/spawnTask are
+     *  safe here. Default no-op — an app with no boot wiring omits it. Non-LCD
+     *  init decoupled from the app belongs in a separate plain Service. */
+    virtual void appInit() {}
+
 private:
     Config          m_cfg;
     lv_obj_t*       m_root = nullptr;
@@ -134,5 +160,13 @@ private:
  *  shell from here on. Call on the lcd task (e.g. from a *LcdRegister hook hopped
  *  on with lcdRun, or from shellInit). */
 int lcdInstall(LcdApp* app);
+
+/** The boot hop: install this app's tile on the lcd task, then run its
+ *  boot-task wiring. Out-of-line so it can name lcdInstall (declared just
+ *  above). */
+inline void LcdApp::onInit() {
+    lcdRun([](void* a) { lcdInstall(static_cast<LcdApp*>(a)); }, this);
+    appInit();
+}
 
 #endif /* SPANGAP_LCD_APP_H */

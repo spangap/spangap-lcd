@@ -18,8 +18,8 @@ version: 0.0.0
 firmware: esp-idf
 platforms: [idf]
 # spangap-core is implicit (the empty-prefix platform foundation) — not listed.
-# Auto-init: lcdInit() is folded into the generated spangapInitStraddles()
-# dispatcher. lcd is the last of the platform band (core, net, web, lcd — see
+# Auto-init: lcdInit() comes up as a boot hook in the generated serviceRunInit()
+# walk. lcd registers last in the platform band (core, net, web, lcd — see
 # spangap-inside PLATFORM_ORDER), so its status bar can read net/storage/web
 # state at init, and — the point of the band — every other straddle runs after
 # it. So a straddle that paints a launcher tile / Settings pane is guaranteed
