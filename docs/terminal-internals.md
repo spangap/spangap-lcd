@@ -1,8 +1,8 @@
 # Terminal — internals
 
 Maintainer reference for the text view (`lcd_textview.cpp`), the libvterm-backed
-terminal (`lcd_term.cpp` + the vendored `libvterm/`), and the bitmap terminal
-fonts. The [operator guide](terminal.md) is the consumer view. Both widgets run
+terminal (`lcd_term.cpp` + the vendored `libvterm/`), and the terminal fonts.
+The [operator guide](terminal.md) is the consumer view. Both widgets run
 on the lcd task (LVGL is single-threaded).
 
 ## 1. Origins
@@ -44,6 +44,10 @@ is repositioned and refilled around the current offset.
 libvterm owns the VT state machine and the rows×cols live screen; the widget
 renders a window over `[scrollback ++ live screen]` into per-row label runs.
 
+- **Cell metrics from the font.** `charW` is the glyph *advance*
+  (`lv_font_get_glyph_width(font, 'M', 0)`), not a bbox, and `rowH` the font
+  line height, so a vector `MONO` face at any size yields a correct grid;
+  `cols`/`rows` divide the widget box by them.
 - **Run-label rendering.** Each visible row is painted as a row of labels, one
   per run of cells sharing `(fg, bg)`. Run labels (not LVGL's "recolor") are used
   deliberately: LVGL's recolor `#` escape is broken in 9.5 (`lv_text_is_cmd`'s
@@ -72,12 +76,34 @@ renders a window over `[scrollback ++ live screen]` into per-row label runs.
 `SCREEN_CBS` is static (libvterm stores the pointer, so it must outlive the
 screen); it is zero-initialised so unset callbacks stay NULL.
 
-## 4. Bitmap fonts
+## 4. Fonts
 
-All four bitmap/terminal fonts are checked-in generated `.c` arrays under
-`src/lcd_ui/`, declared in `lcd.h`; an ordinary build needs no tooling.
-Regenerate with the matching `scripts/gen-*.py` and commit the `.c`. Source
-fonts are OFL-1.1 (Font Awesome Free additionally CC-BY-4.0).
+Terminal-shaped content resolves its font through `lcdFont(LcdFace::MONO, px)`
+(see shell-internals §9 for the engine): 5–8 px requests map to the bitmap
+fonts below, anything larger renders the DejaVu Sans Mono vector face, whose
+build-time subset (`scripts/lcd-fonts.py`) carries Latin-1, the complete Box
+Drawing block U+2500–257F, all Block Elements U+2580–259F, the TUI-common
+Geometric Shapes U+25A0–25CF, and arrows U+2190–2193 — so box art and Micron
+"graphics" have glyphs at every size. `MONO_BOLD`/`MONO_ITALIC` are synthesized
+from the same file under FreeType (and degrade to plain `MONO` under tiny_ttf).
+
+**Known pitfall — box-drawing seams at vector sizes.** A cell grid tiled from
+rasterized outline glyphs can show 1 px seams between adjacent box/block glyphs
+at unlucky (size, hinting) combinations — the reason kitty/alacritty draw these
+characters procedurally. Nothing procedural exists here: the widgets render
+whatever glyphs the font gives them. If seams show at the sizes people actually
+use, the sanctioned fix is to intercept U+2500–259F in the term/Micron draw
+path and draw rects/fills to exact cell bounds — pixel-perfect at any size, and
+it removes the coverage requirement from font choice entirely. Until then,
+inspect box art when changing the mono face or its subset flags (the subset
+keeps TrueType hints partly for this).
+
+The compiled-in bitmap fonts are checked-in generated `.c` arrays under
+`src/lcd_ui/`, declared in `lcd.h`; an ordinary build needs no tooling. The
+monospace ones are the 5–8 px `MONO` band and the `LCD_FONT_BITMAP` engine's
+targets, and all remain directly usable for fixed-cell content. Regenerate with
+the matching `scripts/gen-*.py` and commit the `.c`. Source fonts are OFL-1.1
+(Font Awesome Free additionally CC-BY-4.0).
 
 - **`lv_font_spleen_5x8`** — the terminal font, 2 bpp greyscale. Spleen's text
   glyphs (BSD-2-Clause) merged with X11 misc-fixed 5×8 (public domain) for
@@ -115,3 +141,6 @@ fonts are OFL-1.1 (Font Awesome Free additionally CC-BY-4.0).
   pointer.
 - **The text view assumes a monospace font** — a proportional font breaks the
   column/spacer math.
+- **Box/block glyphs can seam between cells at vector sizes** — inspect box art
+  when touching the mono face or subset; the procedural-drawing contingency is
+  §4.

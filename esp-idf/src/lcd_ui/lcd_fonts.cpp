@@ -13,8 +13,9 @@
  *   BITMAP    no engine — lcdFont() maps to the nearest compiled-in bitmap.
  *
  * Every created UI/MONO font gets its .fallback chained to the SYMBOLS face
- * (stock lv_font_montserrat_14, FontAwesome merged) so LV_SYMBOL_* renders
- * unchanged. Fonts are cached per (face, px); lcdFontsReset() frees them all.
+ * (the vector FontAwesome subset symbols.ttf; stock lv_font_montserrat_14 in
+ * BITMAP mode) so LV_SYMBOL_* renders unchanged. Fonts are cached per
+ * (face, px); lcdFontsReset() frees them all.
  *
  * Lcd-task-only; no locks.
  */

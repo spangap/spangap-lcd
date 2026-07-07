@@ -19,10 +19,15 @@ behavioural reference, not a dependency. No Brookesia type, macro, or name
 survives; the app object model, the chrome, and the stylesheet-as-data approach
 are reimplemented in spangap conventions (the `info/warn/err` log surface, the
 lcd-task threading model, storage, `fs_*`, PSRAM-aware allocation, Kconfig).
+The phone UI was deleted from Brookesia master in its v0.7 rewrite — only tags
+≤ v0.4.2 carry it (Apache-2.0) — so there is no live upstream seam to track.
 
 The on-device terminal is backed by **libvterm** (the neovim mirror, MIT),
-vendored under [`esp-idf/libvterm/`](esp-idf/libvterm). LVGL is pinned by this
-straddle's own `idf_component.yml`, so consumers don't choose its version.
+vendored under [`esp-idf/libvterm/`](esp-idf/libvterm); launcher icons are
+rasterized on the device by **nanosvg** (zlib license, two headers), vendored
+under [`esp-idf/third_party/nanosvg/`](esp-idf/third_party/nanosvg). LVGL is
+pinned by this straddle's own `idf_component.yml`, so consumers don't choose its
+version.
 
 ## The functions, and where they're documented
 
@@ -40,10 +45,10 @@ below; its maintainer detail is in
 
 ## How it starts, and how others plug in
 
-When `spangap-lcd` is in the build, `lcdInit()` runs automatically: it is the
-last entry in the platform band (core → net → web → lcd) of the generated
-`spangapInitStraddles()` dispatcher, so the lcd task — and the display — are up
-before any other straddle's init runs. There is no hand-written init call. A
+When `spangap-lcd` is in the build, `lcdInit()` runs automatically: it registers
+last in the platform band (core → net → web → lcd) of the generated boot
+registration, so its `onInit` — bringing up the lcd task and the display — runs
+before any other straddle's `onInit`. There is no hand-written init call. A
 straddle that paints a tile or a settings pane is therefore guaranteed the lcd
 task already exists.
 
@@ -164,6 +169,7 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | Key | Default | Meaning |
 |---|---|---|
 | `s.lcd.backlight` | `200` | Backlight 0..255 (0 = off); applied live. |
+| `s.lcd.scale` | `100` | UI zoom in percent, clamped 50–200; a change reflows fonts, icons, and the launcher grid live (see [docs/shell.md](docs/shell.md#ui-zoom)). |
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before `sys.standby` is set; `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
 | `sys.standby` | — | Ephemeral. Set by the component on inactivity, set/cleared by the board's button; the board acts on it. |
@@ -175,43 +181,82 @@ logging) to size its scrollback. None of these are owned here.
 
 ## Icons
 
-Launcher icons are LVGL `RGB565A8` `.bin` files, shipped read-only under
-`/fixed/lcd/icons/36x36/<name>.bin` and loaded by basename. Drop `*.svg` /
-`*.png` sources outside `data/` and rasterize them at build time with the
-`spangap_lcd_icons()` CMake helper
+Launcher icons ship as their SVG **sources**, read-only under
+`/fixed/icons/<name>.svg`, and are rasterized on the device by the vendored
+nanosvg at exactly the pixel size a tile (or the recents switcher, or the
+runtime zoom) asks for — there is no build-time raster pipeline and no fixed
+size buckets, so any tile size is just arithmetic. Rasters are cached in PSRAM
+per (basename, size). Drop `*.svg` sources outside `data/` and stage them with
+the `spangap_lcd_icons()` CMake helper
 ([project_include.cmake](esp-idf/project_include.cmake)):
 
 ```cmake
-spangap_lcd_icons(SRC_DIR "${CMAKE_SOURCE_DIR}/assets/lcd-icons" SIZES "36x36")
+spangap_lcd_icons(SRC_DIR "${CMAKE_SOURCE_DIR}/assets/lcd-icons")
 ```
 
-It always also rasterizes this straddle's own [`assets/lcd-icons/`](esp-idf/assets/lcd-icons)
+It always also stages this straddle's own [`assets/lcd-icons/`](esp-idf/assets/lcd-icons)
 (`gear`, `log`, `cli` — the built-in apps' icons), merged by basename with the
-consumer winning on a collision, so `SRC_DIR` is optional. It is best-effort: if
-the host lacks Pillow / cairosvg / `LVGLImage.py` it warns and skips, the build
-still succeeds, and tiles render label-only until icons are present. You may also
-drop pre-rendered `.bin` files under `<consumer>/data/lcd/icons/36x36/`.
+consumer winning on a collision, so `SRC_DIR` is optional. Only `.svg` is
+accepted — nanosvg has no raster-image path, so a PNG source needs re-authoring
+as SVG (the staging script warns and skips it). nanosvg covers paths, basic
+shapes, solid fills, strokes, and gradients; an icon that needs more (text,
+filters, masks) is too fancy for a launcher tile — the constraint is a feature.
 
 ## Fonts
 
-Beyond LVGL's stock set, the straddle ships checked-in C font arrays (declared
-in [lcd.h](esp-idf/include/lcd.h)); set any on your own widgets with
-`lv_obj_set_style_text_font()`:
+Text renders from vector faces — TTFs shipped read-only under `/fixed/fonts/` —
+rasterized on the device at any pixel size. The one API, declared in
+[lcd.h](esp-idf/include/lcd.h) and usable from any straddle's `lcd/` slice (lcd
+task only):
 
-- **`lv_font_montserrat_12_latin`** / **`lv_font_montserrat_16_latin`** —
-  accented supersets of LVGL's Montserrat (Latin-1 Supplement + Latin Extended-A),
-  so user text renders accents instead of placeholder boxes. The 12px keeps the
-  full symbol set; the chrome font.
-- **`lv_font_spleen_5x8`** — the terminal font (2 bpp), with the complete Box
-  Drawing block and synthesized Block Elements for column-aligned content.
-- **`lv_font_tomthumb_4x6`** — the smallest monospace (80 columns at 320 px),
-  even-width so 2×2 block glyphs tile seamlessly (micron/NomadNet page graphics).
-- **`lv_font_micro_2x3`** — a deliberately unreadable page-thumbnail font (160
-  columns), the 4×6 set box-filtered 2× down.
+```cpp
+const lv_font_t* f = lcdFont(LcdFace::UI, 16);   // created + cached per (face, px)
+lv_obj_set_style_text_font(lbl, f, 0);
+```
 
-Regenerate any of them with the matching `scripts/gen-*.py` and commit the `.c`;
-fonts are checked in so an ordinary build needs no tooling. Maintainer detail
-(generation, box-drawing synthesis, licensing) is in
+`LcdFace` names a logical face: `UI` / `UI_BOLD` / `UI_ITALIC` (proportional),
+`MONO` / `MONO_BOLD` / `MONO_ITALIC` (fixed-width, full box-drawing + block
+elements for terminal/Micron art), and `SYMBOLS` (the `LV_SYMBOL_*` set). Four
+files back the seven faces — **Lato** (UI), **Lato SemiBold** (UI_BOLD, a real
+file; synthetic bold is muddy at title sizes), **DejaVu Sans Mono** (MONO), and
+a **FontAwesome 5 subset** (SYMBOLS) — the italic and mono-bold/italic variants
+are synthesized by FreeType from the base files. Every UI/MONO font gets the
+SYMBOLS face chained as its `.fallback` at the same size, so `LV_SYMBOL_*`
+renders everywhere and scales with the text it sits in. Scale a base size by
+`lcdUiScale()` when resolving, so your text follows the platform zoom.
+
+The engine behind `lcdFont()` is a Kconfig choice, `LCD_FONT_ENGINE`:
+
+| Choice | What it is |
+|---|---|
+| `LCD_FONT_FREETYPE` (default) | Hinted, CJK-capable rendering via `espressif/freetype` (~400 KB code). Synthesizes the italic/bold variants. |
+| `LCD_FONT_TINY_TTF` | LVGL's tiny_ttf (~25 KB code): no hinting (soft below ~14 px), no synthesis — the synthetic faces resolve to their base face. The small-image option. |
+| `LCD_FONT_BITMAP` | No engine; `lcdFont()` maps every request to the nearest compiled-in bitmap font. Smallest flash. |
+
+`LCD_FONT_MIN_VECTOR_PX` (default `0` = off) adds a whole-image bitmap floor: a
+request below it returns a hand-tuned pixel font instead of a soft vector glyph.
+Independent of that knob, `MONO` requests at 5–8 px always map to the bitmap
+fonts (Tom Thumb / Spleen — crisper than antialiased vector at those sizes) and
+`UI` requests clamp to a 14 px minimum.
+
+The faces are subset at build time by the `spangap_lcd_fonts()` CMake helper
+(no arguments needed; `SRC_DIR` swaps in different faces of the same names),
+which runs [`scripts/lcd-fonts.py`](esp-idf/scripts/lcd-fonts.py) over the
+checked-in sources in [`fonts/`](esp-idf/fonts). The subsets — Latin +
+punctuation for UI, Latin + box-drawing/block-elements/TUI shapes for MONO —
+total ≈150 KB in `/fixed` (ui 47 KB, ui-semibold 52 KB, mono 39 KB, symbols
+10 KB).
+
+Beyond the vector faces, the straddle still compiles in the bitmap fonts
+declared in [lcd.h](esp-idf/include/lcd.h) — `lv_font_montserrat_12_latin` /
+`lv_font_montserrat_16_latin` (accented chrome fonts), `lv_font_spleen_5x8`,
+`lv_font_tomthumb_4x6`, and `lv_font_micro_2x3` (the fixed-cell terminal
+ladder, complete box-drawing + block-element coverage). They are the `BITMAP`
+engine's targets, the small-`MONO` band, and remain directly usable for
+fixed-cell content. Regenerate any of them with the matching `scripts/gen-*.py`
+and commit the `.c`. Maintainer detail (engine internals, subset ranges, bitmap
+generation, licensing) is in
+[docs/shell-internals.md](docs/shell-internals.md) and
 [docs/terminal-internals.md](docs/terminal-internals.md).
 
 ## Dependencies
@@ -219,6 +264,9 @@ fonts are checked in so an ordinary build needs no tooling. Maintainer detail
 - [spangap-core](../spangap-core) — base runtime (ITS, storage, log, CLI, fs, mem).
 - `lvgl`, `esp_lcd` (+ `esp_lcd_ili9341` when selected) — linked by this straddle,
   not pushed onto consumers (except `lvgl`, which `lcd.h` includes).
+- `espressif/freetype` — backs the default `LCD_FONT_FREETYPE` engine. Declared
+  unconditionally (the component manager can't gate a dependency on Kconfig) but
+  dead-stripped from images that select another engine.
 
 ## What it does NOT own
 

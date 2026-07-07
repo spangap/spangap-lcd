@@ -9,13 +9,13 @@ FreeType / tiny_ttf:
 
     <src>/<face>.ttf   ->   <out>/<face>.ttf   ->   /fixed/fonts/<face>.ttf
 
-The three faces (see plan §2):
+The four faces:
   ui.ttf, ui-semibold.ttf  proportional UI — Latin + punctuation + euro
   mono.ttf                 monospace terminal — Latin + box-drawing + blocks
-
-Symbols (LV_SYMBOL_*) are NOT shipped as a file: they render from LVGL's stock
-lv_font_montserrat_14 (FontAwesome merged) chained as a fallback, so no symbol
-TTF is needed here.
+  symbols.ttf              FontAwesome-5 subset, exactly the LV_SYMBOL_*
+                           codepoints; already trimmed at the source, so it is
+                           copied verbatim (no re-subsetting). lcd_fonts.cpp
+                           chains it as every UI/MONO font's fallback.
 
 Best-effort by design (mirrors lcd-icons.py): if fontTools isn't importable the
 script copies the source TTF through verbatim so the firmware still builds — the

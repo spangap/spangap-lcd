@@ -20,11 +20,22 @@ both run on the lcd task. Maintainer detail is in
 Both are wired to the device over ITS (the Log/CLI tasks' DC ports) — see
 [apps-internals.md](apps-internals.md#5-built-in-apps-apps).
 
+## Choosing the font
+
+Both widgets take any **monospace** `lv_font_t*`; rows/columns derive from its
+metrics (line height and the glyph advance). Resolve it through
+`lcdFont(LcdFace::MONO, px)` — at 5–8 px that returns the hand-tuned pixel
+fonts (Tom Thumb 4×6, Spleen 5×8; the built-in Log/CLI apps pass 8 px), and at
+any larger size it renders the DejaVu Sans Mono vector face, whose subset
+carries the complete Box Drawing + Block Elements ranges so TUI line art and
+Micron "graphics" render at every size. A proportional font breaks the column
+math — don't pass a `UI` face.
+
 ## The text view
 
 ```cpp
 lcd_textview_t* v = lcdTextViewCreate(parent, w, h,
-                                      &lv_font_spleen_5x8, fg, budget);
+                                      lcdFont(LcdFace::MONO, 8), fg, budget);
 lcdTextViewAppend(v, data, len);   // append; stays pinned to the bottom if it was
 ```
 
@@ -48,7 +59,7 @@ reclaimed); `lcdTextViewDelete` is optional.
 ## The VT100 terminal
 
 ```cpp
-lcd_term_t* t = lcdTermCreate(parent, w, h, &lv_font_spleen_5x8, fg, onOutput, user);
+lcd_term_t* t = lcdTermCreate(parent, w, h, lcdFont(LcdFace::MONO, 8), fg, onOutput, user);
 lcdTermFeed(t, bytes, len);   // device->screen VT byte stream; repaints damaged rows
 lcdTermKey(t, lvKey);         // one focused key; encoded and emitted via onOutput
 ```

@@ -16,9 +16,13 @@ The shell shows exactly one of three screens at a time:
 
 - **Launcher** — the home screen: a horizontal pager of pages, each a grid of
   app tiles, with a page-indicator dot row. Tapping a tile (or focusing it with
-  the keypad/trackball and clicking) opens that app. With a handful of apps one
-  page suffices; a tile lands on the page its app asked for (`Config::launcherPage`)
-  and a new page is created on demand.
+  the keypad/trackball and clicking) opens that app. The grid derives from the
+  viewport: as many columns as minimum-size tiles fit the width, rows from the
+  tile height, so a different panel or zoom level reflows it with no
+  configuration. With a handful of apps one page suffices; a tile lands on the
+  page its app asked for (`Config::launcherPage`) — a *request*, not a hard
+  slot: a full page spills the tile to the next, and a new page is created on
+  demand.
 - **App** — one app's full-screen layer, below the status bar (or reclaiming it
   when the app is fullscreen). Opening another app hides this one; it keeps
   running in the background and re-opening resumes it exactly as left.
@@ -85,6 +89,20 @@ returns to the launcher.
 
 Terminating an app from recents is the only thing that evicts it today; there is
 no automatic memory-pressure eviction.
+
+## UI zoom
+
+The whole interface scales at runtime: **Settings → Display → UI Zoom** is a
+−/+ stepper over `s.lcd.scale` (percent, 25% steps, clamped 50–200; default
+100). Writing the key from anywhere — the stepper, the browser, the CLI — has
+the same effect. A change *reflows* rather than magnifies: fonts are
+re-rasterized from their vector faces at the new size, icons are re-rendered
+from their SVG sources, and the launcher grid recomputes its columns and tile
+size — so everything stays crisp at every factor, with bigger tiles and fewer
+per page as you zoom in. An app that is already open keeps its old-size fonts
+until it is next rebuilt; apps that resolve their fonts through
+`lcdFont(face, basePx × lcdUiScale())` pick the new scale up on their next
+build (see [apps.md](apps.md)).
 
 ## Programmatic control
 

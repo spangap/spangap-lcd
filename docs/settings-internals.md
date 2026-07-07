@@ -17,6 +17,11 @@ Everything runs on the lcd task.
   from `shellInit`. Its `onCreate` calls `settingsOpen(root)`; `onClose` clears
   the page-stack pointers. The registry, the builders, two-way binding, scroll
   pills, and every straddle's pane hook are unchanged by the app wrapper.
+- **The built-in Display/UI Zoom pane** — `lcdSettingsInit()` also registers
+  `"display/zoom"`: a −/+ stepper (25% steps, clamped 50–200) over
+  `s.lcd.scale`. It only writes the key; the reflow is the `lcd.cpp`
+  subscription → `shellApplyZoom()` (shell-internals §10), so a browser/CLI
+  write behaves identically.
 
 ## 2. The page-stack nav
 
@@ -39,7 +44,8 @@ never deletes the row being clicked.
   page. All pages scroll (a menu can outgrow the viewport too); LVGL's
   scroll-vs-tap threshold keeps row clicks working.
 
-The breadcrumb in `s_titleLbl` uses `lv_font_montserrat_16` when available.
+The breadcrumb in `s_titleLbl` uses `lcdFont(LcdFace::UI_BOLD, 16)`; menu rows
+use `lcdFont(LcdFace::UI, 16 × lcdUiScale())`.
 
 ## 3. Two-way storage binding
 
@@ -64,6 +70,12 @@ string literals / static — this is the lifetime warning in the operator guide,
 and the reason the registry deliberately doesn't `strdup`.
 
 ## 4. Helper specifics
+
+Rows share the `makeRow`/`addRowLabel` scaffolding: a flex row with a 1/3-width
+right-aligned label column and the control(s) in the remaining 2/3,
+left-aligned so a control sits next to its label rather than pushed to the far
+edge (`fillRowControl` stretches a control across the 2/3 where that reads
+better — dropdown / value / slider group).
 
 - **Switch** — a compact `lv_switch` (36×18) with a high-contrast off state.
 - **Slider** — a `lv_slider` plus a live numeric readout label; both bind the key
