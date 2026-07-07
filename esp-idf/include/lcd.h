@@ -181,7 +181,40 @@ void lcdTouchSetMultipoint(bool on);
 void lcdTouchAddGestureHandler(lcd_gesture_cb_t cb);
 
 /* ---- Fonts ----
- * Bundled LVGL fonts a program may set on its own widgets with
+ * The device renders vector faces (TTFs in /fixed/fonts) at any pixel size
+ * behind a Kconfig-selectable engine (CONFIG_LCD_FONT_ENGINE); lcdFont() is the
+ * one wrapper every consumer uses, returning an lv_font_t* it can hand to
+ * lv_obj_set_style_text_font(). Under LCD_FONT_BITMAP the request maps to the
+ * nearest compiled bitmap. The bundled bitmap fonts below stay available for
+ * fixed-cell / terminal use (and are the sub-10px + BITMAP-mode fallbacks). */
+
+/** A logical face. UI* are proportional, MONO* fixed-width (box-drawing + block
+ *  elements for terminal/Micron art), SYMBOLS the LV_SYMBOL_* set. UI_BOLD is a
+ *  real SemiBold file; the other bold/italic faces are synthesized (and, under
+ *  LCD_FONT_TINY_TTF, degrade to their base face). Must be used on the lcd task. */
+enum class LcdFace {
+    UI, UI_BOLD, UI_ITALIC,
+    MONO, MONO_BOLD, MONO_ITALIC,
+    SYMBOLS,
+};
+
+/** Resolve (face, px) to a font, created + cached on first use. Never null
+ *  (falls back to a bitmap on engine failure or below the vector-size floor).
+ *  Its .fallback is chained to the symbol face, so LV_SYMBOL_* renders. Lcd task. */
+const lv_font_t* lcdFont(LcdFace face, int px);
+
+/** Drop every cached vector font (a runtime UI-zoom change). Re-resolve through
+ *  lcdFont() and re-style any widget holding a freed font before the next
+ *  redraw. Lcd task. */
+void lcdFontsReset(void);
+
+/** The current UI zoom as a fraction (s.lcd.scale%, clamped 0.5–2.0). Multiply
+ *  a base pixel size by this when resolving lcdFont(), so an app's on-device
+ *  text scales with the platform zoom like the shell does. An app that names its
+ *  own fonts rebuilds at the current scale on its next open. Lcd task. */
+float lcdUiScale(void);
+
+/* Bundled LVGL bitmap fonts a program may set directly on its own widgets with
  * lv_obj_set_style_text_font(). */
 
 /** Montserrat 12px, 4bpp — a drop-in accented superset of LVGL's stock

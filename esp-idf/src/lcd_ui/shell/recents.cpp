@@ -168,15 +168,16 @@ void addCard(LcdApp* app) {
         lv_image_set_src(thumb, app->_thumb());
         lv_image_set_inner_align(thumb, LV_IMAGE_ALIGN_CONTAIN);
     } else {
-        /* No snapshot yet (never minimised) — fall back to the launcher icon. */
+        /* No snapshot yet (never minimised) — fall back to the launcher icon,
+         * rasterized at the recents icon size. */
         const char* base = app->cfg().iconBasename ? app->cfg().iconBasename : "";
-        if (lcdIconReady(base)) {
-            char src[160];
-            lcdIconSrc(base, src, sizeof(src));
-            lv_image_set_src(thumb, src);
+        int px = (int)(lcdStyle().recents.iconPx * lcdUiScale() + 0.5f);
+        const lv_image_dsc_t* dsc = lcdIconDsc(base, px);
+        if (dsc) {
+            lv_image_set_src(thumb, dsc);
             lv_image_set_inner_align(thumb, LV_IMAGE_ALIGN_CENTER);
         } else {
-            lcdIconRequest(base);
+            lcdIconRequest(base, px);
         }
     }
 

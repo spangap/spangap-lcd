@@ -160,3 +160,11 @@ void lcdStatusbarSetVisible(bool visible) {
     if (visible) lv_obj_remove_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     else         lv_obj_add_flag   (s_bar, LV_OBJ_FLAG_HIDDEN);
 }
+
+void lcdStatusbarRestyle(void) {
+    /* Re-point the labels that name a font at the freshly-resolved sheet font
+     * (a UI-zoom change). The symbol labels (battery/wifi) inherit the theme, so
+     * only the clock carries an explicit font. */
+    if (s_clock && lcdStyle().core.font)
+        lv_obj_set_style_text_font(s_clock, lcdStyle().core.font, 0);
+}

@@ -1,29 +1,23 @@
 #!/usr/bin/env python3
 """
-lcd-icons.py — rasterize launcher icon sources into LVGL RGB565A8 .bin files.
+lcd-icons.py — stage launcher icon SVG *sources* into the factory image.
 
-Invoked by the spangap_lcd_icons() CMake helper. For each *.svg / *.png source
-in the --src dirs and each WxH bucket in --sizes, render to that size and convert
-to the LVGL binary image format (RGB565A8: 16-bit colour + 8-bit alpha) via the
-LVGLImage.py shipped with the lvgl component. Output:
+Invoked by the spangap_lcd_icons() CMake helper. The device rasterizes icons at
+runtime with nanosvg (lcd_icons.cpp), so the build no longer rasterizes anything
+— it just merges the .svg sources by basename and copies them:
 
-    <out>/<WxH>/<name>.bin   ->   /fixed/lcd/icons/<WxH>/<name>.bin
+    <out>/<name>.svg   ->   /fixed/icons/<name>.svg
 
 --src may be given more than once: dirs are merged by basename in the order
 listed, so a later (consumer) dir overrides an earlier (platform-default) one
-with the same icon name — the build-time analogue of the data/ merge.
-
-Best-effort by design: if an optional dependency is missing (Pillow for raster,
-cairosvg for SVG) or LVGLImage.py isn't found, it warns and skips so the
-firmware still builds — the launcher just shows label-only tiles until icons
-are present. Pre-rendered .bin files dropped directly into
-<consumer>/data/lcd/icons/<WxH>/ ship via the normal data merge with no tooling.
+with the same icon name — the build-time analogue of the data/ merge. Only .svg
+is shipped (nanosvg has no raster-image path; a PNG source would need
+re-authoring as SVG).
 """
 import argparse
 import os
-import subprocess
+import shutil
 import sys
-import tempfile
 
 
 def warn(msg):
@@ -33,15 +27,9 @@ def warn(msg):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", action="append", default=[],
-                    help="icon source dir (*.svg/*.png); repeatable, later wins")
-    ap.add_argument("--out", required=True, help="output root (.../lcd/icons)")
-    ap.add_argument("--sizes", required=True, help="comma list, e.g. 40x40,64x64")
-    ap.add_argument("--lvgl-image-py", required=True, help="path to LVGLImage.py")
+                    help="icon source dir (*.svg); repeatable, later wins")
+    ap.add_argument("--out", required=True, help="output root (.../icons)")
     a = ap.parse_args()
-
-    if not os.path.isfile(a.lvgl_image_py):
-        warn(f"LVGLImage.py not found ({a.lvgl_image_py}) — skipping")
-        return 0
 
     # Merge source dirs by basename, later dirs overriding earlier ones.
     merged = {}  # filename -> absolute path
@@ -50,73 +38,23 @@ def main():
             warn(f"no source dir {d} — skipping it")
             continue
         for f in sorted(os.listdir(d)):
-            if f.lower().endswith((".svg", ".png")):
+            if f.lower().endswith(".svg"):
                 merged[f] = os.path.join(d, f)
-    sources = sorted(merged)
-    if not sources:
-        warn("no .svg/.png in any --src dir — skipping")
+            elif f.lower().endswith(".png"):
+                warn(f"{f}: PNG icons are no longer rasterized at build time "
+                     "(nanosvg is SVG-only) — provide an .svg source; skipping")
+
+    if not merged:
+        warn("no .svg in any --src dir — skipping")
         return 0
 
-    try:
-        from PIL import Image
-    except ImportError:
-        warn("Pillow not installed (pip install pillow) — skipping icon conversion")
-        return 0
-
-    buckets = []
-    for tok in a.sizes.split(","):
-        tok = tok.strip().lower()
-        if not tok:
-            continue
-        try:
-            w, h = (int(x) for x in tok.split("x"))
-        except ValueError:
-            warn(f"bad size '{tok}' — expected WxH")
-            continue
-        buckets.append((tok, w, h))
-
+    os.makedirs(a.out, exist_ok=True)
     made = 0
-    for label, w, h in buckets:
-        outdir = os.path.join(a.out, label)
-        os.makedirs(outdir, exist_ok=True)
-        for fn in sources:
-            stem = os.path.splitext(fn)[0]
-            src = merged[fn]
-            with tempfile.TemporaryDirectory() as td:
-                png = os.path.join(td, stem + ".png")
-                if fn.lower().endswith(".svg"):
-                    try:
-                        import cairosvg
-                        cairosvg.svg2png(url=src, write_to=png,
-                                         output_width=w, output_height=h)
-                    except ImportError:
-                        warn("cairosvg not installed (pip install cairosvg) — "
-                             f"cannot rasterize {fn}")
-                        continue
-                    except Exception as e:  # noqa: BLE001
-                        warn(f"svg render failed for {fn}: {e}")
-                        continue
-                else:
-                    try:
-                        im = Image.open(src).convert("RGBA").resize(
-                            (w, h), Image.LANCZOS)
-                        im.save(png)
-                    except Exception as e:  # noqa: BLE001
-                        warn(f"png resize failed for {fn}: {e}")
-                        continue
+    for fn in sorted(merged):
+        shutil.copyfile(merged[fn], os.path.join(a.out, fn))
+        made += 1
 
-                cmd = [sys.executable, a.lvgl_image_py,
-                       "--ofmt", "BIN", "--cf", "RGB565A8",
-                       "--output", outdir, png]
-                try:
-                    subprocess.run(cmd, check=True,
-                                   stdout=subprocess.DEVNULL)
-                except subprocess.CalledProcessError as e:
-                    warn(f"LVGLImage.py failed for {fn} @ {label}: {e}")
-                    continue
-                made += 1
-
-    print(f"lcd-icons: wrote {made} icon(s) across {len(buckets)} size(s)")
+    print(f"lcd-icons: staged {made} icon SVG(s) -> /fixed/icons")
     return 0
 
 

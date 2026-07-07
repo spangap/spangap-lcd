@@ -118,6 +118,7 @@ static void lcdTaskFn(void*) {
         if (s_bringupDone) xSemaphoreGive(s_bringupDone);   /* unblock lcdInit() */
         killSelf();
     }
+    lcdFontsInit();      /* bring up the font engine before the shell resolves fonts */
     lcdIconsInit();
 
     lv_obj_t* scr = lv_screen_active();
@@ -132,12 +133,12 @@ static void lcdTaskFn(void*) {
      * device can light-sleep with the screen on. */
 
     /* Live config. Backlight target applies on this task (held dark until the boot
-     * reveal); icon_res change reloads the launcher tiles (loader does the flash
-     * reads, never us). */
+     * reveal). Icons are rasterized on demand at the tile size (no icon_res
+     * bucket); a zoom change reloads the launcher via lcdStyleRecalibrate. */
     NOW_AND_ON_CHANGE("s.lcd.backlight", { lcdBacklightSetTarget((uint8_t)atoi(val)); });
-    storageSubscribeChanges("s.lcd.icon_res", ON_CHANGE {
-        if (lcdIconResRefresh()) lcdLauncherReload();
-    });
+    /* UI zoom: recalibrate fonts + reflow the launcher/statusbar on change (the
+     * initial value is already applied at lcdStyleBegin, so subscribe-only). */
+    storageSubscribeChanges("s.lcd.scale", ON_CHANGE { shellApplyZoom(); });
     /* Inactivity: after s.lcd.inactivity_timeout s with no input we set the
      * ephemeral sys.standby key; the board decides what standby means (and clears
      * the key to wake). 0 = never. */
@@ -199,7 +200,7 @@ void lcdInit(void) {
     if (lcdTaskHandle) return;
 
     storageDefault("s.lcd.backlight",    200);
-    storageDefault("s.lcd.icon_res",     "40x40");
+    storageDefault("s.lcd.scale",        100);   /* UI zoom %, clamp 50–200 */
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */
 

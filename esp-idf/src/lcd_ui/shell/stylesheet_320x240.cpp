@@ -1,13 +1,12 @@
 /**
- * stylesheet_320x240.cpp — the one shipped sheet: 320x240 dark, on spangap's own
- * bitmap fonts/icons. Values are the launcher's current pixel constants made
- * data: status bar 24px (lcd_internal.h LCD_STATUSBAR_H), 4x3 tile grid 72x64
- * with 8px pads and a 36px icon (lcd_launcher.cpp), bg 0x101418, status-bar navy
- * 0x0A2342, icon bucket "36x36" (lcd_icons.cpp LAUNCHER_ICON_RES). Recents/nav/
- * gesture carry the donor's 320x240 thresholds (plan §5.4–5.6) for M3.
+ * stylesheet_320x240.cpp — the one shipped sheet: 320x240 dark. Fonts are now
+ * TOKENS ({face, basePx}); calibrate() resolves them through lcdFont() so the
+ * shell renders vector faces at any size/zoom (or bitmaps under LCD_FONT_BITMAP).
+ * Geometry values are the launcher's current pixel constants made data: status
+ * bar 24px, tiles derived from a 72px floor, bg 0x101418, status-bar navy
+ * 0x0A2342. Recents/nav/gesture carry the donor's 320x240 thresholds.
  */
 #include "stylesheet.h"
-#include "lcd.h"   /* lv_font_montserrat_12_latin / _16_latin */
 
 extern const LcdStyle lcdStyleDefault320x240 = {   /* extern: const has internal linkage by default */
     .name = "default",
@@ -16,8 +15,8 @@ extern const LcdStyle lcdStyleDefault320x240 = {   /* extern: const has internal
 
     .core = {
         .bg              = 0x101418,
-        .font            = &lv_font_montserrat_12_latin,
-        .titleFont       = &lv_font_montserrat_16_latin,
+        .fontSpec        = { LcdFace::UI, 14 },   /* 14 = smallest UI face */
+        .font            = nullptr,   /* resolved at calibrate() */
         .maxResidentApps = 4,
     },
 
@@ -39,8 +38,10 @@ extern const LcdStyle lcdStyleDefault320x240 = {   /* extern: const has internal
         .padCol    = 8,
         .dotSize   = 8,
         .dotActive = 20,
+        .minTilePx = 72,    /* cols = floor(usableW / minTilePx*uiScale) */
         .bg        = 0x101418,
-        .labelFont = &lv_font_montserrat_12_latin,
+        .labelSpec = { LcdFace::UI, 14 },
+        .labelFont = nullptr,   /* resolved at calibrate() */
         .iconRes   = "36x36",
     },
 
@@ -54,8 +55,10 @@ extern const LcdStyle lcdStyleDefault320x240 = {   /* extern: const has internal
         .cardWPct      = 60,
         .cardW         = 0,      /* calibrated from cardWPct at begin() */
         .iconPx        = 36,
-        .titleFont     = &lv_font_montserrat_12_latin,
-        .subFont       = &lv_font_montserrat_12_latin,
+        .titleSpec     = { LcdFace::UI, 14 },
+        .subSpec       = { LcdFace::UI, 14 },
+        .titleFont     = nullptr,   /* resolved at calibrate() */
+        .subFont       = nullptr,
         .subColor      = 0x9098A0,
         .swipeClosePx  = 30,
         .swipeAngleDeg = 60,

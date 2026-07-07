@@ -163,6 +163,9 @@ void pushMenu(Node* menu) {
         lv_obj_t* lbl = lv_label_create(row);
         lv_label_set_text(lbl, k->label.c_str());
         lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+        /* Menu items get a larger face than the in-pane controls (which keep the
+         * inherited size) — these are the primary tap targets. Scaled by zoom. */
+        lv_obj_set_style_text_font(lbl, lcdFont(LcdFace::UI, (int)(16 * lcdUiScale() + 0.5f)), 0);
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 10, 0);
 
         if (!k->fn) {                  /* submenu chevron */
@@ -226,9 +229,7 @@ void settingsOpen(void* arg) {
 
     s_titleLbl = lv_label_create(hdr);
     lv_obj_set_style_text_color(s_titleLbl, lv_color_white(), 0);
-#if LV_FONT_MONTSERRAT_16
-    lv_obj_set_style_text_font(s_titleLbl, &lv_font_montserrat_16, 0);   /* a touch bigger */
-#endif
+    lv_obj_set_style_text_font(s_titleLbl, lcdFont(LcdFace::UI_BOLD, 16), 0);  /* a touch bigger */
     lv_obj_align(s_titleLbl, LV_ALIGN_LEFT_MID, 34, 0);
 
     s_host = lv_obj_create(layer);
@@ -269,14 +270,20 @@ void settingsOpen(void* arg) {
 
 /* ---- row scaffolding ---- */
 
+/* Two-column row: a 1/3 label (right-aligned, hugging the divider) and a 2/3
+ * control area (left-aligned, so the control sits right next to its label rather
+ * than pushed to the far edge). Helpers add the control after addRowLabel(); the
+ * fillRowControl() helper stretches a control across the 2/3 where that reads
+ * better (dropdown / value / slider group). */
 lv_obj_t* makeRow(lv_obj_t* parent) {
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_height(row, 36);
     lv_obj_set_style_pad_hor(row, 8, 0);
+    lv_obj_set_style_pad_column(row, 10, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     return row;
 }
@@ -285,7 +292,12 @@ void addRowLabel(lv_obj_t* row, const char* text) {
     lv_obj_t* l = lv_label_create(row);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_set_width(l, lv_pct(33));                  /* 1/3 label column */
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
 }
+
+/* Stretch a control across the remaining 2/3, left-aligned. */
+void fillRowControl(lv_obj_t* w) { lv_obj_set_flex_grow(w, 1); }
 
 /* ---- two-way storage binding ----
  * Every storage-bound control registers here: its change handler writes the key,
@@ -521,13 +533,14 @@ lv_obj_t* lcdSettingSlider(lv_obj_t* parent, const char* label, const char* key,
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
 
-    /* Right group: a live numeric readout + the slider, so the exact value is
-     * visible (a slider alone hides it). */
+    /* Control group: the slider + a live numeric readout, left-aligned in the
+     * 2/3 column (a slider alone hides the exact value). */
     lv_obj_t* grp = lv_obj_create(row);
     lv_obj_remove_style_all(grp);
-    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_height(grp, LV_SIZE_CONTENT);
+    fillRowControl(grp);
     lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(grp, 8, 0);
     lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -558,7 +571,7 @@ lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, b
         lv_textarea_set_one_line(ta, true);
         lv_textarea_set_password_mode(ta, secret);
         lv_textarea_set_text(ta, storageGetStr(key, "").c_str());
-        lv_obj_set_width(ta, lv_pct(55));
+        fillRowControl(ta);                               /* 2/3 column */
         if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
         lv_obj_add_event_cb(ta, onInlineCommit, LV_EVENT_READY,     (void*)key);
         lv_obj_add_event_cb(ta, onInlineCommit, LV_EVENT_DEFOCUSED, (void*)key);
@@ -569,6 +582,8 @@ lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, b
     /* No hardware keyboard: value label + full-screen on-screen-keyboard editor. */
     lv_obj_t* val = lv_label_create(row);
     lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+    fillRowControl(val);
+    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_LEFT, 0);
     setValueText(val, storageGetStr(key, ""), secret);
 
     auto* tr = static_cast<TextRef*>(gp_alloc(sizeof(TextRef)));
@@ -587,6 +602,7 @@ lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* ke
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
     lv_obj_t* d = lv_dropdown_create(row);
+    fillRowControl(d);                                    /* 2/3 column */
     std::string opts(optionsCsv ? optionsCsv : "");
     for (auto& c : opts) if (c == ',') c = '\n';
     lv_dropdown_set_options(d, opts.c_str());
@@ -613,7 +629,7 @@ static void marqueeFocusCb(lv_event_t* e) {
  * content-sized label can't scroll — width must be < the text). */
 void valueLabelMarquee(lv_obj_t* lbl) {
     lv_obj_set_flex_grow(lbl, 1);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_LEFT, 0);   /* 2/3 column, left-aligned */
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), lbl);
     lv_obj_add_event_cb(lbl, marqueeFocusCb, LV_EVENT_FOCUSED, nullptr);
@@ -658,6 +674,8 @@ lv_obj_t* lcdSettingValue(lv_obj_t* parent, const char* label, const char* key) 
     addRowLabel(row, label);
     lv_obj_t* val = lv_label_create(row);
     lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+    fillRowControl(val);
+    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(val, v.empty() ? "\xE2\x80\x94" : v.c_str());
     bindAttach(val, key, BK_VALUE);   /* event-driven: storage change -> label (no poll) */
 #if CONFIG_LCD_SETTINGS_MARQUEE
@@ -691,7 +709,58 @@ public:
 };
 }  // namespace
 
+/* ---- built-in Display / UI-zoom stepper (plan §6) ---- */
+namespace {
+lv_obj_t* s_zoomLbl = nullptr;
+
+void zoomAdjust(int delta) {
+    int v = storageGetInt("s.lcd.scale", 100) + delta;
+    if (v < 50)  v = 50;
+    if (v > 200) v = 200;
+    storageSet("s.lcd.scale", v);      /* → shellApplyZoom() via the lcd.cpp sub */
+    if (s_zoomLbl) lv_label_set_text_fmt(s_zoomLbl, "%d%%", v);
+}
+
+/* A −/+ stepper (25% steps, clamped 50–200) bound to s.lcd.scale. Writing the
+ * key reflows the whole shell (fonts, launcher grid, icons) live. */
+void zoomPane(void* arg) {
+    lv_obj_t* parent = static_cast<lv_obj_t*>(arg);
+    lcdSettingCaption(parent,
+        "Scale the whole interface (50–200%). Content reflows — text and icons "
+        "stay crisp at every step, not magnified.");
+
+    lv_obj_t* row = makeRow(parent);
+    addRowLabel(row, "UI Zoom");
+
+    lv_obj_t* grp = lv_obj_create(row);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(grp, 12, 0);
+    lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto stepBtn = [](lv_obj_t* p, const char* sym, lv_event_cb_t cb) {
+        lv_obj_t* b = lv_button_create(p);
+        lv_obj_set_size(b, 30, 30);
+        lv_obj_t* l = lv_label_create(b);
+        lv_label_set_text(l, sym);
+        lv_obj_center(l);
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+        return b;
+    };
+    stepBtn(grp, LV_SYMBOL_MINUS, [](lv_event_t*) { zoomAdjust(-25); });
+
+    s_zoomLbl = lv_label_create(grp);
+    lv_obj_set_style_text_color(s_zoomLbl, lv_color_white(), 0);
+    lv_label_set_text_fmt(s_zoomLbl, "%d%%", storageGetInt("s.lcd.scale", 100));
+
+    stepBtn(grp, LV_SYMBOL_PLUS, [](lv_event_t*) { zoomAdjust(25); });
+}
+}  // namespace
+
 void lcdSettingsInit(void) {
     s_root.label = "Settings";
+    lcdRegisterSettings("display/zoom", "UI Zoom", zoomPane, 1);
     lcdInstall(new SettingsApp());
 }

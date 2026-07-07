@@ -1,111 +1,157 @@
 /**
- * lcd_icons.cpp — icon RAM cache + lv_fs driver + off-task loader.
+ * lcd_icons.cpp — runtime SVG icon rasterizer + RAM cache + off-task loader.
  *
- * The lcd task must not do flash I/O (it runs itsPoll). So icon .bin files are
- * read by a dedicated loader task — which has no itsPoll loop, so the fs
- * proxy's pickup-wait can't desync anything — and the bytes are handed to the
- * lcd task via lcdRun(). The lcd task drops them into an in-RAM cache, and a
- * tiny lv_fs driver ('D') serves LVGL's image decoder straight from that cache
- * (pure memory, zero flash on the lcd task). Standard
- * lv_image_set_src("D:/fixed/lcd/icons/<res>/<name>.bin") then just works.
+ * Straddles ship their icon *sources* (`.svg`) to /fixed/icons/<name>.svg; the
+ * device rasterizes them at exactly the requested pixel size with nanosvg. There
+ * is no build-time bucket pipeline and no fixed resolution — a tile asks for its
+ * icon at `iconPx × uiScale` and gets a crisp raster, so any tile size / runtime
+ * zoom is just arithmetic.
  *
- * The cache + resolution string are touched only on the lcd task; the loader
- * only uses its request queue + fs + lcdRun. No locks.
+ * The lcd task must not do flash I/O or heavy CPU (it runs itsPoll + the LVGL
+ * render loop), so a dedicated loader task reads the SVG, parses it (nsvgParse
+ * mutates its input, so we copy out of the mmap window first), rasterizes to
+ * RGBA8888, converts to LVGL RGB565A8 (the panel format, with an alpha plane),
+ * and hands the finished lv_image_dsc_t back to the lcd task via lcdRun(). The
+ * lcd task drops it into an in-RAM cache keyed (basename, px) and calls
+ * lcdLauncherIconLoaded(); the launcher sets it as the tile image directly
+ * (lv_image_set_src(img, dsc)) — no lv_fs indirection.
+ *
+ * The cache is touched only on the lcd task; the loader only uses its request
+ * queue + fs + lcdRun. No locks.
  */
 #include "lcd_internal.h"
 
 #include "fs.h"
-#include "storage.h"
 #include "log.h"
 #include "compat.h"
 #include "esp_heap_caps.h"
 #include "freertos/queue.h"
 
+/* nanosvg: declarations only here (bodies live in nanosvg_impl.c). */
+#include "nanosvg.h"
+#include "nanosvgrast.h"
+
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <sys/stat.h>
 
 #define LCD_ICON_QUEUE_DEPTH 16
-#define LCD_ICON_MAX_BYTES   (256 * 1024)
-
-/* The launcher's only icon consumer renders tiles at a fixed size, so the icon
- * resolution is tied to the tile (the lcd_launcher ICON layout), not a user
- * setting. Using a fixed bucket also means a device that still has an old
- * s.lcd.icon_res persisted in /state renders correctly without a factory reset.
- * Must match a bucket built by spangap_lcd_icons() (see the consumer CMakeLists).*/
-#define LAUNCHER_ICON_RES "36x36"
+#define LCD_ICON_MAX_SVG     (128 * 1024)   /* a launcher icon SVG is < a few KB */
+#define LCD_ICON_MAX_PX      256            /* sanity clamp on the raster size */
 
 namespace {
 
-struct Blob { uint8_t* data = nullptr; size_t size = 0; };
+/* A decoded icon: an LVGL image descriptor pointing at a PSRAM RGB565A8 buffer.
+ * Heap-allocated so &dsc stays stable across cache growth (lv_image holds it). */
+struct Icon {
+    lv_image_dsc_t dsc{};
+    uint8_t*       pixels = nullptr;   /* colour plane (w*h*2) + alpha plane (w*h) */
+};
 
-std::unordered_map<std::string, Blob> s_cache;   /* lcd task only; key = abs path */
-std::string  s_res = LAUNCHER_ICON_RES;          /* lcd task only; fixed (see above) */
-lv_fs_drv_t  s_drv;
+std::unordered_map<std::string, Icon*> s_cache;   /* lcd task only; key "base@px" */
 QueueHandle_t s_loadQ = nullptr;
 
-/* Absolute fs path (no drive letter) for the loader + cache key. */
-void absPath(const char* basename, char* out, size_t outLen) {
-    snprintf(out, outLen, "/fixed/lcd/icons/%s/%s.bin", s_res.c_str(), basename);
+std::string keyOf(const char* base, int px) { return std::string(base) + "@" + std::to_string(px); }
+
+/* ---- loader task (off the lcd task): read → parse → raster → convert ---- */
+
+struct LoadReq   { char base[40]; int px; };
+struct LoadedMsg { char base[40]; int px; Icon* icon; };
+
+/* Build the RGB565A8 icon from /fixed/icons/<base>.svg at `px`. Runs on the
+ * loader task. Returns nullptr on any failure (missing file, parse error, OOM).*/
+Icon* buildIcon(const char* base, int px) {
+    if (px < 1) px = 1;
+    if (px > LCD_ICON_MAX_PX) px = LCD_ICON_MAX_PX;
+
+    char path[160];
+    snprintf(path, sizeof(path), "/fixed/icons/%s.svg", base);
+
+    struct stat st;
+    if (fs_stat(path, &st) != 0) { warn("icon missing: %s\n", path); return nullptr; }
+    long sz = (long)st.st_size;
+    if (sz <= 0 || sz > LCD_ICON_MAX_SVG) { warn("icon bad size %ld: %s\n", sz, path); return nullptr; }
+
+    /* nsvgParse mutates + NUL-terminates its input: read into a private buffer. */
+    char* svg = (char*)malloc((size_t)sz + 1);
+    if (!svg) { warn("icon svg alloc fail\n"); return nullptr; }
+    int f = fs_open(path, "rb");
+    if (f < 0) { free(svg); warn("icon open fail: %s\n", path); return nullptr; }
+    size_t got = fs_read(svg, 1, (size_t)sz, f);
+    fs_close(f);
+    if (got != (size_t)sz) { free(svg); warn("icon short read: %s\n", path); return nullptr; }
+    svg[sz] = '\0';
+
+    NSVGimage* image = nsvgParse(svg, "px", 96.0f);
+    free(svg);
+    if (!image || image->width <= 0 || image->height <= 0) {
+        if (image) nsvgDelete(image);
+        warn("icon parse fail: %s\n", path);
+        return nullptr;
+    }
+
+    /* Fit the icon into a px×px box, preserving aspect (icons are ~square). */
+    float dim   = image->width > image->height ? image->width : image->height;
+    float scale = (float)px / dim;
+
+    NSVGrasterizer* rast = nsvgCreateRasterizer();
+    uint8_t* rgba = (uint8_t*)malloc((size_t)px * px * 4);
+    if (!rast || !rgba) {
+        if (rast) nsvgDeleteRasterizer(rast);
+        free(rgba); nsvgDelete(image);
+        warn("icon raster alloc fail\n");
+        return nullptr;
+    }
+    memset(rgba, 0, (size_t)px * px * 4);
+    nsvgRasterize(rast, image, 0, 0, scale, rgba, px, px, px * 4);
+    nsvgDeleteRasterizer(rast);
+    nsvgDelete(image);
+
+    /* RGBA8888 → LVGL RGB565A8: colour plane (px*px*2, little-endian RGB565)
+     * immediately followed by the alpha plane (px*px). */
+    size_t colorBytes = (size_t)px * px * 2;
+    size_t total      = colorBytes + (size_t)px * px;   /* + alpha plane */
+    uint8_t* out = (uint8_t*)heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+    if (!out) { free(rgba); warn("icon out alloc fail %u B\n", (unsigned)total); return nullptr; }
+    uint8_t* alpha = out + colorBytes;
+    for (int i = 0; i < px * px; i++) {
+        uint8_t r = rgba[i * 4 + 0], g = rgba[i * 4 + 1], b = rgba[i * 4 + 2], a = rgba[i * 4 + 3];
+        uint16_t v = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+        out[i * 2 + 0] = (uint8_t)(v & 0xFF);
+        out[i * 2 + 1] = (uint8_t)(v >> 8);
+        alpha[i] = a;
+    }
+    free(rgba);
+
+    Icon* ic = new (std::nothrow) Icon();
+    if (!ic) { free(out); return nullptr; }
+    ic->pixels = out;
+    ic->dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    ic->dsc.header.cf     = LV_COLOR_FORMAT_RGB565A8;
+    ic->dsc.header.w      = (uint32_t)px;
+    ic->dsc.header.h      = (uint32_t)px;
+    ic->dsc.header.stride = (uint32_t)px * 2;
+    ic->dsc.data_size     = (uint32_t)total;
+    ic->dsc.data          = out;
+    return ic;
 }
-
-/* ---- lv_fs driver over the RAM cache (runs on the lcd task during decode) -- */
-
-struct IconCursor { const uint8_t* data; size_t size; size_t pos; };
-
-void* fsOpen(lv_fs_drv_t*, const char* path, lv_fs_mode_t mode) {
-    if (mode & LV_FS_MODE_WR) return nullptr;
-    auto it = s_cache.find(path);
-    if (it == s_cache.end()) return nullptr;     /* not preloaded yet */
-    return new IconCursor{ it->second.data, it->second.size, 0 };
-}
-
-lv_fs_res_t fsClose(lv_fs_drv_t*, void* fp) {
-    delete static_cast<IconCursor*>(fp);
-    return LV_FS_RES_OK;
-}
-
-lv_fs_res_t fsRead(lv_fs_drv_t*, void* fp, void* buf, uint32_t btr, uint32_t* br) {
-    auto* c = static_cast<IconCursor*>(fp);
-    size_t avail = c->size - c->pos;
-    size_t n = btr < avail ? btr : avail;
-    memcpy(buf, c->data + c->pos, n);
-    c->pos += n;
-    *br = (uint32_t)n;
-    return LV_FS_RES_OK;
-}
-
-lv_fs_res_t fsSeek(lv_fs_drv_t*, void* fp, uint32_t pos, lv_fs_whence_t whence) {
-    auto* c = static_cast<IconCursor*>(fp);
-    size_t base = (whence == LV_FS_SEEK_CUR) ? c->pos
-                : (whence == LV_FS_SEEK_END) ? c->size : 0;
-    size_t np = base + pos;
-    c->pos = np > c->size ? c->size : np;
-    return LV_FS_RES_OK;
-}
-
-lv_fs_res_t fsTell(lv_fs_drv_t*, void* fp, uint32_t* p) {
-    *p = (uint32_t)static_cast<IconCursor*>(fp)->pos;
-    return LV_FS_RES_OK;
-}
-
-/* ---- loader task (off the lcd task) ---- */
-
-struct LoadReq    { char path[160]; char basename[40]; };
-struct LoadedMsg  { char path[160]; char basename[40]; uint8_t* data; size_t size; };
 
 /* runs on the lcd task via lcdRun() */
 void onLoaded(void* arg) {
     auto* m = static_cast<LoadedMsg*>(arg);
-    if (m->data) {
-        Blob& b = s_cache[m->path];
-        if (b.data) free(b.data);                /* replace (rare) */
-        b.data = m->data;
-        b.size = m->size;
-        lcdLauncherIconLoaded(m->basename);
+    if (m->icon) {
+        std::string k = keyOf(m->base, m->px);
+        auto it = s_cache.find(k);
+        if (it != s_cache.end()) {                 /* replace (rare) */
+            free(it->second->pixels);
+            delete it->second;
+        }
+        s_cache[k] = m->icon;
+        lcdLauncherIconLoaded(m->base, m->px);
     }
     delete m;
 }
@@ -114,27 +160,11 @@ void loaderFn(void*) {
     LoadReq req;
     for (;;) {
         if (xQueueReceive(s_loadQ, &req, portMAX_DELAY) != pdTRUE) continue;
-
-        struct stat st;
-        if (fs_stat(req.path, &st) != 0) { warn("icon missing: %s\n", req.path); continue; }
-        long sz = (long)st.st_size;
-        if (sz <= 0 || sz > LCD_ICON_MAX_BYTES) {
-            warn("icon bad size %ld: %s\n", sz, req.path); continue;
-        }
-        auto* buf = (uint8_t*)heap_caps_malloc((size_t)sz, MALLOC_CAP_SPIRAM);
-        if (!buf) { warn("icon alloc fail %ld B\n", sz); continue; }
-
-        int f = fs_open(req.path, "rb");
-        if (f < 0) { free(buf); warn("icon open fail: %s\n", req.path); continue; }
-        size_t got = fs_read(buf, 1, (size_t)sz, f);
-        fs_close(f);
-        if (got != (size_t)sz) { free(buf); warn("icon short read: %s\n", req.path); continue; }
-
+        Icon* ic = buildIcon(req.base, req.px);
         auto* m = new LoadedMsg{};
-        safeStrncpy(m->path,     req.path,     sizeof(m->path));
-        safeStrncpy(m->basename, req.basename, sizeof(m->basename));
-        m->data = buf;
-        m->size = (size_t)sz;
+        safeStrncpy(m->base, req.base, sizeof(m->base));
+        m->px = req.px;
+        m->icon = ic;
         lcdRun(onLoaded, m);
     }
 }
@@ -144,45 +174,35 @@ void loaderFn(void*) {
 /* ---- internal API ---- */
 
 void lcdIconsInit(void) {
-    s_res = LAUNCHER_ICON_RES;   /* fixed to the tile size; see LAUNCHER_ICON_RES */
-
-    lv_fs_drv_init(&s_drv);
-    s_drv.letter   = 'D';
-    s_drv.open_cb  = fsOpen;
-    s_drv.close_cb = fsClose;
-    s_drv.read_cb  = fsRead;
-    s_drv.seek_cb  = fsSeek;
-    s_drv.tell_cb  = fsTell;
-    lv_fs_drv_register(&s_drv);
-
     s_loadQ = xQueueCreate(LCD_ICON_QUEUE_DEPTH, sizeof(LoadReq));
-    spawnTask(loaderFn, "lcd_load", 4096, nullptr, 1, 1, STACK_PSRAM);
+    /* nanosvg parse + raster want headroom; give the loader a PSRAM stack. */
+    spawnTask(loaderFn, "lcd_load", 8192, nullptr, 1, 1, STACK_PSRAM);
 }
 
-const char* lcdIconSrc(const char* basename, char* out, size_t outLen) {
-    snprintf(out, outLen, "D:/fixed/lcd/icons/%s/%s.bin", s_res.c_str(), basename);
-    return out;
+bool lcdIconReady(const char* basename, int px) {
+    if (!basename) return false;
+    return s_cache.count(keyOf(basename, px)) > 0;
 }
 
-bool lcdIconReady(const char* basename) {
-    char abs[160];
-    absPath(basename, abs, sizeof(abs));
-    return s_cache.count(abs) > 0;
+const lv_image_dsc_t* lcdIconDsc(const char* basename, int px) {
+    if (!basename) return nullptr;
+    auto it = s_cache.find(keyOf(basename, px));
+    return it == s_cache.end() ? nullptr : &it->second->dsc;
 }
 
-void lcdIconRequest(const char* basename) {
-    if (!basename || !*basename) return;
-    if (lcdIconReady(basename)) { lcdLauncherIconLoaded(basename); return; }
+void lcdIconRequest(const char* basename, int px) {
+    if (!basename || !*basename || px < 1) return;
+    if (lcdIconReady(basename, px)) { lcdLauncherIconLoaded(basename, px); return; }
     LoadReq req{};
-    absPath(basename, req.path, sizeof(req.path));
-    safeStrncpy(req.basename, basename, sizeof(req.basename));
+    safeStrncpy(req.base, basename, sizeof(req.base));
+    req.px = px;
     if (s_loadQ && xQueueSend(s_loadQ, &req, 0) != pdTRUE) warn("icon load queue full\n");
 }
 
-const char* lcdIconRes(void) { return s_res.c_str(); }
-
-bool lcdIconResRefresh(void) {
-    /* Icon resolution is fixed to the tile size (LAUNCHER_ICON_RES), so the
-     * s.lcd.icon_res key no longer drives it — nothing to refresh. */
-    return false;
+void lcdIconsReset(void) {
+    /* Drop every cached raster (a zoom change re-requests at the new size). Any
+     * lv_image still pointing at a freed dsc must be re-sourced before the next
+     * redraw — the launcher reload does exactly that. Lcd task only. */
+    for (auto& kv : s_cache) { free(kv.second->pixels); delete kv.second; }
+    s_cache.clear();
 }

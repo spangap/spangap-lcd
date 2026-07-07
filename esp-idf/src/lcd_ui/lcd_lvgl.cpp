@@ -370,6 +370,22 @@ bool lcdLvglInit(void) {
 
     lv_init();
 
+    /* Route LVGL's internal diagnostics (freetype bring-up, asserts, memory
+     * warnings) into our logger under the 'lvgl' tag instead of printf, so they
+     * land in the device log with everything else and honour per-tag levels. */
+#if LV_USE_LOG
+    lv_log_register_print_cb([](lv_log_level_t level, const char* buf) {
+        /* buf carries LVGL's own "[Warn] file:line\t" prefix + newline; pass it
+         * through, mapped to our severity. */
+        switch (level) {
+            case LV_LOG_LEVEL_ERROR: ESP_LOGE("lvgl", "%s", buf); break;
+            case LV_LOG_LEVEL_WARN:  ESP_LOGW("lvgl", "%s", buf); break;
+            case LV_LOG_LEVEL_INFO:  ESP_LOGI("lvgl", "%s", buf); break;
+            default:                 ESP_LOGD("lvgl", "%s", buf); break;
+        }
+    });
+#endif
+
     s_disp = lv_display_create(s_w, s_h);
     if (!s_disp) return false;
     lv_display_set_user_data(s_disp, s_panel);

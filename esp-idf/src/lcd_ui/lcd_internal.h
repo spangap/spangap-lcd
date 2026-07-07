@@ -86,36 +86,35 @@ lv_group_t* lcdInputGroup(void);
  *  changes; see lcdProgramScrollwheelArrows). Hides the pointer while on. */
 void        lcdScrollwheelArrowsApply(bool on);
 
-/* ---- lcd_icons.cpp: RAM cache + lv_fs driver + loader ---- */
-/** Register the in-RAM lv_fs driver ('D') and start the loader task. Call
- *  after lv_init(). */
+/* ---- lcd_icons.cpp: runtime SVG rasterizer + RAM cache + loader ---- */
+/** Start the icon loader task. Call after lv_init(). */
 void        lcdIconsInit(void);
-/** Resolve a basename to its LVGL src path at the (fixed) launcher resolution,
- *  e.g. "D:/fixed/lcd/icons/36x36/rns.bin". Returns out. */
-const char* lcdIconSrc(const char* basename, char* out, size_t outLen);
-/** True iff the current-resolution bytes for `basename` are already cached
+/** True iff the icon for `basename` at `px` is already rasterized + cached
  *  (lcd-task-only). */
-bool        lcdIconReady(const char* basename);
-/** Ask the loader (off the lcd task) to fetch the current-resolution bytes
- *  for `basename`. On completion the lcd task caches them and calls
- *  lcdLauncherIconLoaded(basename). No-op if already cached. */
-void        lcdIconRequest(const char* basename);
-/** The launcher's fixed icon resolution bucket (LAUNCHER_ICON_RES, "36x36"). */
-const char* lcdIconRes(void);
-/** No-op now the resolution is fixed; always returns false. Kept for the
- *  s.lcd.icon_res subscription wiring in lcd.cpp. */
-bool        lcdIconResRefresh(void);
+bool        lcdIconReady(const char* basename, int px);
+/** The cached LVGL image descriptor for (basename, px), or nullptr if not yet
+ *  rasterized. The pointer is stable for the cache's lifetime — hand it to
+ *  lv_image_set_src(). Lcd task only. */
+const lv_image_dsc_t* lcdIconDsc(const char* basename, int px);
+/** Ask the loader (off the lcd task) to rasterize `basename` at `px`. On
+ *  completion the lcd task caches it and calls lcdLauncherIconLoaded(base, px).
+ *  No-op if already cached. */
+void        lcdIconRequest(const char* basename, int px);
+/** Drop every cached raster (a runtime zoom change; re-request at the new px). */
+void        lcdIconsReset(void);
 
 /* ---- shell/launcher.cpp ---- */
-/** A basename's bytes just landed in the cache — set the real image. */
-void        lcdLauncherIconLoaded(const char* basename);
-/** Re-resolve every tile's icon src after an icon_res change. */
+/** An icon just landed in the cache — set the real image on matching tiles. */
+void        lcdLauncherIconLoaded(const char* basename, int px);
+/** Re-request every tile's icon (after a zoom / icon-cache reset). */
 void        lcdLauncherReload(void);
 /** Hide the current program layer and reveal the launcher. */
 void        lcdGoHomeInternal(void);
 
 /* ---- shell/statusbar.cpp ---- */
 void        lcdStatusbarInit(void);
+/** Re-point the status bar's fonts after a UI-zoom recalibration. Lcd task. */
+void        lcdStatusbarRestyle(void);
 /** Show/hide the opaque top status bar (e.g. for an immersive program screen).
  *  The shell coordinates this with the foreground app's geometry — programs
  *  should call lcdProgramFullscreen(), not this, to reclaim the bar's space. */
@@ -125,6 +124,9 @@ void        lcdStatusbarSetVisible(bool visible);
 /** Install the built-in Settings (gear) program (an LcdApp hosting the existing
  *  page-stack). Call on the lcd task (from shellInit). */
 void        lcdSettingsInit(void);
+
+/* ---- lcd_fonts.cpp: the (face, px) → lv_font_t engine ---- */
+#include "lcd_fonts.h"
 
 /* ---- fonts (generated, in src/lcd_ui/) ---- */
 /** Spleen 5x8 monospace bitmap font (generated lv_font_spleen_5x8.c). */

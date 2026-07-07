@@ -70,6 +70,12 @@ void shellLauncherInit(lv_obj_t* screen);
 void shellLauncherAddTile(LcdApp* app);
 /** The launcher's root container (a lower sibling of program layers). */
 lv_obj_t* shellLauncherRoot(void);
+/** Tear down + rebuild the launcher at the current UI scale (tile geometry +
+ *  fonts + icon sizes reflow). Called on a runtime zoom change. Lcd task. */
+void shellLauncherRebuild(void);
+/** Recalibrate + reflow the whole shell for a new UI zoom (s.lcd.scale): new
+ *  font sizes, launcher grid, statusbar. Lcd task. */
+void shellApplyZoom(void);
 
 /* ---- statusbar.cpp: renderer + setters (lcd_internal.h declares the
  *      lcdStatusbarInit / lcdStatusbarSetVisible entry points the shell reuses) ---- */

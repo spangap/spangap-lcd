@@ -83,7 +83,7 @@ public:
 
     void onCreate(lv_obj_t* root) override {
         s_log.tv = lcdTextViewCreate(root, lcdScreenW(), bodyH(),
-                                     &lv_font_spleen_5x8, logFg(), scrollbackBudget());
+                                     lcdFont(LcdFace::MONO, 8), logFg(), scrollbackBudget());
         lcdTextViewSetLineColor(s_log.tv, logLineColor);
         s_log.primed = false;
 

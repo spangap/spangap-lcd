@@ -71,7 +71,7 @@ public:
 
     void onCreate(lv_obj_t* root) override {
         s_cliTerm = lcdTermCreate(root, lcdScreenW(), bodyH(),
-                                  &lv_font_spleen_5x8, cliFg(), cliOutput, nullptr);
+                                  lcdFont(LcdFace::MONO, 8), cliFg(), cliOutput, nullptr);
 
         lv_obj_t* cont = lcdTermObj(s_cliTerm);
         if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), cont);

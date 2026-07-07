@@ -302,6 +302,20 @@ void shellInit(lv_obj_t* screen) {
     info("phone shell ready\n");
 }
 
+void shellApplyZoom(void) {
+    /* Runtime UI zoom (s.lcd.scale). Recalibrate the sheet (new font sizes +
+     * theme), then rebuild the launcher and restyle the status bar so their
+     * geometry/fonts reflow crisply. New-size fonts are fresh cache entries, so
+     * any still-open app layer keeps its (valid) old-size fonts until it is
+     * next rebuilt — no dangling. report_style_change refreshes theme-inherited
+     * text. Lcd task (storage change dispatch). */
+    lcdStyleRecalibrate();
+    shellLauncherRebuild();
+    lcdStatusbarRestyle();
+    lv_obj_report_style_change(NULL);
+    info("ui zoom applied (%d%%)\n", (int)(lcdUiScale() * 100 + 0.5f));
+}
+
 void shellOpenApp(LcdApp* app) {
     if (!app) return;
     bool firstBuild = (app->root() == nullptr);

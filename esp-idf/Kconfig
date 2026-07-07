@@ -11,6 +11,39 @@
 
 menu "spangap: spangap-lcd"
 
+# ─── font engine ────────────────────────────────────────────────────────────
+# How lcdFont() (lcd_fonts.cpp) turns a (face, px) request into an lv_font_t.
+# The vector engines render the TTFs shipped to /fixed/fonts on the device, so
+# any size is data + arithmetic; BITMAP keeps today's compiled-in bitmaps.
+choice LCD_FONT_ENGINE
+    prompt "On-device font engine"
+    default LCD_FONT_FREETYPE
+    help
+        FREETYPE (default): hinted, CJK-capable vector rendering via
+        espressif/freetype (~400 KB code). TINY_TTF: ~25 KB code, no hinting
+        (soft below ~14 px), no synthetic bold/italic — the small-image option.
+        BITMAP: no engine; lcdFont() maps to the nearest compiled bitmap font
+        (today's behaviour, smallest flash).
+    config LCD_FONT_FREETYPE
+        bool "FreeType (vector, hinted)"
+        select LV_USE_FREETYPE
+    config LCD_FONT_TINY_TTF
+        bool "tiny_ttf (vector, tiny)"
+        select LV_USE_TINY_TTF
+    config LCD_FONT_BITMAP
+        bool "Bitmap only (compiled-in)"
+endchoice
+
+config LCD_FONT_MIN_VECTOR_PX
+    int "Smallest px rendered as vector (below → pixel font; 0 = always vector)"
+    default 0
+    depends on !LCD_FONT_BITMAP
+    help
+        A request smaller than this many pixels falls back to a hand-tuned
+        bitmap font (tomthumb/spleen by height) instead of a soft vector glyph.
+        Default 0 disables the fallback — everything renders as vector, however
+        small. Set to ~10 to dial the bitmap floor back in for tiny text.
+
 # ─── shared SPI bus ─────────────────────────────────────────────────────────
 # spi_helper makes bus bring-up idempotent, so the panel can share these pins
 # with the SD card and a LoRa modem (as on the T-Deck); only CS/DC are the

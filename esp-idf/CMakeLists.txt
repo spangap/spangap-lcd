@@ -19,6 +19,7 @@ idf_component_register(
     SRCS ${LCD_SRCS} ${VTERM_SRCS}
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src/lcd_ui" "src/lcd_ui/shell" "libvterm/include" "libvterm/src"
+                      "third_party/nanosvg"
     REQUIRES
         ${SPANGAP_REQUIRES}
         driver
@@ -28,8 +29,11 @@ idf_component_register(
 )
 
 # Vendored third-party C — don't let our warning flags (-Werror et al.) fail the
-# build on upstream code we don't maintain.
+# build on upstream code we don't maintain. libvterm + nanosvg (the runtime SVG
+# icon rasterizer, compiled once in nanosvg_impl.c).
 set_source_files_properties(${VTERM_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/lcd_ui/nanosvg_impl.c"
+                            PROPERTIES COMPILE_OPTIONS "-w")
 
 # Display stack — linked here (not in REQUIRES). The presence of this
 # straddle in the staged set IS the gate (it's an optional_requires of
@@ -54,6 +58,20 @@ foreach(_lcd_dep IN ITEMS esp_lcd espressif__esp_lcd_ili9341)
     idf_component_get_property(_lcd_lib ${_lcd_dep} COMPONENT_LIB)
     target_link_libraries(${COMPONENT_LIB} PRIVATE ${_lcd_lib})
 endforeach()
+
+# FreeType link glue (the LCD_FONT_FREETYPE engine). LVGL's esp.cmake compiles
+# lv_freetype.c when CONFIG_LV_USE_FREETYPE=y but never links FreeType — its
+# PRIV_REQUIRES is only `esp_timer log (+fatfs)`, so lv_freetype.c can't find
+# ft2build.h. Wire it ourselves, exactly as esp_lvgl_port does: hang the
+# espressif__freetype lib off the lvgl component lib so its header + archive
+# reach lv_freetype.c. espressif__freetype is always staged (unconditional dep)
+# but only referenced here when the engine selects it, so BITMAP/TINY_TTF images
+# dead-strip it.
+if(CONFIG_LCD_FONT_FREETYPE)
+    idf_component_get_property(_lvgl_lib lvgl__lvgl          COMPONENT_LIB)
+    idf_component_get_property(_ft_lib   espressif__freetype COMPONENT_LIB)
+    target_link_libraries(${_lvgl_lib} PRIVATE ${_ft_lib})
+endif()
 
 # LVGL custom-malloc backend (src/lcd_ui/lv_mem_spangap.cpp, gated on
 # CONFIG_LV_USE_CUSTOM_MALLOC) is referenced ONLY by the lvgl component, which is

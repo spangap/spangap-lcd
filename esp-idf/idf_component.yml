@@ -27,3 +27,10 @@ dependencies:
   # CONFIG_LCD_CONTROLLER_ILI9341 is selected (dead-stripped otherwise).
   espressif/esp_lcd_ili9341:
     version: "^1.2"
+  # FreeType (wraps FreeType 2.14.2) backs the LCD_FONT_FREETYPE engine. Kept
+  # UNCONDITIONAL: the component manager can't gate deps on Kconfig, and an
+  # unreferenced static lib adds nothing to the image (dead-stripped when
+  # LCD_FONT_FREETYPE isn't selected). LVGL's esp.cmake never links FreeType, so
+  # CMakeLists.txt wires `lvgl PRIVATE freetype` itself when the engine is on.
+  espressif/freetype:
+    version: "^2.14.2"
