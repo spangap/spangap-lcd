@@ -180,6 +180,54 @@ void lcdTouchSetMultipoint(bool on);
 /** Register a gesture handler (fixed small set). Call once at init. */
 void lcdTouchAddGestureHandler(lcd_gesture_cb_t cb);
 
+/* ---- Screen mirror (remote panel) ----
+ * Generic, transport-agnostic display plumbing for a VNC-style mirror of the real
+ * panel: hand the pre-swap little-endian RGB565 pixels of each flushed dirty rect
+ * to a sink, and inject a remote pointer into the same LVGL context the local
+ * panel drives. The lcdmirror straddle wires these to its RLE encoder + WebRTC
+ * transport; -lcd knows nothing about RLE / ITS / WebRTC — capturing the
+ * framebuffer and injecting a pointer are display plumbing, which -lcd owns. */
+
+/** Sink called from flushCb once per flushed dirty rectangle, BEFORE the in-place
+ *  RGB565 byte-swap — so `px` is little-endian (what a browser canvas wants;
+ *  tapping after the swap yields mangled colours). `area` is the dirty rect in
+ *  display coords; `px` is w*h RGB565 pixels, row-major. Runs on the lcd task
+ *  inside the render path: copy what you need and return at once — `px` is LVGL's
+ *  draw buffer and is reused after this returns, so do NOT hold a reference. Cheap
+ *  memcpy only; run no compression on the lcd task (it shares the SPI bus lock
+ *  with LoRa). */
+typedef void (*lcd_mirror_sink_t)(const lv_area_t* area, const uint8_t* px);
+
+/** Attach (or detach, with NULL) the mirror sink. One null-check per flush when
+ *  detached (negligible). Any task (a single pointer store). */
+void lcdMirrorAttach(lcd_mirror_sink_t sink);
+
+/** Pointer state for lcdMirrorInjectPointer. */
+typedef enum { LCD_PTR_RELEASED = 0, LCD_PTR_PRESSED = 1 } lcd_ptr_state_t;
+
+/** Inject a remote pointer sample (display coords) into the same LVGL pointer
+ *  path the local touch/trackball drives — so a browser mirror clicks the real
+ *  UI. Queued and applied on the lcd task; also re-arms the inactivity timer /
+ *  wakes the screen, so a remote viewer keeps the panel awake. Safe from any
+ *  task. */
+void lcdMirrorInjectPointer(int16_t x, int16_t y, lcd_ptr_state_t state);
+
+/** Inject a remote keystroke into the LVGL keypad focus group (lcdInputGroup) —
+ *  so a browser mirror can type into the on-device CLI, text fields and menus.
+ *  `key` is an LVGL key code: a Unicode codepoint for a printable character, an
+ *  LV_KEY_* value for a special key (Enter, Backspace, arrows, …), optionally
+ *  OR'd with LCD_KEY_CTRL for a control combo. One call is one keystroke
+ *  (press+release are injected). Queued and applied on the lcd task; also re-arms
+ *  the inactivity timer. Safe from any task. */
+void lcdMirrorInjectKey(uint32_t key);
+
+/** Hold the panel awake while a remote viewer is connected. `on` wakes the screen
+ *  (out of standby) and suspends the inactivity blank timer, so the mirror never
+ *  goes dark under a watching viewer; `off` restores the configured timeout and
+ *  re-arms it. Reference to a single viewer session (the webrtc signalling WS
+ *  enforces one). Runs on / hops to the lcd task; safe from any task. */
+void lcdMirrorKeepAwake(bool on);
+
 /* ---- Fonts ----
  * The device renders vector faces (TTFs in /fixed/fonts) at any pixel size
  * behind a Kconfig-selectable engine (CONFIG_LCD_FONT_ENGINE); lcdFont() is the

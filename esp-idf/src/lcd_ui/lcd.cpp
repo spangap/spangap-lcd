@@ -207,7 +207,12 @@ void lcdInit(void) {
     /* PSRAM stack is fine: the lcd task never does flash I/O (the loader does).
      * Core 1 (core 0 hosts WiFi); prio 2. LVGL render needs generous stack. */
     s_bringupDone = xSemaphoreCreateBinary();
-    lcdTaskHandle = spawnTask(lcdTaskFn, "lcd", 16384, nullptr, 2, 1, STACK_PSRAM);
+    /* Priority 1, NOT 2: every application actor (storage, web, cli, log, fs)
+     * is prio 1 on core 1, and a long UI computation at prio 2 starves them
+     * ALL — a runaway page render froze storage/web/cli system-wide until
+     * reboot. At prio 1 the scheduler round-robins the lcd task with the
+     * actors, so worst case is a laggy UI, never a wedged device. */
+    lcdTaskHandle = spawnTask(lcdTaskFn, "lcd", 16384, nullptr, 1, 1, STACK_PSRAM);
     if (!lcdTaskHandle) {
         err("task spawn failed\n");
         if (s_bringupDone) { vSemaphoreDelete(s_bringupDone); s_bringupDone = nullptr; }

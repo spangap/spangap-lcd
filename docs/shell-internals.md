@@ -43,8 +43,12 @@ the shell as a bridge so unconverted straddles still link.
 
 ## 2. The lcd task & threading (foundation)
 
-`lcd.cpp` spawns the **lcd task** ("lcd", prio 2, core 1 — core 0 hosts Wi-Fi —
-16 KB **PSRAM** stack). PSRAM stack is safe because the task **never does flash
+`lcd.cpp` spawns the **lcd task** ("lcd", prio 1, core 1 — core 0 hosts Wi-Fi —
+16 KB **PSRAM** stack). Priority 1, NOT 2: every application actor (storage,
+web, cli, log, fs) is prio 1 on core 1, and a long UI computation at prio 2
+starves them ALL — a runaway page render once froze storage/web/cli system-wide
+until reboot. At prio 1 the scheduler round-robins the lcd task with the
+actors, so the worst case is a laggy UI, never a wedged device. PSRAM stack is safe because the task **never does flash
 I/O**: it runs the canonical `itsPoll` loop whose notification accounting must
 stay intact, so a blocking FS round-trip would desync it. Icon bytes are read by
 a separate loader task (§7) and handed over with `lcdRun()`.

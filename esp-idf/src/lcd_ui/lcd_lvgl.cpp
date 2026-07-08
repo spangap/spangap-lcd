@@ -19,8 +19,10 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 
 #include <algorithm>          /* std::clamp */
+#include <cstdint>
 
 /* Draw-strip byte budget. Each flush is one SPI transfer, so a strip must fit
  * the shared-bus max_transfer_sz — the SD driver brings the bus up at 4096
@@ -58,6 +60,22 @@ static lv_obj_t*              s_cursor     = nullptr;
 static lv_timer_t*            s_ptrHide    = nullptr; /* one-shot: hide the cursor after inactivity */
 static int                    s_ptrVisMs   = 2000;    /* <0 = always visible */
 
+/* Screen-mirror remote pointer. A dedicated always-present pointer indev (so the
+ * mirror works on any board, trackball or not) fed from lcdMirrorInjectPointer via
+ * a small queue drained by mirrorReadCb on the lcd task. No cursor — the remote
+ * user sees their own OS pointer over the browser canvas. */
+struct MirrorPt { int16_t x, y; uint8_t pressed; };
+static lv_indev_t*            s_mirrorIndev = nullptr;
+static QueueHandle_t          s_mirrorQ     = nullptr;
+static MirrorPt               s_mirrorLast  = { 0, 0, 0 };  /* level-held between events */
+
+/* Screen-mirror remote keyboard. A keypad indev joined to the focus group, fed
+ * from lcdMirrorInjectKey — one keystroke enqueues a press then a release. */
+struct MirrorKey { uint32_t key; uint8_t pressed; };
+static lv_indev_t*            s_mirrorKeyIndev = nullptr;
+static QueueHandle_t          s_mirrorKeyQ     = nullptr;
+static void                   mirrorSchedule(void);   /* defined after the indevs */
+
 /* Strip DMA completed (ISR context). Wakes the flush, which then drops the
  * shared-bus lock. */
 static bool onColorDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*,
@@ -67,10 +85,19 @@ static bool onColorDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t
     return hp == pdTRUE;
 }
 
+/* Screen-mirror sink (lcdMirrorAttach). Read on the lcd task in flushCb; a lone
+ * pointer store, so a plain volatile is enough for the cross-task publish. */
+static volatile lcd_mirror_sink_t s_sink = nullptr;
+
 static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     auto panel = static_cast<esp_lcd_panel_handle_t>(lv_display_get_user_data(disp));
     int w = area->x2 - area->x1 + 1;
     int h = area->y2 - area->y1 + 1;
+    /* Mirror tap: hand the little-endian pixels to the sink BEFORE the swap — the
+     * browser wants little-endian; tapping after would mirror mangled colours. The
+     * sink must copy and return at once (px is reused after flush). */
+    lcd_mirror_sink_t sink = s_sink;
+    if (sink) sink(area, px);
     /* esp_lcd ST7789 wants big-endian RGB565; LVGL renders little-endian. */
     lv_draw_sw_rgb565_swap(px, (uint32_t)w * h);
     /* Hold the shared-bus lock across the WHOLE transfer including the async
@@ -221,6 +248,72 @@ static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
     else        data->state = LV_INDEV_STATE_RELEASED;
 }
 
+/* Drain one queued remote sample per read; hold its level between events (a
+ * pointer is level-triggered, so a drag's moves keep the press asserted until a
+ * release event arrives). Ask LVGL to read again immediately while more are
+ * queued so a fast tap's press+release both land. Runs on the lcd task. */
+static void mirrorReadCb(lv_indev_t*, lv_indev_data_t* data) {
+    MirrorPt p;
+    if (s_mirrorQ && xQueueReceive(s_mirrorQ, &p, 0) == pdTRUE) s_mirrorLast = p;
+    data->point.x = s_mirrorLast.x;
+    data->point.y = s_mirrorLast.y;
+    data->state   = s_mirrorLast.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    if (s_mirrorQ && uxQueueMessagesWaiting(s_mirrorQ) > 0) data->continue_reading = true;
+}
+
+/* Remote keys: pop one {key,pressed} per read, holding the last between events,
+ * and continue while more are queued so a keystroke's press+release both land. */
+static void mirrorKeyReadCb(lv_indev_t*, lv_indev_data_t* data) {
+    static MirrorKey cur = { 0, 0 };
+    MirrorKey k;
+    if (s_mirrorKeyQ && xQueueReceive(s_mirrorKeyQ, &k, 0) == pdTRUE) cur = k;
+    data->key   = cur.key;
+    data->state = cur.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    if (s_mirrorKeyQ && uxQueueMessagesWaiting(s_mirrorKeyQ) > 0) data->continue_reading = true;
+}
+
+void lcdMirrorAttach(lcd_mirror_sink_t sink) { s_sink = sink; }
+
+/* Remote input reaches the lcd task through lcdRun, which rides the lcd task's
+ * ITS aux inbox — the SAME shallow inbox storage delivers CHANGED notifications
+ * on. So mirror input must not spam it: a burst of pointer/key events posts at
+ * most ONE pending lcdRun (s_mirrorReadPending), and that one drains BOTH queues
+ * fully (a manual lv_indev_read reads one item and ignores continue_reading, so
+ * loop per item — else keystroke press/release alternate and half the keys drop).
+ * Flooding the inbox here backs up storage's subscriber delivery and can wedge
+ * the whole system. No lcdNotifyActivity: the viewer session already holds the
+ * panel awake (lcdMirrorKeepAwake), so per-event activity pokes are redundant. */
+static volatile bool s_mirrorReadPending = false;
+
+static void mirrorDrain(void*) {
+    s_mirrorReadPending = false;
+    if (s_mirrorIndev)
+        while (s_mirrorQ && uxQueueMessagesWaiting(s_mirrorQ) > 0) lv_indev_read(s_mirrorIndev);
+    if (s_mirrorKeyIndev)
+        while (s_mirrorKeyQ && uxQueueMessagesWaiting(s_mirrorKeyQ) > 0) lv_indev_read(s_mirrorKeyIndev);
+}
+
+static void mirrorSchedule(void) {
+    if (s_mirrorReadPending) return;
+    s_mirrorReadPending = true;
+    lcdRun(mirrorDrain);
+}
+
+void lcdMirrorInjectKey(uint32_t key) {
+    if (!s_mirrorKeyQ) return;
+    MirrorKey press = { key, 1 }, release = { key, 0 };
+    xQueueSend(s_mirrorKeyQ, &press, 0);
+    xQueueSend(s_mirrorKeyQ, &release, 0);
+    mirrorSchedule();
+}
+
+void lcdMirrorInjectPointer(int16_t x, int16_t y, lcd_ptr_state_t state) {
+    if (!s_mirrorQ) return;
+    MirrorPt p = { x, y, (uint8_t)(state == LCD_PTR_PRESSED) };
+    xQueueSend(s_mirrorQ, &p, 0);
+    mirrorSchedule();   /* coalesced read on the lcd task (see mirrorSchedule) */
+}
+
 void lcdPointerSetVisibleMs(int ms) {
     s_ptrVisMs = ms;
     if (!s_cursor) return;
@@ -245,6 +338,7 @@ void lcdPointerSetVisibleMs(int ms) {
  * the UI never flashes on half-built. lcdScreenSleep snaps it to 0 (dark fast). */
 static lv_timer_t* s_blankTimer = nullptr;
 static int         s_blankMs    = 0;       /* <=0 = never time out */
+static bool        s_mirrorHold = false;   /* a remote viewer is connected: stay awake, no blank */
 static bool        s_screenOff  = false;   /* true == fully asleep: panel off, loop skips render */
 static bool        s_fadingOut  = false;   /* backlight ramping down; still rendering to drive it */
 
@@ -302,7 +396,9 @@ void lcdBootSettleKick(void) {
 
 static void armBlankTimer(void) {
     if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
-    if (s_blankMs <= 0 || s_screenOff) return;
+    /* A connected remote viewer holds the panel awake: never arm the blank timer
+     * until it disconnects (lcdMirrorKeepAwake). */
+    if (s_mirrorHold || s_blankMs <= 0 || s_screenOff) return;
     s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; storageSet("sys.standby", 1); },
                                    (uint32_t)s_blankMs, nullptr);
     lv_timer_set_repeat_count(s_blankTimer, 1);   /* one-shot: fires once, self-deletes */
@@ -340,6 +436,18 @@ void lcdScreenWake(void) {
 void lcdInactivitySetTimeout(int seconds) {
     s_blankMs = seconds > 0 ? seconds * 1000 : 0;
     armBlankTimer();
+}
+
+void lcdMirrorKeepAwake(bool on) {
+    lcdRun([](void* a) {
+        s_mirrorHold = (bool)(intptr_t)a;
+        if (s_mirrorHold) {
+            lcdScreenWake();                /* pull out of standby for the viewer */
+            if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+        } else {
+            armBlankTimer();                /* restore the configured timeout */
+        }
+    }, (void*)(intptr_t)on);
 }
 
 /* Register user input: just re-arm the inactivity timer. Waking from standby is the
@@ -432,6 +540,7 @@ bool lcdLvglInit(void) {
         lv_indev_set_read_cb(s_indev, touchReadCb);
         lv_indev_set_display(s_indev, s_disp);
         lv_indev_set_mode(s_indev, LV_INDEV_MODE_EVENT);
+        lv_indev_set_scroll_throw(s_indev, 100);   /* no scroll momentum (see below) */
     } else {
         info("no touch panel — pointer indev disabled\n");
     }
@@ -460,9 +569,39 @@ bool lcdLvglInit(void) {
          * read (the zap). We position s_cursor ourselves in pointerReadCb via
          * cursorGlideTo() so it eases to each new spot. */
         lv_indev_set_mode(s_ptrIndev, LV_INDEV_MODE_EVENT);
+        lv_indev_set_scroll_throw(s_ptrIndev, 100);   /* no scroll momentum (see below) */
         lcdPointerSetVisibleMs(s_ptrVisMs);   /* apply dwell now the cursor exists
                                                  (the owner may have set it earlier) */
     }
+
+    /* Screen-mirror remote pointer indev — always present (any board), fed by
+     * lcdMirrorInjectPointer. EVENT mode: read only when an injected sample forces
+     * it, so it costs nothing when no viewer is connected. */
+    s_mirrorQ = xQueueCreate(32, sizeof(MirrorPt));
+    s_mirrorIndev = lv_indev_create();
+    lv_indev_set_type(s_mirrorIndev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(s_mirrorIndev, mirrorReadCb);
+    lv_indev_set_display(s_mirrorIndev, s_disp);
+    lv_indev_set_mode(s_mirrorIndev, LV_INDEV_MODE_EVENT);
+    lv_indev_set_scroll_throw(s_mirrorIndev, 100);   /* no scroll momentum (see below) */
+
+    /* Screen-mirror remote keyboard — a keypad indev on the focus group, fed by
+     * lcdMirrorInjectKey, so a browser viewer can type into the CLI / text fields
+     * exactly like the board's own keyboard does. */
+    s_mirrorKeyQ = xQueueCreate(64, sizeof(MirrorKey));
+    s_mirrorKeyIndev = lv_indev_create();
+    lv_indev_set_type(s_mirrorKeyIndev, LV_INDEV_TYPE_KEYPAD);
+    lv_indev_set_read_cb(s_mirrorKeyIndev, mirrorKeyReadCb);
+    lv_indev_set_display(s_mirrorKeyIndev, s_disp);
+    lv_indev_set_group(s_mirrorKeyIndev, s_group);
+    lv_indev_set_mode(s_mirrorKeyIndev, LV_INDEV_MODE_EVENT);
+
+    /* Scroll momentum is disabled on every pointer indev (scroll_throw=100 kills
+     * the throw vector immediately, so a flick stops without a glide). The
+     * post-release deceleration animates a run of tiny residual scroll steps —
+     * cheap on the physical SPI panel but a real cost to the browser screen-mirror,
+     * which pays a compressed frame per step for motion no one is driving. Dropping
+     * it makes scrolling crisp and keeps the mirror's frame budget for real moves. */
 
     /* Optional hardware button (T-Deck centre/Home), only when no cursor device
      * claimed it. Keypad indev on the focus group; the board's click_read() drives
@@ -504,7 +643,7 @@ bool lcdInputPoll(void) {
  * for no reason. spangap reads every indev manually (event mode) and handles its
  * own press/hold timing, so these timers should never run when nothing is held. */
 void lcdPauseIdleInputTimers(void) {
-    lv_indev_t* devs[] = { s_indev, s_ptrIndev, s_btnIndev };
+    lv_indev_t* devs[] = { s_indev, s_ptrIndev, s_btnIndev, s_mirrorIndev, s_mirrorKeyIndev };
     for (lv_indev_t* in : devs) {
         if (!in || lv_indev_get_state(in) != LV_INDEV_STATE_RELEASED) continue;
         lv_timer_t* rt = lv_indev_get_read_timer(in);
