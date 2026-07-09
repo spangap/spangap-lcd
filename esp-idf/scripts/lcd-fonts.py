@@ -82,7 +82,7 @@ def subset_one(src, dst, unicodes):
         "--layout-features=",     # drop GSUB/GPOS: no shaping on device
         "--hinting",              # keep TrueType hints (legibility at 12px)
         "--desubroutinize",
-        "--drop-tables+=DSIG",
+        "--drop-tables+=DSIG,FFTM",  # FFTM: FontForge timestamps, unsubsettable
         "--recalc-bounds",
         # No --flavor: emit RAW TrueType (uncompressed) so it mmaps in place.
     ]
