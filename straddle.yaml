@@ -27,6 +27,14 @@ platforms: [idf]
 # needed for correctness.
 init:
   - call: lcdInit
+# The screen brings its browser mirror: a VNC-style remote view of this panel
+# in the web UI. Gated on spangap-web being in the build already (lcdmirror
+# needs the WebRTC/ITS router), so a web-less LCD build stays web-less — the
+# mirror rides the lcd∧web conjunction rather than dragging the web stack in.
+# Drop it from a web build with --without lcdmirror. The requires: back-edge
+# onto spangap-lcd is the benign additional_installs cycle.
+additional_installs:
+  - { install: spangap/lcdmirror, when: spangap/spangap-web }
 # Board-agnostic LVGL features this shell needs (collected into the buildable's
 # sdkconfig fragments like any other straddle's kconfig:). LV_USE_SNAPSHOT lets
 # the recents switcher paint each running app's screen to a PSRAM buffer for its
