@@ -285,6 +285,9 @@ lv_obj_t* makeRow(lv_obj_t* parent) {
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
+    /* Rows must not scroll themselves — a vertical drag starting on a row should
+     * chain to the page, not bounce the row's own content out of view. */
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     return row;
 }
 
