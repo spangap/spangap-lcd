@@ -205,14 +205,19 @@ void lcdInit(void) {
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */
 
     /* PSRAM stack is fine: the lcd task never does flash I/O (the loader does).
-     * Core 1 (core 0 hosts WiFi); prio 2. LVGL render needs generous stack. */
+     * Core 1 (core 0 hosts WiFi); prio 2. LVGL render needs generous stack —
+     * the deepest paths (nanosvg icon raster + vector-font glyph rasterization,
+     * plus a 2 KB scratch buffer in the CLI/log apps) overflowed the former
+     * 16 KB intermittently ("stack overflow in task lcd" at boot). A PSRAM stack
+     * overflow scribbles into adjacent PSRAM — a silent corruptor — so give it
+     * real headroom; PSRAM is plentiful. Watch the high-water mark via `top`. */
     s_bringupDone = xSemaphoreCreateBinary();
     /* Priority 1, NOT 2: every application actor (storage, web, cli, log, fs)
      * is prio 1 on core 1, and a long UI computation at prio 2 starves them
      * ALL — a runaway page render froze storage/web/cli system-wide until
      * reboot. At prio 1 the scheduler round-robins the lcd task with the
      * actors, so worst case is a laggy UI, never a wedged device. */
-    lcdTaskHandle = spawnTask(lcdTaskFn, "lcd", 16384, nullptr, 1, 1, STACK_PSRAM);
+    lcdTaskHandle = spawnTask(lcdTaskFn, "lcd", 32768, nullptr, 1, 1, STACK_PSRAM);
     if (!lcdTaskHandle) {
         err("task spawn failed\n");
         if (s_bringupDone) { vSemaphoreDelete(s_bringupDone); s_bringupDone = nullptr; }
