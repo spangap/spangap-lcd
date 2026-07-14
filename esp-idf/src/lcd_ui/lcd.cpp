@@ -199,10 +199,12 @@ static void lcdTaskFn(void*) {
 void lcdInit(void) {
     if (lcdTaskHandle) return;
 
+    storageBegin();
     storageDefault("s.lcd.backlight",    200);
     storageDefault("s.lcd.scale",        100);   /* UI zoom %, clamp 50–200 */
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */
+    storageEnd();
 
     /* PSRAM stack is fine: the lcd task never does flash I/O (the loader does).
      * Core 1 (core 0 hosts WiFi); prio 2. LVGL render needs generous stack —
