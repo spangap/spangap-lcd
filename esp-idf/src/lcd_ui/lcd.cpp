@@ -214,12 +214,16 @@ void lcdInit(void) {
      * overflow scribbles into adjacent PSRAM — a silent corruptor — so give it
      * real headroom; PSRAM is plentiful. Watch the high-water mark via `top`. */
     s_bringupDone = xSemaphoreCreateBinary();
-    /* Priority 1, NOT 2: every application actor (storage, web, cli, log, fs)
-     * is prio 1 on core 1, and a long UI computation at prio 2 starves them
-     * ALL — a runaway page render froze storage/web/cli system-wide until
-     * reboot. At prio 1 the scheduler round-robins the lcd task with the
-     * actors, so worst case is a laggy UI, never a wedged device. */
-    lcdTaskHandle = spawnTask(lcdTaskFn, "lcd", 32768, nullptr, 1, 1, STACK_PSRAM);
+    /* Priority 5 on core 1 for a snappy UI: the lcd task preempts the ordinary
+     * prio-1 actors instead of round-robining with them, so rendering and input
+     * never wait behind storage/web/cli work. This is safe now that storage's
+     * heavy tasks (actor, save/deflate, notify) run on core 0 — the original
+     * "long UI computation starves the core-1 actors and wedges the device"
+     * hazard was about the storage actor above all, and it's no longer here.
+     * The remaining core-1 prio-1 tasks (web, cli, log, fs) do yield to the UI;
+     * that's the point. Renders are now incremental (reconciled bubbles, one
+     * conversation), so there's no unbounded compute to hold the CPU. */
+    lcdTaskHandle = spawnTask(lcdTaskFn, "lcd", 32768, nullptr, 5, 1, STACK_PSRAM);
     if (!lcdTaskHandle) {
         err("task spawn failed\n");
         if (s_bringupDone) { vSemaphoreDelete(s_bringupDone); s_bringupDone = nullptr; }

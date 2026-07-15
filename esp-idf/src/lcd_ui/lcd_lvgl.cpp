@@ -154,6 +154,11 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
         data->point.y = gp[0].y;
         data->state   = LV_INDEV_STATE_PRESSED;
         if (!wasDown) dbg("touch -> (%d,%d)\n", gp[0].x, gp[0].y);
+        /* Touch is activity. Re-arm every pressed read (not just the down edge):
+         * a board that drives us off-task (lcdTouchPoll) bypasses the lcd loop's
+         * s_inputPending activity poke, and re-arming per read also keeps a long
+         * drag from blanking mid-gesture. lcdActivity is a cheap timer reset. */
+        lcdActivity();
         wasDown = true;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
@@ -634,6 +639,24 @@ bool lcdInputPoll(void) {
     if (s_ptrIndev) lv_indev_read(s_ptrIndev);
     if (s_btnIndev) lv_indev_read(s_btnIndev);
     return s_inputAgain;
+}
+
+/* Off-task touch drive (lcd_input.h). Like the mirror path, coalesce to one
+ * pending lcdRun so a board sampling touch every few ms can't flood the lcd
+ * task's ITS aux inbox (which also carries storage notifications). The hop reads
+ * only the touch indev; ongoing tracking is then sustained by touchReadCb's own
+ * 10ms re-read timer, so the board bumps once per gesture, not once per sample. */
+static volatile bool s_touchPollPending = false;
+
+static void touchPollDrain(void*) {
+    s_touchPollPending = false;
+    if (s_indev) lv_indev_read(s_indev);
+}
+
+void lcdTouchPoll(void) {
+    if (!s_indev || s_touchPollPending) return;
+    s_touchPollPending = true;
+    lcdRun(touchPollDrain);
 }
 
 /* Pause the per-indev read timer LVGL keeps for its own press timing whenever the

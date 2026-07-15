@@ -73,6 +73,15 @@ void lcdDisplaySize(int* w, int* h);
  *  gpio_isr_handler_add() signature. */
 void lcdInputISR(void* arg);
 
+/** Off-task touch drive. A board that samples its touch controller on its own
+ *  task — to keep the read (and its I2C traffic) off the render path — calls this
+ *  after latching each new sample. It is the task-safe analogue of an lcdInputISR()
+ *  touch edge: it hops onto the lcd task and reads the touch indev on demand. The
+ *  board still reports the sample through touch_read (which now returns its latch
+ *  rather than touching hardware). Coalesced to one pending hop, so a tight sample
+ *  loop can't flood the lcd task; a no-op if the board registered no touch_read. */
+void lcdTouchPoll(void);
+
 #ifdef __cplusplus
 }
 #endif
