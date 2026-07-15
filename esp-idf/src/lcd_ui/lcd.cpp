@@ -54,6 +54,12 @@ extern "C" void IRAM_ATTR lcdInputISR(void* /*arg*/) {
     portYIELD_FROM_ISR(hp);
 }
 
+/* Same flag + wake as lcdInputISR, from task context (no FromISR variant). */
+extern "C" void lcdInputSignal(void) {
+    s_inputPending = true;
+    if (lcdTaskHandle) xTaskNotifyGive(lcdTaskHandle);
+}
+
 /* Input HAL, registered by the consumer via lcdSetInput() before spangapInit().
  * The display itself is owned by the lcd component (lcd_panel.cpp, Kconfig). */
 static const lcd_input_t* s_input = nullptr;

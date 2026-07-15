@@ -73,6 +73,12 @@ void lcdDisplaySize(int* w, int* h);
  *  gpio_isr_handler_add() signature. */
 void lcdInputISR(void* arg);
 
+/** Task-context analogue of lcdInputISR(): flag an input edge and wake the lcd
+ *  task from a normal (non-ISR) context — for a board that detects input where
+ *  an ISR-only notify can't run, e.g. a light-sleep wake callback (IDLE task).
+ *  The lcd task then reads its (event-mode) indevs on demand, same as an edge. */
+void lcdInputSignal(void);
+
 /** Off-task touch drive. A board that samples its touch controller on its own
  *  task — to keep the read (and its I2C traffic) off the render path — calls this
  *  after latching each new sample. It is the task-safe analogue of an lcdInputISR()
