@@ -162,6 +162,13 @@ off, GRAM retained for an instant fade-in wake) and powers its own input
 down/up. The board's button sets/clears the same key, so timeout and button
 share one path.
 
+When the panel powers off, the render loop stops (`itsPoll(portMAX_DELAY)` until
+the next input/ITS wake) **and the LVGL tick is stopped** — the 2 ms `lv_tick_inc`
+`esp_timer` is a ~500 Hz wake that otherwise defeats automatic light sleep the
+whole time the screen is blanked. It is restarted on wake, before the fade-in
+animation needs it; LVGL time is relative, so freezing the tick across sleep is
+harmless (a timer that came due mid-sleep just fires once on resume).
+
 ## Storage variables
 
 All keys are owned by this component. `s.*` settings sync to the browser.

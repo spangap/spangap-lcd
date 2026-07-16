@@ -345,6 +345,7 @@ static lv_timer_t* s_blankTimer = nullptr;
 static int         s_blankMs    = 0;       /* <=0 = never time out */
 static bool        s_mirrorHold = false;   /* a remote viewer is connected: stay awake, no blank */
 static bool        s_screenOff  = false;   /* true == fully asleep: panel off, loop skips render */
+static void        tickTimerRun(bool on);  /* LVGL tick esp_timer; stopped while blanked (defined below) */
 static bool        s_fadingOut  = false;   /* backlight ramping down; still rendering to drive it */
 
 /* Backlight: s_blTarget is the configured on-level (s.lcd.backlight); s_blCur is
@@ -417,6 +418,7 @@ static void blSleepDone(lv_anim_t*) {
     s_fadingOut = false;
     s_screenOff = true;
     lcdPanelDisplayPower(false);   /* panel standby, GRAM retained */
+    tickTimerRun(false);           /* no rendering while blanked → let the chip light-sleep */
 }
 
 void lcdScreenSleep(void) {
@@ -433,7 +435,10 @@ void lcdScreenWake(void) {
     bool wasOff = s_screenOff;
     s_fadingOut = false;                          /* cancel a fade-out in progress */
     s_screenOff = false;
-    if (wasOff) lcdPanelDisplayPower(true);       /* panel was off — bring it back */
+    if (wasOff) {
+        tickTimerRun(true);                       /* resume LVGL time before the fade anim runs */
+        lcdPanelDisplayPower(true);               /* panel was off — bring it back */
+    }
     backlightFadeTo(s_blTarget, 300);             /* fade up from the current duty */
     armBlankTimer();
 }
@@ -472,6 +477,26 @@ bool lcdScreenIsOff(void) { return s_screenOff; }
  * reticulous/main/tdeck.cpp for the T-Deck implementation. */
 
 static void tickCb(void*) { lv_tick_inc(LCD_TICK_MS); }
+
+/* The LVGL tick is a 2 ms periodic esp_timer — a SYSTIMER-backed wake that fires
+ * ~500×/s. LVGL only needs it while we're actually rendering; left running while
+ * the screen is blanked it wakes the chip every 2 ms and defeats automatic light
+ * sleep (the dominant idle drain on battery). So stop it when the panel powers
+ * off and restart it on wake, before any fade animation needs to advance. */
+static esp_timer_handle_t s_tickTimer = nullptr;
+
+static void tickTimerRun(bool on) {
+    if (!s_tickTimer) return;
+    if (on) {
+        /* start_periodic on an already-running timer errors; stop first (no-op if
+         * idle). lv_tick freezes across sleep and simply resumes — LVGL time is
+         * relative, so any timer that came due mid-sleep just fires once on wake. */
+        esp_timer_stop(s_tickTimer);
+        esp_timer_start_periodic(s_tickTimer, LCD_TICK_MS * 1000);
+    } else {
+        esp_timer_stop(s_tickTimer);
+    }
+}
 
 bool lcdLvglInit(void) {
     esp_lcd_panel_io_handle_t io = nullptr;
@@ -522,9 +547,8 @@ bool lcdLvglInit(void) {
     esp_timer_create_args_t targs = {};
     targs.callback = tickCb;
     targs.name     = "lvgl_tick";
-    esp_timer_handle_t th = nullptr;
-    esp_timer_create(&targs, &th);
-    esp_timer_start_periodic(th, LCD_TICK_MS * 1000);
+    esp_timer_create(&targs, &s_tickTimer);
+    esp_timer_start_periodic(s_tickTimer, LCD_TICK_MS * 1000);
 
     /* Focus group for non-pointer input (populated by the launcher). */
     s_group = lv_group_create();
