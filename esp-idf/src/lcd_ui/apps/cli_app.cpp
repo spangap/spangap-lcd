@@ -35,6 +35,7 @@ int bodyH() {
 
 int         s_handle  = -1;
 lcd_term_t* s_cliTerm = nullptr;
+LcdApp*     s_cliApp  = nullptr;   /* the one CLI instance, for self-stop on disconnect */
 
 void cliOutput(const char* data, size_t len, void* /*user*/) {
     if (s_handle >= 0) itsSend(s_handle, data, len, pdMS_TO_TICKS(200));
@@ -49,8 +50,9 @@ void cliRecvCb(int handle, size_t) {
 
 void cliDiscCb(int) {
     s_handle = -1;
-    const char* m = "\r\n[cli connection closed]\r\n";
-    lcdTermFeed(s_cliTerm, m, strlen(m));
+    /* The session is gone — a dead terminal in the foreground is limbo. Stop the
+     * app (returns to the launcher; a no-op teardown if it was backgrounded). */
+    if (s_cliApp) s_cliApp->stop();
 }
 
 /* Deferred focus: the launcher tile that opened us grabs the input group on
@@ -70,6 +72,7 @@ public:
     CliApp() : LcdApp({ .name = "CLI", .iconBasename = "cli" }) {}
 
     void onCreate(lv_obj_t* root) override {
+        s_cliApp  = this;
         s_cliTerm = lcdTermCreate(root, lcdScreenW(), bodyH(),
                                   lcdFont(LcdFace::MONO, 8), cliFg(), cliOutput, nullptr);
 

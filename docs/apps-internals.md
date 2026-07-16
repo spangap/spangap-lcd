@@ -40,13 +40,29 @@ The lifecycle maps onto the shell points (see shell-internals §4):
 | `onShow()` | every open after build (foreground raise) |
 | `onHide()` | sent to background (another app opened, or Home slide-up completes) |
 | `onBack()` | a BACK intent reached the foreground app |
-| `onClose()` | eviction (recents swipe-up) — before the ledger + root are freed |
+| `onClose()` | a stop or eviction — before the ledger + root are freed |
 
 **The shell owns the instance; it never deletes it** — only the root layer is
 evictable, and a later open rebuilds it. So `LcdApp` subclasses must be heap- or
 static-allocated and must not assume their destructor runs at eviction (it
 doesn't; `onClose` is the teardown hook). State that must survive eviction lives
 outside the object (storage, file statics).
+
+**Stop vs. evict.** Both tear the app down through the same path, so both fire
+`onClose()`. `stop()` (`LcdApp::stop` → `shellStopApp`) is the user/self-initiated
+termination — the recents swipe-up, and an app calling it on itself. It adds one
+thing eviction doesn't: if the stopped app was in the foreground it reveals the
+launcher (the app was hidden behind it). Memory-pressure eviction (`shellEvictApp`)
+is the same teardown and now delegates to `shellStopApp`.
+
+**Reopen after stop.** `onClose` + the layer DELETE null the app's widget handles,
+but plain file statics survive. A **build-tracking guard** (e.g. lxmf's
+`g_listBuiltId`, "the list is already built for this identity — don't rebuild")
+survives while the widgets it guards do not, so a reopen after a stop/evict sees
+the guard still satisfied and skips its own initial populate → an empty screen
+until reboot re-zeroes the static. **Reset such guards in the fresh-open path**
+(where the rest of the per-session state is reset), not just on the DELETE.
+Apps that rebuild unconditionally on open (Maps, Viewer, Nomad) are immune.
 
 ## 3. The resource ledger
 
@@ -88,8 +104,13 @@ Both Log and CLI are direct ports of the legacy programs and share a shape: the
 ITS connection lives for the **life of the layer**, not its visibility, so an app
 hidden behind another keeps receiving and re-opening shows current state.
 `onCreate` builds the view and opens the connection; `onClose` closes it. ITS
-recv/disconnect callbacks carry no user pointer, so each app's connection state
-lives in a file-static (there is exactly one instance of each).
+recv/disconnect callbacks carry no user pointer, so each app's connection state —
+and its `LcdApp*`, for self-stop — lives in a file-static (there is exactly one
+instance of each). When the **remote** side drops (the disconnect callback fires),
+the app calls `stop()` on itself: a dead terminal / frozen log in the foreground
+is limbo, so it returns to the launcher instead of sitting there. Our own
+`itsDisconnect` in `onClose` fires the *remote's* callback, not ours, so the
+normal stop path never recurses.
 
 - **`log_app.cpp`** — a virtualized text view ([terminal.md](terminal.md)) in
   `lcdFont(LcdFace::MONO, 8)` (which resolves to Spleen 5×8 through the

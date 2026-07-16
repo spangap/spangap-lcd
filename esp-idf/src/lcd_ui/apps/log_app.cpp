@@ -58,6 +58,7 @@ int bodyH() {
 
 struct State { int handle = -1; lcd_textview_t* tv = nullptr; bool primed = false; };
 State s_log;
+LcdApp* s_logApp = nullptr;   /* the one Log instance, for self-stop on disconnect */
 
 void logRecvCb(int handle, size_t) {
     char tmp[2048];
@@ -71,10 +72,9 @@ void logRecvCb(int handle, size_t) {
 
 void logDiscCb(int) {
     s_log.handle = -1;
-    if (s_log.tv) {
-        const char* m = "\n[log connection closed]\n";
-        lcdTextViewAppend(s_log.tv, m, strlen(m));
-    }
+    /* Feed gone — a frozen log in the foreground is limbo. Stop the app (returns
+     * to the launcher; a no-op teardown if it was backgrounded). */
+    if (s_logApp) s_logApp->stop();
 }
 
 class LogApp : public LcdApp {
@@ -82,6 +82,7 @@ public:
     LogApp() : LcdApp({ .name = "Log", .iconBasename = "log" }) {}
 
     void onCreate(lv_obj_t* root) override {
+        s_logApp = this;
         s_log.tv = lcdTextViewCreate(root, lcdScreenW(), bodyH(),
                                      lcdFont(LcdFace::MONO, 8), logFg(), scrollbackBudget());
         lcdTextViewSetLineColor(s_log.tv, logLineColor);

@@ -409,15 +409,26 @@ LcdApp*     shellForeground(void) { return s_foreground; }
 ShellScreen shellScreen(void)     { return s_screen; }
 void        shellAppChanged(LcdApp* app) { if (app == s_foreground) applyChrome(); }
 
-void shellEvictApp(LcdApp* app) {
+void shellStopApp(LcdApp* app) {
     if (!app || !app->root()) return;
     bool wasFg = (app == s_foreground);
     lv_obj_t* root = app->root();
-    app->onClose();
+    app->onClose();        /* app teardown: close connections, drop handles */
     app->_reclaimLedger();
     lv_obj_delete(root);   /* onLayerDelete nulls app->root() + clears s_foreground */
-    if (wasFg && !shellRecentsVisible()) { s_screen = ShellScreen::LAUNCHER; applyChrome(); }
+    /* A stopped foreground app hands the screen back to the launcher, revealed —
+     * it was hidden behind the lifted app — unless the recents switcher is up
+     * over it (it stays, having just dropped this card). */
+    if (wasFg && !shellRecentsVisible()) {
+        s_screen = ShellScreen::LAUNCHER;
+        showHomebar(false); showLine(false);
+        revealLauncher(false);
+        applyChrome();
+    }
 }
+
+/* Memory-pressure eviction is the same teardown as an explicit stop. */
+void shellEvictApp(LcdApp* app) { shellStopApp(app); }
 
 /* ---- retained legacy public surface (lcd.h) — bridges the unconverted apps ---- */
 

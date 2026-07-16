@@ -82,13 +82,27 @@ Every method runs on the lcd task. The shell calls them at these points:
 - **`onHide()`** — the app went to the background (another app opened, or Home).
 - **`onBack()`** — a Back navigation arrived; return `true` if handled, `false`
   to let it fall through to Home (the default).
-- **`onClose()`** — the app was evicted (terminated from recents). Tear down
-  external resources here; the resource ledger and the root tree are freed for
-  you afterward, and the next open rebuilds from `onCreate`.
+- **`onClose()`** — the app is being stopped or evicted. Tear down external
+  resources here (close connections, drop handles); the resource ledger and the
+  root tree are freed for you afterward, and the next open rebuilds from
+  `onCreate`. It fires for **both** a user stop (recents swipe-up, self-stop) and
+  a memory-pressure eviction, so it must not assume the app is going away for
+  good — the same instance may be reopened and rebuilt.
 
 The layer persists after `onCreate` returns: opening another app hides yours,
 re-opening reveals it exactly as left — your widgets are still there and
 `onCreate` does **not** run again.
+
+**Stopping.** `stop()` is the single termination entry point: it runs `onClose()`,
+frees the root layer + ledger, drops the app from the running set, and hands the
+screen back to the launcher if the app was in the foreground. The recents
+swipe-up calls it, and an app calls it **on itself** to bail out when it can no
+longer function — e.g. the CLI and Log apps `stop()` from their ITS
+disconnect callbacks so a dead terminal / frozen log never strands the
+foreground. Because the app's whole session is reset on the next `onCreate`,
+**any file-static "already built" guard must be reset there** (an un-reset guard
+that survives teardown but the widgets don't makes the reopened app skip its own
+populate — see apps-internals §"Reopen after stop").
 
 ## Services
 

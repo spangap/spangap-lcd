@@ -39,6 +39,7 @@ const std::vector<LcdApp*>& shellApps(void) { return s_apps; }
 
 lv_group_t* LcdApp::inputGroup()           { return lcdInputGroup(); }
 void        LcdApp::goHome()               { shellNavigate(NavIntent::HOME); }
+void        LcdApp::stop()                 { shellStopApp(this); }
 void        LcdApp::setFullscreen(bool on) { m_fullscreen = on; shellAppChanged(this); }
 void        LcdApp::setScrollwheelArrows(bool on) { m_arrows = on; shellAppChanged(this); }
 void        LcdApp::setScrollHandler(lcd_scroll_fn_t fn) { m_scrollFn = fn; }

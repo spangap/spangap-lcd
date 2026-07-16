@@ -7,8 +7,8 @@
  * snapshot yet falls back to its launcher icon. A memory readout (internal /
  * external heap) sits at the top — a genuinely useful on-device diagnostic.
  *
- * Tap a card to switch to it; swipe a card up to terminate that app (onClose ->
- * free root + ledger + snapshot, drop from the running set). Built lazily,
+ * Tap a card to switch to it; swipe a card up to terminate that app (stop ->
+ * onClose + free root + ledger + snapshot, drop from the running set). Built lazily,
  * repopulated on each show.
  */
 #include "shell_internal.h"
@@ -120,7 +120,7 @@ void onCardReleased(lv_event_t* e) {
 
     /* Committed upward swipe -> terminate the app. */
     if (realRelease && s_dragMoved && lift >= lcdStyle().recents.swipeClosePx) {
-        if (app) shellEvictApp(app);
+        if (app) app->stop();
         bool any = false;
         for (auto* a : shellApps()) if (a->root()) { any = true; break; }
         /* Last one closed: leave recents up and let shellNavigate's recents-visible

@@ -64,7 +64,10 @@ public:
     virtual void onShow() {}                    /* brought to foreground */
     virtual void onHide() {}                     /* sent to background */
     virtual bool onBack() { return false; }      /* true = handled; false = go Home */
-    virtual void onClose() {}                     /* evicted; ledger auto-freed after */
+    virtual void onClose() {}                     /* stopped or evicted; free the app's
+                                                    non-LVGL resources (close connections,
+                                                    drop handles). Ledger auto-freed after;
+                                                    the root layer is deleted after this. */
 
     /* ---- Boot lifecycle (Service; on the boot task) ----
      * onInit is the ONE thing a registered LcdApp does at boot: hop onto the lcd
@@ -83,6 +86,13 @@ public:
     lv_obj_t*   root()        { return m_root; }
     lv_group_t* inputGroup();                        /* was lcdInputGroup() */
     void        goHome();                            /* was lcdGoHome() */
+    /** Stop this app: run onClose() teardown, free its root layer + ledger, drop
+     *  it from the running set, and — if it was in the foreground — hand the
+     *  screen back to the launcher. The single termination entry point: the
+     *  recents swipe-kill calls it, and an app calls it on itself to bail out of
+     *  the foreground when it can no longer function (e.g. its connection
+     *  dropped), so it never sits dead in limbo. A no-op if not built. Lcd task. */
+    void        stop();
     void        setFullscreen(bool on);              /* was lcdProgramFullscreen() */
     void        setScrollwheelArrows(bool on);       /* was lcdProgramScrollwheelArrows() */
     void        setScrollHandler(lcd_scroll_fn_t fn); /* was lcdProgramScrollHandler() */

@@ -145,6 +145,14 @@ restores focus, and hides the launcher behind the new app.
 When recents is visible, a non-RECENTS intent first dismisses recents back to the
 underlying app (restoring its opacity) or the launcher.
 
+**Stop / evict.** `shellStopApp(app)` is the one termination path: `onClose()`,
+`_reclaimLedger()`, delete the root layer (whose `LV_EVENT_DELETE` nulls the app's
+root and clears the foreground), and — if the app was foreground and recents
+isn't up over it — reveal the launcher and re-apply chrome. `LcdApp::stop()` and
+the recents swipe-up both reach it; an app also calls `stop()` on itself to leave
+the foreground when it can't function. `shellEvictApp` (memory-pressure eviction)
+delegates to the same function, so the two are one teardown.
+
 **Chrome.** `applyChrome()` derives status-bar visibility (hidden if the
 foreground app is fullscreen or opts out via `Config::statusBar`), the foreground
 layer's geometry (`y = statusBar.h`, or 0 fullscreen), and trackball-arrows mode
@@ -311,8 +319,8 @@ magic numbers, so a second board is a new sheet, not code. Only the 320×240
 dark sheet ships (`stylesheet_320x240.cpp`): status bar 24 px on dark navy,
 tiles derived from a 72 px `minTilePx` floor with a 36 px base icon, and the
 recents/nav/gesture thresholds. `LcdStyle::core.maxResidentApps` (4) is
-declared as an eviction cap but is **not currently enforced** — eviction is
-only user-driven via a recents swipe-up.
+declared as an eviction cap but is **not currently enforced** — teardown is
+only user-driven (a recents swipe-up, or an app stopping itself; see §4).
 
 **Font tokens.** Sheet font fields are `FontSpec { LcdFace face; int basePx; }`
 specs at the 240 px-tall reference panel; the resolved `const lv_font_t*`

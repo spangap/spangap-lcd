@@ -44,8 +44,12 @@ ShellScreen shellScreen(void);
  *  flips one of its UI-state flags (setFullscreen / setScrollwheelArrows). */
 void shellAppChanged(LcdApp* app);
 
-/** Evict an app: if foreground, go Home first; then onClose(), free the ledger,
- *  delete the root layer (next open rebuilds). Drops it from the running set. */
+/** Stop an app: onClose() teardown, free the ledger, delete the root layer, drop
+ *  it from the running set, and reveal the launcher if it was in the foreground.
+ *  The termination path behind LcdApp::stop() — recents swipe-kill and an app
+ *  self-terminating both reach it. (Next open rebuilds from scratch.) */
+void shellStopApp(LcdApp* app);
+/** Memory-pressure eviction: identical teardown to shellStopApp. */
 void shellEvictApp(LcdApp* app);
 
 /** Every installed app (lcd_app.cpp). The "running set" (recents) is the subset
