@@ -343,7 +343,8 @@ void lcdPointerSetVisibleMs(int ms) {
  * the UI never flashes on half-built. lcdScreenSleep snaps it to 0 (dark fast). */
 static lv_timer_t* s_blankTimer = nullptr;
 static int         s_blankMs    = 0;       /* <=0 = never time out */
-static bool        s_mirrorHold = false;   /* a remote viewer is connected: stay awake, no blank */
+static volatile bool s_mirrorWant = false; /* desired hold (set from any task; authoritative) */
+static bool        s_mirrorHold = false;   /* applied hold (lcd task): stay awake, no blank */
 static bool        s_screenOff  = false;   /* true == fully asleep: panel off, loop skips render */
 static void        tickTimerRun(bool on);  /* LVGL tick esp_timer; stopped while blanked (defined below) */
 static bool        s_fadingOut  = false;   /* backlight ramping down; still rendering to drive it */
@@ -448,16 +449,27 @@ void lcdInactivitySetTimeout(int seconds) {
     armBlankTimer();
 }
 
+/* Reconcile the applied hold to the desired hold. Runs on the lcd task, from both
+ * the keepAwake poke and every lcd-loop pass — so a dropped poke (lcdRun is
+ * best-effort: its aux message is discarded if the lcd task's inbox stays busy past
+ * lcdRun's send timeout) can never strand the panel awake with the blank timer
+ * suspended. The loop re-runs this within the status-clock cadence and restores the
+ * configured timeout. Cheap: a volatile compare that early-returns when settled. */
+void lcdMirrorApplyHold(void) {
+    bool want = s_mirrorWant;
+    if (want == s_mirrorHold) return;
+    s_mirrorHold = want;
+    if (want) {
+        lcdScreenWake();                /* pull out of standby for the viewer */
+        if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+    } else {
+        armBlankTimer();                /* restore the configured timeout */
+    }
+}
+
 void lcdMirrorKeepAwake(bool on) {
-    lcdRun([](void* a) {
-        s_mirrorHold = (bool)(intptr_t)a;
-        if (s_mirrorHold) {
-            lcdScreenWake();                /* pull out of standby for the viewer */
-            if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
-        } else {
-            armBlankTimer();                /* restore the configured timeout */
-        }
-    }, (void*)(intptr_t)on);
+    s_mirrorWant = on;                   /* authoritative; the lcd loop reconciles this */
+    lcdRun([](void*) { lcdMirrorApplyHold(); });   /* prompt apply; a dropped run self-heals */
 }
 
 /* Register user input: just re-arm the inactivity timer. Waking from standby is the

@@ -69,6 +69,11 @@ void        lcdInactivitySetTimeout(int seconds);
 /** Register user input: re-arms the inactivity timer. Always returns false (waking
  *  from standby is the board's job, via sys.standby); kept bool for callers. */
 bool        lcdActivity(void);
+/** Reconcile the applied mirror-hold to the desired state set by lcdMirrorKeepAwake.
+ *  Called every lcd-loop pass so a dropped keepAwake poke (lcdRun is best-effort)
+ *  cannot leave the panel held awake with the blank timer suspended. Cheap no-op
+ *  when already settled. */
+void        lcdMirrorApplyHold(void);
 /** True while the screen is in standby (lcdScreenSleep). The lcd loop skips
  *  rendering and sleeps until input while this holds. */
 bool        lcdScreenIsOff(void);

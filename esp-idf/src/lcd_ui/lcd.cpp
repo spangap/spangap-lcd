@@ -167,6 +167,7 @@ static void lcdTaskFn(void*) {
     bool animBoosted = false;
     for (;;) {
         while (itsPoll(0)) {}              /* drain aux / storage callbacks */
+        lcdMirrorApplyHold();             /* self-heal a dropped keepAwake poke → restore blank timer */
         if (s_inputPending) {             /* woke on a touch/button/trackball edge */
             s_inputPending = false;
             lcdActivity();                 /* re-arm the inactivity timer */
