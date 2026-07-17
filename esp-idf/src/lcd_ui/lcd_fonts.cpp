@@ -186,9 +186,10 @@ const lv_font_t* lcdFont(LcdFace face, int px) {
         if (px >= 5 && px <= 6) return &lv_font_tomthumb_4x6;
         if (px >= 7 && px <= 8) return &lv_font_spleen_5x8;
     } else if (isUi) {
-        /* 14 px is the smallest UI face — below that, proportional vector is too
-         * soft to read, and we'd rather not shrink chrome further. */
-        if (px < 14) px = 14;
+        /* Floor the UI face at 10 px — small proportional vector gets soft, but a
+         * secondary line (a timestamp, a sub-label) reads fine that small and it
+         * lets chrome sit clearly below the 14 px body text. */
+        if (px < 10) px = 10;
     }
 
     /* General clamp: a bitmap floor for a whole image (0 = off by default; kept
