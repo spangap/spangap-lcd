@@ -91,6 +91,11 @@ lv_group_t* lcdInputGroup(void);
  *  changes; see lcdProgramScrollwheelArrows). Hides the pointer while on. */
 void        lcdScrollwheelArrowsApply(bool on);
 
+/** Hide the ball cursor immediately (no dwell fade). The input box calls this the
+ *  moment a caret goes live, so switching to trackball-arrow mode takes the
+ *  pointer off screen at once instead of on its dwell timer. */
+void        lcdPointerHide(void);
+
 /* ---- lcd_icons.cpp: runtime SVG rasterizer + RAM cache + loader ---- */
 /** Start the icon loader task. Call after lv_init(). */
 void        lcdIconsInit(void);

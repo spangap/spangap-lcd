@@ -104,6 +104,19 @@ void lcdProgramScrollwheelArrows(bool on);
  *  arrows to lcdInputGroup(). Lcd task. */
 bool lcdScrollwheelArrowsActive(void);
 
+/** True while a text-entry box's caret is live (blinking / edit mode). Fills the
+ *  caret's screen position and whether it sits on the first line. A relative-
+ *  pointing HAL (trackball) drives the caret with arrow keys while this holds, and
+ *  parks its cursor on the returned point when the user walks out. Independent of
+ *  lcdScrollwheelArrowsActive (which is a whole-program latch); a board treats
+ *  either as "drive arrows". Any out-param may be null. Lcd task. */
+bool lcdCaretActive(int* x, int* y, bool* atTop);
+
+/** Leave text-edit mode: stop the caret blink so a pointing HAL takes its cursor
+ *  back. Called by the board on the walk-out gesture (e.g. 3 quick UPs at the top
+ *  line); a later click/keystroke in the box re-lights it. Lcd task. */
+void lcdCaretRelease(void);
+
 /** Direction for lcdScroll(): the way the content moves to reveal what's
  *  offscreen (DOWN = show the content below, etc.). */
 typedef enum { LCD_SCROLL_UP, LCD_SCROLL_DOWN, LCD_SCROLL_LEFT, LCD_SCROLL_RIGHT } lcd_scroll_dir_t;

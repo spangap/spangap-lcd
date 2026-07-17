@@ -193,13 +193,23 @@ static void cursorHideCb(lv_timer_t*) {
     if (s_cursor) lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* Show the cursor and (re)start the inactivity countdown. No-op when always-on. */
+/* Show the cursor and (re)start the inactivity countdown. Always un-hides — even
+ * when always-on — because arrow mode can hide the cursor out from under an
+ * always-on policy (lcdPointerHide), and a later move must bring it back. */
 static void cursorPoke(void) {
-    if (!s_cursor || s_ptrVisMs < 0) return;
+    if (!s_cursor) return;
     lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+    if (s_ptrVisMs < 0) return;                 /* always-on: shown, no hide timer */
     if (s_ptrHide) { lv_timer_reset(s_ptrHide); return; }
     s_ptrHide = lv_timer_create(cursorHideCb, s_ptrVisMs > 0 ? (uint32_t)s_ptrVisMs : 1, nullptr);
     lv_timer_set_repeat_count(s_ptrHide, 1);
+}
+
+/* Hide the cursor now (see lcd_internal.h) — used when a caret grabs the trackball
+ * for arrow keys, so the pointer leaves at once rather than fading on its dwell. */
+void lcdPointerHide(void) {
+    if (s_cursor) lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+    if (s_ptrHide) { lv_timer_delete(s_ptrHide); s_ptrHide = nullptr; }
 }
 
 /* Glide the cursor toward (x,y) instead of teleporting. The trackball delivers one
@@ -211,16 +221,10 @@ static void cursorPoke(void) {
 static void cursorGlideTo(int x, int y, bool snap) {
     if (!s_cursor) return;
 
-    /* The board clamps the logical point (the click position, also its edge-pan
-     * trigger) to the screen edge, but the cursor is drawn from its top-left, so
-     * at the right/bottom edge the box would spill off. Clamp the *drawn* position
-     * to [0, scr - size] to keep the whole cursor visible; the logical point the
-     * caller passes on to LVGL is left at the edge. */
-    int scrW = 0, scrH = 0;
-    lcdDisplaySize(&scrW, &scrH);
-    x = std::clamp(x, 0, (scrW > LCD_CURSOR_SIZE ? scrW : LCD_CURSOR_SIZE) - LCD_CURSOR_SIZE);
-    y = std::clamp(y, 0, (scrH > LCD_CURSOR_SIZE ? scrH : LCD_CURSOR_SIZE) - LCD_CURSOR_SIZE);
-
+    /* (x,y) is the sprite's top-left = hotspot − half (pointerReadCb centres the
+     * ball on the hotspot). We do NOT clamp it to keep the whole ball on-screen:
+     * a partly-drawn ball at the edge is fine, and it keeps the ball's centre on
+     * the click point all the way to the edge. */
     if (snap) { lv_anim_delete(s_cursor, nullptr); lv_obj_set_pos(s_cursor, x, y); return; }
     lv_anim_t a;
     lv_anim_init(&a);
@@ -238,10 +242,16 @@ static void cursorGlideTo(int x, int y, bool snap) {
 static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
     const lcd_input_t* in = lcdInput();
     int x = 0, y = 0;
-    if (in && in->pointer_read && in->pointer_read(&x, &y)) {   /* moved */
+    bool moved = in && in->pointer_read && in->pointer_read(&x, &y);
+    /* The board reports the hotspot (edge-reachable, 0..scr-1). Draw the ball
+     * CENTRED on it — top-left = hotspot − half — so a click lands under the middle
+     * of the ball. The ball clips at the edges rather than being nudged inward, so
+     * the hotspot reaches all the way to the edge. */
+    const int half = LCD_CURSOR_SIZE / 2;
+    if (moved) {
         bool wasHidden = s_cursor && lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         cursorPoke();
-        cursorGlideTo(x, y, wasHidden);    /* snap into view, then ease on later pulses */
+        cursorGlideTo(x - half, y - half, wasHidden);
     }
     data->point.x = x;
     data->point.y = y;

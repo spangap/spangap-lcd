@@ -132,6 +132,18 @@ the cursor:
   [docs/apps.md](docs/apps.md)). A trackball board's `pointer_read` consults it
   and feeds arrow keys into `lcdInputGroup()` instead of moving the pointer, so a
   terminal / vim can navigate.
+- `lcdCaretActive(*x, *y, *atTop)` / `lcdCaretRelease()` — a finer, app-agnostic
+  arrow-mode trigger for **text entry**. A box made with `lcdInputBoxCreate()` (a
+  thin `lv_textarea` wrapper in [lcd_input_box.h](esp-idf/include/lcd_input_box.h)
+  — auto-grow between N lines, double-space → `". "`, trailing-trim, starts
+  capitalised) lights its caret on a click/keystroke; while it blinks
+  `lcdCaretActive()` returns true and the caret's screen position (and whether it
+  is on the first line). A trackball board drives the caret with arrow keys while
+  it holds, and on a walk-out gesture (e.g. 3 quick UPs at the top line) calls
+  `lcdCaretRelease()` and parks its cursor on the caret. **No timeout — the blink
+  IS the state.** Independent of the whole-program `lcdScrollwheelArrowsActive()`
+  latch; a board treats either as "drive arrows". `lcdPointerHide()` takes the
+  cursor off screen at once when a caret grabs it (rather than on the dwell timer).
 
 **Multi-touch / gestures.** Single-touch is the default (the cheapest path). A
 board that wants raw multi-finger input (e.g. pinch-zoom) enables multipoint
