@@ -165,7 +165,7 @@ void pushMenu(Node* menu) {
         lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
         /* Menu items get a larger face than the in-pane controls (which keep the
          * inherited size) — these are the primary tap targets. Scaled by zoom. */
-        lv_obj_set_style_text_font(lbl, lcdFont(LcdFace::UI, (int)(16 * lcdUiScale() + 0.5f)), 0);
+        lv_obj_set_style_text_font(lbl, lcdFont(LcdFace::UI, lcdPx(16)), 0);
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 10, 0);
 
         if (!k->fn) {                  /* submenu chevron */

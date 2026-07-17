@@ -31,12 +31,11 @@ std::vector<Tile> s_tiles;
 std::vector<int>  s_pageFill;   /* tiles placed on each page (for spill) */
 
 /* A sheet length scaled by the runtime UI zoom. */
-int sc(int v) { return (int)(v * lcdUiScale() + 0.5f); }
 
 int pageW() { return lcdScreenW(); }
-int dotRowH() { return sc(16); }
+int dotRowH() { return lcdPx(16); }
 /* Icon raster size for the current tile + zoom: the sheet base × UI scale. */
-int iconPx() { return (int)(lcdStyle().launcher.iconPx * lcdUiScale() + 0.5f); }
+int iconPx() { return lcdPx(lcdStyle().launcher.iconPx); }
 int pageH() { return (lcdScreenH() - lcdStyle().statusBar.h) - dotRowH(); }
 
 /* Derived grid: tiles size from the viewport, not the sheet (plan §4). cols =
@@ -46,9 +45,9 @@ int pageH() { return (lcdScreenH() - lcdStyle().statusBar.h) - dotRowH(); }
 struct Grid { int cols, rows, tileW, tileH, cap; };
 Grid gridFor() {
     const LcdStyle& st = lcdStyle();
-    int padL = sc(st.launcher.padLeft), padT = sc(st.launcher.padTop);
-    int padC = sc(st.launcher.padCol),  padR = sc(st.launcher.padRow);
-    int minT = sc(st.launcher.minTilePx);
+    int padL = lcdPx(st.launcher.padLeft), padT = lcdPx(st.launcher.padTop);
+    int padC = lcdPx(st.launcher.padCol),  padR = lcdPx(st.launcher.padRow);
+    int minT = lcdPx(st.launcher.minTilePx);
     if (minT < 1) minT = 1;
 
     int availW = pageW() - 2 * padL;
@@ -56,8 +55,8 @@ Grid gridFor() {
     if (cols < 1) cols = 1;
     int tileW = (availW - (cols - 1) * padC) / cols;
 
-    int labelH = st.launcher.labelFont ? lv_font_get_line_height(st.launcher.labelFont) : sc(14);
-    int tileH  = iconPx() + labelH + sc(10);   /* icon + label + internal pads */
+    int labelH = st.launcher.labelFont ? lv_font_get_line_height(st.launcher.labelFont) : lcdPx(14);
+    int tileH  = iconPx() + labelH + lcdPx(10);   /* icon + label + internal pads */
 
     int availH = pageH() - 2 * padT;
     int rows = (availH + padR) / (tileH + padR);
@@ -85,9 +84,9 @@ void updateDots() {
         lv_obj_t* d = lv_obj_create(s_dots);
         lv_obj_remove_style_all(d);
         bool active = ((int)i == cur);
-        lv_obj_set_size(d, sc(active ? st.launcher.dotActive : st.launcher.dotSize),
-                            sc(st.launcher.dotSize));
-        lv_obj_set_style_radius(d, sc(st.launcher.dotSize) / 2, 0);
+        lv_obj_set_size(d, lcdPx(active ? st.launcher.dotActive : st.launcher.dotSize),
+                            lcdPx(st.launcher.dotSize));
+        lv_obj_set_style_radius(d, lcdPx(st.launcher.dotSize) / 2, 0);
         lv_obj_set_style_bg_color(d, lv_color_hex(active ? 0xE0E0E0 : 0x404850), 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
     }
@@ -108,10 +107,10 @@ lv_obj_t* ensurePage(int n) {
         lv_obj_remove_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(pg, LV_FLEX_FLOW_ROW_WRAP);
         lv_obj_set_flex_align(pg, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-        lv_obj_set_style_pad_top(pg, sc(st.launcher.padTop), 0);
-        lv_obj_set_style_pad_left(pg, sc(st.launcher.padLeft), 0);
-        lv_obj_set_style_pad_row(pg, sc(st.launcher.padRow), 0);
-        lv_obj_set_style_pad_column(pg, sc(st.launcher.padCol), 0);
+        lv_obj_set_style_pad_top(pg, lcdPx(st.launcher.padTop), 0);
+        lv_obj_set_style_pad_left(pg, lcdPx(st.launcher.padLeft), 0);
+        lv_obj_set_style_pad_row(pg, lcdPx(st.launcher.padRow), 0);
+        lv_obj_set_style_pad_column(pg, lcdPx(st.launcher.padCol), 0);
         s_pages.push_back(pg);
         s_pageFill.push_back(0);
     }
@@ -158,7 +157,7 @@ void shellLauncherInit(lv_obj_t* screen) {
     lv_obj_set_style_bg_opa(s_dots, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(s_dots, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(s_dots, sc(6), 0);
+    lv_obj_set_style_pad_column(s_dots, lcdPx(6), 0);
     lv_obj_remove_flag(s_dots, LV_OBJ_FLAG_SCROLLABLE);
 
     s_pageFill.clear();
@@ -187,8 +186,8 @@ void shellLauncherAddTile(LcdApp* app) {
     lv_obj_set_size(tile, g.tileW, g.tileH);
     lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(tile, sc(4), 0);
-    lv_obj_set_style_pad_top(tile, sc(4), 0);
+    lv_obj_set_style_pad_row(tile, lcdPx(4), 0);
+    lv_obj_set_style_pad_top(tile, lcdPx(4), 0);
     lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(tile, onTileClick, LV_EVENT_CLICKED, app);
     if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), tile);

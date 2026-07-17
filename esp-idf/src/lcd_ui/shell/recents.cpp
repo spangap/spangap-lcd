@@ -171,7 +171,7 @@ void addCard(LcdApp* app) {
         /* No snapshot yet (never minimised) — fall back to the launcher icon,
          * rasterized at the recents icon size. */
         const char* base = app->cfg().iconBasename ? app->cfg().iconBasename : "";
-        int px = (int)(lcdStyle().recents.iconPx * lcdUiScale() + 0.5f);
+        int px = lcdPx(lcdStyle().recents.iconPx);
         const lv_image_dsc_t* dsc = lcdIconDsc(base, px);
         if (dsc) {
             lv_image_set_src(thumb, dsc);

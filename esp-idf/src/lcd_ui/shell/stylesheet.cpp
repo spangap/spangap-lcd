@@ -75,6 +75,7 @@ void installTheme(const LcdStyle& s) {
 
 const LcdStyle& lcdStyle(void) { return s_active; }
 float           lcdUiScale(void) { return s_uiScale; }
+int             lcdPx(int px)    { return (int)(px * s_uiScale + 0.5f); }
 
 void lcdStyleBegin(int w, int h) {
     const LcdStyle* pick = &lcdStyleDefault320x240;

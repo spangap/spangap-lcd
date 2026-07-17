@@ -262,6 +262,11 @@ void lcdFontsReset(void);
  *  own fonts rebuilds at the current scale on its next open. Lcd task. */
 float lcdUiScale(void);
 
+/** A base pixel length scaled to the current UI zoom and rounded — `lcdUiScale()`
+ *  applied to `px`. Use for any hard-coded pixel dimension (margins, paddings,
+ *  gaps, font sizes) so on-device layout tracks the platform zoom. Lcd task. */
+int lcdPx(int px);
+
 /* Bundled LVGL bitmap fonts a program may set directly on its own widgets with
  * lv_obj_set_style_text_font(). */
 
