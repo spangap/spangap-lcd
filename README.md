@@ -278,6 +278,30 @@ generation, licensing) is in
 [docs/shell-internals.md](docs/shell-internals.md) and
 [docs/terminal-internals.md](docs/terminal-internals.md).
 
+## LVGL gotchas
+
+Behaviours that cost real debugging here — check these before fighting the layout
+engine (several bit in [lcd_input_box.cpp](esp-idf/src/lcd_ui/lcd_input_box.cpp)):
+
+- **Intercepting a key means `LV_EVENT_PREPROCESS`.** A plain `lv_obj_add_event_cb`
+  runs *after* the widget's own class handler, so zeroing/altering the key there is
+  too late — the textarea has already inserted/deleted. Register the filter as
+  `filter | LV_EVENT_PREPROCESS` to run first (that's how the caps-mode backspace is
+  eaten).
+- **`lv_textarea_set_insert_replace(ta, txt)` keeps the pointer, not a copy**, and
+  reads it after the callback returns. `txt` must outlive the event — never a stack
+  buffer (a stack `char[]` gave "every first char becomes garbage").
+- **A hidden object won't lay out or scroll.** `lv_obj_scroll_to_y()` and height
+  reads on an object under `LV_OBJ_FLAG_HIDDEN` are no-ops; unhide first, *then*
+  render / measure / scroll (else a freshly-shown page lands scrolled to the top).
+- **Content size lags one frame inside `LV_EVENT_VALUE_CHANGED`** — the label hasn't
+  re-wrapped yet, so a height read there is the *old* height. Force
+  `lv_obj_update_layout()` before measuring, and reset the internal scroll or a
+  grown box shows a phantom scrollbar with the caret hidden below the fold.
+- **Flex `flex_grow` fills the main axis; per-item cross alignment doesn't exist.**
+  To top-align one child and bottom-align another in the same row, size a sub-column
+  to the row and justify within it (that's how the compose Send bottom-aligns).
+
 ## Dependencies
 
 - [spangap-core](../spangap-core) — base runtime (ITS, storage, log, CLI, fs, mem).
