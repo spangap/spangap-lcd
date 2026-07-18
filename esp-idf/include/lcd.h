@@ -280,6 +280,26 @@ float lcdUiScale(void);
  *  gaps, font sizes) so on-device layout tracks the platform zoom. Lcd task. */
 int lcdPx(int px);
 
+/* ---- Runtime SVG icons ----
+ * Straddles ship icon *sources* to /fixed/icons/<base>.svg (see the
+ * spangap_lcd_icons() build helper); the device rasterizes them on demand at an
+ * exact pixel size and RAM-caches the result. The rasters are monochrome — tint
+ * at use with the image recolor style. All three run on the lcd task. */
+
+/** Ask the loader to rasterize /fixed/icons/<base>.svg at `px` (no-op if already
+ *  cached). Rasterization is off-task, so the descriptor isn't ready on return;
+ *  set it from your own periodic refresh once lcdIconReady()/lcdIconDsc() report
+ *  it landed. */
+void lcdIconRequest(const char* base, int px);
+
+/** True once (base, px) is rasterized and cached. */
+bool lcdIconReady(const char* base, int px);
+
+/** The cached descriptor for (base, px), or nullptr until it lands. The pointer
+ *  is stable for the cache's lifetime — hand it to lv_image_set_src(). A UI-zoom
+ *  icon-cache reset invalidates it, so re-source on your next rebuild. */
+const lv_image_dsc_t* lcdIconDsc(const char* base, int px);
+
 /* Bundled LVGL bitmap fonts a program may set directly on its own widgets with
  * lv_obj_set_style_text_font(). */
 

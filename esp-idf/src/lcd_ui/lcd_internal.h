@@ -96,20 +96,12 @@ void        lcdScrollwheelArrowsApply(bool on);
  *  pointer off screen at once instead of on its dwell timer. */
 void        lcdPointerHide(void);
 
-/* ---- lcd_icons.cpp: runtime SVG rasterizer + RAM cache + loader ---- */
+/* ---- lcd_icons.cpp: runtime SVG rasterizer + RAM cache + loader ----
+ * The consumer-facing loader/query trio (lcdIconRequest / lcdIconReady /
+ * lcdIconDsc) is declared in the public lcd.h; on completion the lcd task also
+ * calls lcdLauncherIconLoaded(base, px). */
 /** Start the icon loader task. Call after lv_init(). */
 void        lcdIconsInit(void);
-/** True iff the icon for `basename` at `px` is already rasterized + cached
- *  (lcd-task-only). */
-bool        lcdIconReady(const char* basename, int px);
-/** The cached LVGL image descriptor for (basename, px), or nullptr if not yet
- *  rasterized. The pointer is stable for the cache's lifetime — hand it to
- *  lv_image_set_src(). Lcd task only. */
-const lv_image_dsc_t* lcdIconDsc(const char* basename, int px);
-/** Ask the loader (off the lcd task) to rasterize `basename` at `px`. On
- *  completion the lcd task caches it and calls lcdLauncherIconLoaded(base, px).
- *  No-op if already cached. */
-void        lcdIconRequest(const char* basename, int px);
 /** Drop every cached raster (a runtime zoom change; re-request at the new px). */
 void        lcdIconsReset(void);
 
