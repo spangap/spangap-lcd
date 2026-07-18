@@ -10,11 +10,12 @@
 # nanosvg — there is no build-time raster pipeline and no size buckets. Sources
 # live outside data/ so only what's merged here ships.
 #
-# Two source dirs are merged at build time: spangap-lcd's own
-# assets/lcd-icons/ (platform defaults — gear/log/cli) always, plus the
-# consumer's SRC_DIR if given. On a basename collision the consumer wins — the
-# build-time analogue of the data/ merge. SRC_DIR is therefore optional; a
-# consumer with no icons of its own still inherits the platform defaults.
+# Icon sources are collected from EVERY staged component that ships an
+# assets/lcd-icons/ dir — each straddle owns the launcher icons for its own
+# apps (the firmware analogue of the web dock's per-straddle glob in
+# stage_web_icons). A consumer SRC_DIR, if given, is merged last so a buildable
+# can override an icon by basename ("later wins"). SRC_DIR is optional; most
+# buildables ship no icons of their own and need none.
 #
 # Requires spangap_create_factory_image() first.
 function(spangap_lcd_icons)
@@ -48,9 +49,18 @@ function(spangap_lcd_icons)
 
     set(_data_merged "${CMAKE_BINARY_DIR}/data_merged")
 
-    # Platform defaults first (low precedence), consumer SRC_DIR second so it
-    # overrides on basename. SRC_DIR is optional.
-    set(_src_args --src "${_lcd_dir}/assets/lcd-icons")
+    # Every staged component that carries an assets/lcd-icons/ dir contributes
+    # its launcher icons (unique basenames per straddle, so merge order is
+    # immaterial). A consumer SRC_DIR is appended last so a buildable can
+    # override an icon by basename ("later wins" in lcd-icons.py).
+    set(_src_args "")
+    idf_build_get_property(_comps BUILD_COMPONENTS)
+    foreach(_c IN LISTS _comps)
+        idf_component_get_property(_cd ${_c} COMPONENT_DIR)
+        if(_cd AND IS_DIRECTORY "${_cd}/assets/lcd-icons")
+            list(APPEND _src_args --src "${_cd}/assets/lcd-icons")
+        endif()
+    endforeach()
     if(_DLI_SRC_DIR)
         list(APPEND _src_args --src "${_DLI_SRC_DIR}")
     endif()
