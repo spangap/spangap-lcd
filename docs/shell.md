@@ -43,6 +43,12 @@ purely event-driven (no polling):
   only reports association.
 - **Battery** (right) — a battery glyph from `battery.percent`, red below ~12%;
   hidden entirely on a board that publishes no `battery.percent`.
+- **Straddle indicators** (right, left of the battery) — any straddle may add its
+  own indicator with `lcdStatusbarAddIndicator()` (public, `lcd.h`), which returns
+  an empty content-width slot the caller fills with whatever LVGL children it
+  likes and updates off its own storage subscription. The shell only positions
+  the slot; it never interprets the content, so it stays agnostic to what any
+  straddle chooses to display.
 
 The clock format key is owned here (`s.lcd.date_format`); the rest are read from
 keys other straddles publish (see the [README](../README.md#storage-variables)).

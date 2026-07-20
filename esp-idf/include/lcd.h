@@ -92,6 +92,16 @@ void lcdScreenWake(void);
  *  height automatically. Runs on the lcd task; call from a registered fn. */
 void lcdProgramFullscreen(bool on);
 
+/** Add a content-agnostic indicator slot to the status bar's right-hand cluster,
+ *  just left of the battery/power symbol, and return it (an empty, content-sized
+ *  flex row). The caller owns the returned object: it fills it with any LVGL
+ *  children (a glyph, signal bars, a coloured dot…), updates them (typically off
+ *  a storageSubscribeChanges callback, hopping onto the lcd task), and shows or
+ *  hides the slot. The shell only positions the slot — it never interprets the
+ *  content — so it stays agnostic to what any consumer chooses to display.
+ *  Returns null if the status bar isn't up yet. Lcd task. */
+lv_obj_t* lcdStatusbarAddIndicator(void);
+
 /** Program property (mirrors lcdProgramFullscreen): while this program's layer
  *  is the one on screen, the trackball emits arrow keys into the focus group
  *  instead of moving the pointer — so an on-device terminal / vim can navigate.

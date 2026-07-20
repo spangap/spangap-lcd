@@ -18,7 +18,13 @@ display/LVGL/task foundation in `src/lcd_ui/`:
 - **launcher.cpp** — the paged icon grid (a horizontal pager of flex-wrap pages
   + a dot row), `shellLauncherAddTile`, and the icon-loaded hook.
 - **statusbar.cpp** — the opaque top bar renderer (clock/wifi/upstream/battery),
-  all event-driven off storage subscriptions.
+  all event-driven off storage subscriptions. `lcdStatusbarAddIndicator()` hands
+  a straddle a bare, content-width flex slot in the right-hand cluster, inserted
+  just left of the battery via `lv_obj_move_to_index(slot, index_of(s_batt))`.
+  The shell keeps no reference to the slot's contents and never interprets them —
+  the caller owns the children and their updates — so the bar stays agnostic to
+  consumer concepts (e.g. the reticulous gw signal bars). Contrast the older,
+  still-unrendered per-app `LcdApp::setStatusIcon` stub.
 - **nav.cpp** — the ESC→Back producer. LVGL has no group-wide key hook, so it
   tracks the focused object via the group's focus callback and keeps an
   `LV_KEY_ESC` handler on whatever holds focus. ESC is passed *through* (not

@@ -21,11 +21,12 @@
 
 namespace {
 
-lv_obj_t* s_bar   = nullptr;
-lv_obj_t* s_clock = nullptr;
-lv_obj_t* s_wifi  = nullptr;
-lv_obj_t* s_batt  = nullptr;
-lv_obj_t* s_up    = nullptr;   /* upstream-reachable glyph (wifi.sta.up) */
+lv_obj_t* s_bar     = nullptr;
+lv_obj_t* s_clock   = nullptr;
+lv_obj_t* s_wifi    = nullptr;
+lv_obj_t* s_batt    = nullptr;
+lv_obj_t* s_up      = nullptr;   /* upstream-reachable glyph (wifi.sta.up) */
+lv_obj_t* s_cluster = nullptr;   /* right-hand flex row that holds the indicators */
 
 void updateClock(lv_timer_t* t) {
     char fmt[64];
@@ -117,6 +118,7 @@ void lcdStatusbarInit(void) {
     /* Right cluster (upstream, battery, wifi), right-aligned in a flex row so a
      * hidden element (e.g. battery on a board without one) collapses cleanly. */
     lv_obj_t* cluster = lv_obj_create(s_bar);
+    s_cluster = cluster;
     lv_obj_remove_style_all(cluster);
     lv_obj_set_height(cluster, st.statusBar.h);
     lv_obj_set_width(cluster, LV_SIZE_CONTENT);
@@ -159,6 +161,24 @@ void lcdStatusbarSetVisible(bool visible) {
     if (!s_bar) return;
     if (visible) lv_obj_remove_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     else         lv_obj_add_flag   (s_bar, LV_OBJ_FLAG_HIDDEN);
+}
+
+lv_obj_t* lcdStatusbarAddIndicator(void) {
+    if (!s_cluster) return nullptr;
+    /* A bare, content-sized flex row the caller owns and fills with any LVGL
+     * children it likes (glyph, bars, dot…). The shell only places it — it does
+     * not interpret the content — so this stays agnostic to what it displays. */
+    lv_obj_t* slot = lv_obj_create(s_cluster);
+    lv_obj_remove_style_all(slot);
+    lv_obj_set_size(slot, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(slot, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(slot, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(slot, lcdPx(1), 0);
+    lv_obj_remove_flag(slot, LV_OBJ_FLAG_SCROLLABLE);
+    /* Land it just left of the battery/power symbol; earlier indicators keep
+     * their order, so the newest sits nearest the battery. */
+    if (s_batt) lv_obj_move_to_index(slot, lv_obj_get_index(s_batt));
+    return slot;
 }
 
 void lcdStatusbarRestyle(void) {
