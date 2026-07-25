@@ -114,7 +114,7 @@ The board attaches the component's exported `lcdInputISR` to its input INT lines
 event-mode indevs on demand (no input polling). A hardware text keyboard is not
 part of the HAL: a board with one creates its own keypad indev on
 `lcdInputGroup()` and calls `lcdSetHasKeyboard(true)`. For the LilyGo T-Deck
-Plus, [hw-tdeck](../hw-tdeck) provides the input HAL (GT911 touch, trackball,
+Plus, [hw-lilygo-tdeck](../hw-lilygo-tdeck) provides the input HAL (GT911 touch, trackball,
 centre button) and sets the panel pins.
 
 A board that reads its own keys (the built-in touch/button/trackball indevs

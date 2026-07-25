@@ -138,7 +138,7 @@ rotation are config; the same rotation is applied to raw touch.
 `include/lcd_input.h` declares the only thing the consuming app implements: the
 input HAL — `touch_read` (raw native points), `pointer_read` (cursor device),
 and `click_read` (centre/Home button; the board owns the click-vs-hold policy and
-calls `lcdGoHome()` on a hold). All optional. The hw-tdeck straddle provides this
+calls `lcdGoHome()` on a hold). All optional. The hw-lilygo-tdeck straddle provides this
 in `tdeck_lcd.cpp` for the LilyGo T-Deck Plus (GT911 touch, trackball, centre
 button).
 

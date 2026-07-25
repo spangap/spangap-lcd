@@ -18,7 +18,7 @@ dependencies:
   # is still Kconfig-gated in CMakeLists.txt, so screen-less builds compile
   # LVGL but don't link it into the final binary. esp_lcd_touch is brought
   # in transitively by the consumer's specific touch driver (e.g.
-  # esp_lcd_touch_gt911 in hw-tdeck).
+  # esp_lcd_touch_gt911 in hw-lilygo-tdeck).
   lvgl/lvgl:
     version: "^9.2"
   # ILI9341 panel controller (the CONFIG_LCD_CONTROLLER choice). ST7789 is built
