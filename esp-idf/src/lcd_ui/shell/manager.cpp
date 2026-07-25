@@ -298,6 +298,7 @@ void shellInit(lv_obj_t* screen) {
     lcdSettingsInit();                 /* gear (Settings host) */
     lcdInstall(lcdMakeLogApp());       /* Log */
     lcdInstall(lcdMakeCliApp());       /* CLI */
+    lcdInstall(lcdMakeActmonApp());    /* Activity (CPU/PM graphs) */
 
     info("phone shell ready\n");
 }

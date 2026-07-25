@@ -89,6 +89,8 @@ void shellApplyZoom(void);
 LcdApp* lcdMakeLogApp(void);
 /** The on-device CLI program as an LcdApp (apps/cli_app.cpp). */
 LcdApp* lcdMakeCliApp(void);
+/** The Activity monitor (CPU/PM running graphs) as an LcdApp (apps/actmon_app.cpp). */
+LcdApp* lcdMakeActmonApp(void);
 
 /* ---- nav / chrome: the home-bar gesture lives with the manager in M1; M3
  *      promotes it to nav.cpp with the RECENTS dwell + ESC + nav bar. ---- */
