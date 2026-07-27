@@ -18,6 +18,7 @@
 #include "its.h"
 #include "log.h"
 #include "compat.h"
+#include "pm.h"
 
 #include "esp_attr.h"
 #include "freertos/semphr.h"
@@ -205,6 +206,8 @@ static void lcdTaskFn(void*) {
 
 void lcdInit(void) {
     if (lcdTaskHandle) return;
+
+    pmStatsRequest();   /* the Activity app renders the CPU/PM ring → needs it sampling */
 
     storageBegin();
     storageDefault("s.lcd.backlight",    200);
