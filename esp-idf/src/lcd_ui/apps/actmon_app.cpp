@@ -162,7 +162,7 @@ void drawTraffic(int y0, int h, int n, bool packets, lv_obj_t* peakLabel,
         int lo = outPx < inPx ? outPx : inPx, hi = outPx > inPx ? outPx : inPx;
         int x = s.W - n + i;
         if (lo > 0)      vseg(x, bottom - lo + 1, bottom, C_MIX);
-        if (hi > lo)     vseg(x, bottom - hi + 1, bottom - lo, o >= in ? C_BLUE : C_IN);
+        if (hi > lo)     vseg(x, bottom - hi + 1, bottom - lo, o >= in ? C_YELLOW : C_BLUE);
     }
     if (peakLabel) {
         char buf[24];
@@ -345,7 +345,7 @@ public:
         lv_obj_align(s.wifiFloat, LV_ALIGN_TOP_LEFT, 2, TR_Y + TR_H - 11);
 
         /* IN / OUT legend under the traffic graph (bottom). */
-        s.inoutLegend = mkCaption(root, TR_Y + TR_H, "#E8D040 IN# / #4088E8 OUT#");
+        s.inoutLegend = mkCaption(root, TR_Y + TR_H, "#4088E8 IN# / #E8D040 OUT#");
 
         s.trafPeak = mkPeakLabel(root);
         s.pktPeak  = mkPeakLabel(root);
