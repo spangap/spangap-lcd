@@ -387,8 +387,12 @@ lv_obj_t* lcdSettingSection (lv_obj_t* parent, const char* title);
 lv_obj_t* lcdSettingCaption (lv_obj_t* parent, const char* text);
 /** Toggle bound to an int key (0/1). */
 lv_obj_t* lcdSettingSwitch  (lv_obj_t* parent, const char* label, const char* key);
-/** Slider bound to an int key, clamped to [min,max]. */
-lv_obj_t* lcdSettingSlider  (lv_obj_t* parent, const char* label, const char* key, int min, int max);
+/** Slider bound to an int key, clamped to [min,max]. `minKey`/`maxKey` name
+ *  storage keys the device publishes its real limits under; where one exists it
+ *  replaces the compiled bound when the row is built, so a control can be sized
+ *  to hardware the build could not know about. */
+lv_obj_t* lcdSettingSlider  (lv_obj_t* parent, const char* label, const char* key, int min, int max,
+                             const char* minKey = nullptr, const char* maxKey = nullptr);
 /** Text field bound to a string key; tap opens an on-screen keyboard. When
  *  `secret`, the value is masked. */
 lv_obj_t* lcdSettingText    (lv_obj_t* parent, const char* label, const char* key, bool secret = false);

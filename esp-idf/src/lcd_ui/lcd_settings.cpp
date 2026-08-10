@@ -532,7 +532,17 @@ lv_obj_t* lcdSettingSwitch(lv_obj_t* parent, const char* label, const char* key)
 }
 
 lv_obj_t* lcdSettingSlider(lv_obj_t* parent, const char* label, const char* key,
-                           int min, int max) {
+                           int min, int max, const char* minKey, const char* maxKey) {
+    /* A bound the device publishes outranks the one compiled in: the firmware
+     * can measure what the hardware in front of it will actually do, and a
+     * control offering more than that is offering something it cannot deliver.
+     * Read when the row is built — a published capability is established at
+     * startup, long before a pane is opened — falling back to the compiled
+     * bound while the key does not exist. */
+    if (minKey) min = storageGetInt(minKey, min);
+    if (maxKey) max = storageGetInt(maxKey, max);
+    if (max < min) max = min;
+
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
 
