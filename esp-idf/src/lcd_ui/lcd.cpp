@@ -207,8 +207,6 @@ static void lcdTaskFn(void*) {
 void lcdInit(void) {
     if (lcdTaskHandle) return;
 
-    pmStatsRequest();   /* the Activity app renders the CPU/PM ring → needs it sampling */
-
     storageBegin();
     storageDefault("s.lcd.backlight",    200);
     storageDefault("s.lcd.scale",        100);   /* UI zoom %, clamp 50–200 */

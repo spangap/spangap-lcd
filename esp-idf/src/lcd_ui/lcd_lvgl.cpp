@@ -470,7 +470,13 @@ void lcdMirrorApplyHold(void) {
     if (want == s_mirrorHold) return;
     s_mirrorHold = want;
     if (want) {
-        lcdScreenWake();                /* pull out of standby for the viewer */
+        /* Leave standby the one way anything leaves it: by clearing the key the
+         * board owns. Calling lcdScreenWake() here instead would light the panel
+         * behind the board's back — sys.standby would stay set (its input still
+         * powered down, its wake source still armed), and the blank timer's later
+         * `sys.standby = 1` would be a no-change write that storage dedups away,
+         * so no subscriber ever sees it and the screen never blanks again. */
+        storageSet("sys.standby", 0);
         if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
     } else {
         armBlankTimer();                /* restore the configured timeout */

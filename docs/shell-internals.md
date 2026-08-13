@@ -242,7 +242,12 @@ visible).
 The inactivity timer (`lcd_lvgl.cpp`, armed by the `s.lcd.inactivity_timeout`
 subscription) sets the ephemeral `sys.standby` key on expiry; the **board** owns
 what standby means and calls `lcdScreenSleep()`/`lcdScreenWake()` off that key.
-`lcdActivity()` re-arms the timer on every input edge. The backlight is held dark
+`lcdActivity()` re-arms the timer on every input edge. `sys.standby` is the only
+lever either direction: a mirror viewer's keep-awake hold (`lcdMirrorApplyHold`)
+also leaves standby by clearing that key rather than calling `lcdScreenWake()`
+itself, so the board's view of standby never drifts from the panel's — storage
+dedups a write that repeats the current value, so a key left set behind the
+board's back would swallow the next timeout expiry outright. The backlight is held dark
 from boot and faded up only once launcher icon loads go quiet (`lcdBootSettleKick`,
 debounced with a hard cap), so the UI never flashes on half-built.
 

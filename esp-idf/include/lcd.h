@@ -230,9 +230,9 @@ typedef enum { LCD_PTR_RELEASED = 0, LCD_PTR_PRESSED = 1 } lcd_ptr_state_t;
 
 /** Inject a remote pointer sample (display coords) into the same LVGL pointer
  *  path the local touch/trackball drives — so a browser mirror clicks the real
- *  UI. Queued and applied on the lcd task; also re-arms the inactivity timer /
- *  wakes the screen, so a remote viewer keeps the panel awake. Safe from any
- *  task. */
+ *  UI. Queued and applied on the lcd task. It does not touch the inactivity
+ *  timer — the viewer's session holds the panel awake (lcdMirrorKeepAwake), so
+ *  per-event pokes would be redundant. Safe from any task. */
 void lcdMirrorInjectPointer(int16_t x, int16_t y, lcd_ptr_state_t state);
 
 /** Inject a remote keystroke into the LVGL keypad focus group (lcdInputGroup) —
@@ -240,15 +240,18 @@ void lcdMirrorInjectPointer(int16_t x, int16_t y, lcd_ptr_state_t state);
  *  `key` is an LVGL key code: a Unicode codepoint for a printable character, an
  *  LV_KEY_* value for a special key (Enter, Backspace, arrows, …), optionally
  *  OR'd with LCD_KEY_CTRL for a control combo. One call is one keystroke
- *  (press+release are injected). Queued and applied on the lcd task; also re-arms
- *  the inactivity timer. Safe from any task. */
+ *  (press+release are injected). Queued and applied on the lcd task; like the
+ *  pointer inject it leaves the inactivity timer alone (the session hold owns
+ *  that). Safe from any task. */
 void lcdMirrorInjectKey(uint32_t key);
 
-/** Hold the panel awake while a remote viewer is connected. `on` wakes the screen
- *  (out of standby) and suspends the inactivity blank timer, so the mirror never
- *  goes dark under a watching viewer; `off` restores the configured timeout and
- *  re-arms it. Reference to a single viewer session (the webrtc signalling WS
- *  enforces one). Runs on / hops to the lcd task; safe from any task. */
+/** Hold the panel awake while a remote viewer is connected. `on` clears the
+ *  ephemeral `sys.standby` key — the board's own wake path, so board and panel
+ *  agree on the standby state — and suspends the inactivity blank timer, so the
+ *  mirror never goes dark under a watching viewer; `off` restores the configured
+ *  timeout and re-arms it. Reference to a single viewer session (the webrtc
+ *  signalling WS enforces one). Runs on / hops to the lcd task; safe from any
+ *  task. */
 void lcdMirrorKeepAwake(bool on);
 
 /* ---- Fonts ----
