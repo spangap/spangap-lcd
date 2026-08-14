@@ -11,6 +11,7 @@
 #include "lcd_input.h"
 
 #include "log.h"
+#include "spangap.h"      /* humanDetected — a wake is somebody touching the device */
 #include "spi_helper.h"   /* flushCb holds the shared-bus lock across the DMA drain */
 #include "storage.h"
 
@@ -443,6 +444,9 @@ void lcdScreenSleep(void) {
 
 void lcdScreenWake(void) {
     if (!s_screenOff && !s_fadingOut) return;   /* already awake / fading in */
+    /* A screen only leaves standby because a touch, a button, or a key asked it
+     * to — the one place every input path on this device converges. */
+    humanDetected("screen");
     bool wasOff = s_screenOff;
     s_fadingOut = false;                          /* cancel a fade-out in progress */
     s_screenOff = false;

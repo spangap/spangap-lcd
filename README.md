@@ -174,6 +174,11 @@ off, GRAM retained for an instant fade-in wake) and powers its own input
 down/up. The board's button sets/clears the same key, so timeout and button
 share one path.
 
+`lcdScreenWake()` also reports `humanDetected("screen")` to core: a screen only
+leaves standby because a touch, button, or key asked it to, which makes it the
+one place every input path on the device converges. Holds elsewhere that exist
+only to protect an unattended node end there (see core's `sys.human_detected`).
+
 When the panel powers off, the render loop stops (`itsPoll(portMAX_DELAY)` until
 the next input/ITS wake) **and the LVGL tick is stopped** — the 2 ms `lv_tick_inc`
 `esp_timer` is a ~500 Hz wake that otherwise defeats automatic light sleep the
