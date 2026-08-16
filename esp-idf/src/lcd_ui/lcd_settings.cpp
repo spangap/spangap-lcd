@@ -1,19 +1,32 @@
 /**
- * lcd_settings.cpp — the built-in Settings program (gear) + its menu, plus the
+ * lcd_settings.cpp — the built-in Settings program (gear) + its tree, plus the
  * lcdSetting* helpers that build uniform storage-bound rows (the on-device
  * analogue of the browser's Setting* components).
  *
- * lcdRegisterSettings() populates an in-RAM menu tree (works from any init task,
- * even before lcdInit). The gear program builds the UI lazily on the lcd task:
- * a shared header (title + back) over a stack of pages. Each submenu / item
- * pane is its own opaque page; descending pushes a new one on top, Back deletes
- * it to reveal the parent (scroll position preserved). See the nav block below.
+ * ONE TREE, no leaf/container split. Every node holds a list of row-block
+ * builders AND a list of children; entering it renders the rows first, then a
+ * chevron row per child. No node is owned: lcdSettingsContribute() names a path
+ * of ids, conjures whatever is missing, and appends its builder — so several
+ * straddles contributing at the same path concatenate. It populates an in-RAM
+ * registry, so it works from any init task, even before lcdInit.
+ *
+ * The gear program builds the UI lazily on the lcd task: a shared header (title
+ * + back) over a stack of pages. Each node is its own opaque page; descending
+ * pushes a new one on top, Back deletes it to reveal the parent (scroll
+ * position preserved). See the nav block below.
+ *
+ * Siblings sort by the one global rule shared with the web surface and the
+ * generator: nodes carrying an order first, ascending; everything else after
+ * them in contribution order. Contribution order is init order (the generator
+ * emits pre-sorted), which is meaningful — the platform's own nodes land before
+ * a consumer's.
  *
  * NOTE: storage keys passed to the helpers must be string literals / static —
  * they're stored by pointer (pages are created and destroyed as you navigate,
  * so we deliberately don't strdup).
  */
 #include "lcd_internal.h"
+#include "lcd_settings_priv.h"
 #include "lcd_app.h"
 #include "mem.h"
 
@@ -34,30 +47,42 @@ namespace {
 
 struct Node {
     std::string id;
-    std::string label;
-    int         placement = 0;         /* sibling ordering pref (see lcdRegisterSettings) */
-    lcd_fn_t    fn = nullptr;          /* non-null => leaf item */
-    std::vector<Node*> kids;
+    std::string label;                 /* long name, shown in the parent's nav row */
+    std::string shortName;             /* header text; defaults to the label */
+    bool        named      = false;    /* somebody supplied a label / short / order */
+    bool        shortNamed = false;
+    int         order    = 0;
+    bool        hasOrder = false;
+    int         arrival  = 0;          /* contribution order — the unordered tie-break */
+    std::vector<lcd_fn_t> builders;    /* the row blocks contributed at this node */
+    std::vector<Node*>    kids;
     Node* find(const std::string& cid) {
         for (auto* k : kids) if (k->id == cid) return k;
         return nullptr;
     }
 };
 Node s_root;
+int  s_arrival = 0;
 
 void titleCase(std::string& s) { if (!s.empty()) s[0] = (char)toupper((unsigned char)s[0]); }
 
-/* Bucket placements: positive toward the top, 0 middle, negative toward the bottom. */
-int placeRank(int p) { return p > 0 ? 0 : (p < 0 ? 2 : 1); }
+/* THE sibling order, identical on both surfaces and in the generator: nodes
+ * carrying an order first, ascending; everything else after them, in
+ * contribution order. No buckets, no alphabetic tier. */
+bool nodeLess(const Node* a, const Node* b) {
+    if (a->hasOrder != b->hasOrder) return a->hasOrder;
+    if (a->hasOrder && a->order != b->order) return a->order < b->order;
+    return a->arrival < b->arrival;
+}
 
 /* ---- nav UI state (lcd task only) ----
- * Each menu level and each item pane is its own opaque, full-size page stacked
- * in s_host. Descending pushes a new page ON TOP — the parent stays alive,
- * untouched, beneath it; Back deletes the top page, revealing the parent
- * exactly as it was, scroll position included. The header (back + title) lives
- * outside the pages, so Back never deletes the widget whose event it's handling
- * and descending never deletes the row being clicked (the old rebuild-in-place
- * scheme cleaned the content out from under the live click event). */
+ * Each node is its own opaque, full-size page stacked in s_host. Descending
+ * pushes a new page ON TOP — the parent stays alive, untouched, beneath it;
+ * Back deletes the top page, revealing the parent exactly as it was, scroll
+ * position included. The header (back + title) lives outside the pages, so Back
+ * never deletes the widget whose event it's handling and descending never
+ * deletes the row being clicked (the old rebuild-in-place scheme cleaned the
+ * content out from under the live click event). */
 
 const int SETTINGS_HDR_H = 30;
 
@@ -90,11 +115,13 @@ void onAnyPageScroll(lv_event_t*) { scrollIndicatorsUpdate(); }
 
 void updateHeader() {
     if (s_pages.empty()) return;
-    /* Breadcrumb ("Settings/Net/Wifi") so you can see where you are. */
+    /* Breadcrumb ("Settings/Net/Wifi") so you can see where you are. Built from
+     * the SHORT names: this is a 30px strip on a phone-sized screen, which is
+     * exactly why a node may carry a short name distinct from its long label. */
     std::string path;
     for (size_t i = 0; i < s_pages.size(); i++) {
         if (i) path += "/";
-        path += s_pages[i].node->label;
+        path += s_pages[i].node->shortName;
     }
     lv_label_set_text(s_titleLbl, path.c_str());
     if (s_pages.size() <= 1) lv_obj_add_flag   (s_back, LV_OBJ_FLAG_HIDDEN);
@@ -128,24 +155,19 @@ void afterPagePush(lv_obj_t* pg) {
     scrollIndicatorsUpdate();
 }
 
-void pushMenu(Node* menu) {
-    dbg("settings pushMenu '%s' kids=%d\n",                 /* TEMP diag */
-        menu == &s_root ? "root" : menu->label.c_str(), (int)menu->kids.size());
+/* Render one node: its own rows first (every contributed block, in order), then
+ * a navigation row per child. The page goes on the stack BEFORE the builders
+ * run, so a builder that opens a modal or reads the nav state sees a coherent
+ * stack. Children are sorted on a copy, leaving the registry untouched. */
+void pushNode(Node* node) {
     lv_obj_t* pg = makePage();
-    /* Order children by placement, then alphabetically (case-insensitive) within
-     * an equal preference. Registration order is boot/dependency order, which
-     * isn't meaningful to the user; sort a copy so the tree itself is left
-     * untouched. Mirrors the web menu's placement sort. */
-    std::vector<Node*> kids = menu->kids;
-    std::sort(kids.begin(), kids.end(), [](const Node* a, const Node* b) {
-        int ra = placeRank(a->placement), rb = placeRank(b->placement);
-        if (ra != rb) return ra < rb;
-        if (a->placement != b->placement) return a->placement < b->placement;
-        std::string la = a->label, lb = b->label;
-        for (char& c : la) c = (char)tolower((unsigned char)c);
-        for (char& c : lb) c = (char)tolower((unsigned char)c);
-        return la < lb;
-    });
+    s_pages.push_back({ pg, node });
+    updateHeader();
+
+    for (lcd_fn_t fn : node->builders) if (fn) fn(pg);
+
+    std::vector<Node*> kids = node->kids;
+    std::stable_sort(kids.begin(), kids.end(), nodeLess);
     for (Node* k : kids) {
         lv_obj_t* row = lv_button_create(pg);
         lv_obj_remove_style_all(row);
@@ -155,36 +177,20 @@ void pushMenu(Node* menu) {
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 6, 0);
         lv_obj_add_event_cb(row, onRowClick, LV_EVENT_CLICKED, k);
-        lv_obj_add_event_cb(row, [](lv_event_t* e) {    /* TEMP diag */
-            dbg("settings row PRESSED: %s\n",
-                static_cast<Node*>(lv_event_get_user_data(e))->label.c_str());
-        }, LV_EVENT_PRESSED, k);
 
         lv_obj_t* lbl = lv_label_create(row);
         lv_label_set_text(lbl, k->label.c_str());
         lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-        /* Menu items get a larger face than the in-pane controls (which keep the
-         * inherited size) — these are the primary tap targets. Scaled by zoom. */
+        /* Navigation rows get a larger face than the in-pane controls (which
+         * keep the inherited size) — these are the primary tap targets. */
         lv_obj_set_style_text_font(lbl, lcdFont(LcdFace::UI, lcdPx(16)), 0);
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 10, 0);
 
-        if (!k->fn) {                  /* submenu chevron */
-            lv_obj_t* ch = lv_label_create(row);
-            lv_label_set_text(ch, LV_SYMBOL_RIGHT);
-            lv_obj_set_style_text_color(ch, lv_color_hex(0x8a93a0), 0);
-            lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -10, 0);
-        }
+        lv_obj_t* ch = lv_label_create(row);
+        lv_label_set_text(ch, LV_SYMBOL_RIGHT);
+        lv_obj_set_style_text_color(ch, lv_color_hex(0x8a93a0), 0);
+        lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -10, 0);
     }
-    s_pages.push_back({ pg, menu });
-    updateHeader();
-    afterPagePush(pg);
-}
-
-void pushItem(Node* item) {
-    lv_obj_t* pg = makePage();
-    s_pages.push_back({ pg, item });
-    updateHeader();
-    item->fn(pg);                      /* build the pane into this page */
     afterPagePush(pg);
 }
 
@@ -199,10 +205,7 @@ void popPage() {
 
 void onRowClick(lv_event_t* e) {
     Node* n = static_cast<Node*>(lv_event_get_user_data(e));
-    if (!n) return;
-    dbg("settings row CLICKED: %s\n", n->label.c_str());   /* TEMP diag */
-    if (n->fn) pushItem(n);            /* item -> pane page */
-    else       pushMenu(n);            /* submenu -> descend */
+    if (n) pushNode(n);
 }
 
 void settingsOpen(void* arg) {
@@ -265,7 +268,7 @@ void settingsOpen(void* arg) {
     s_pillDn = makePill(LV_SYMBOL_DOWN, LV_ALIGN_BOTTOM_RIGHT);
 
     s_pages.clear();
-    pushMenu(&s_root);                 /* root page */
+    pushNode(&s_root);                 /* root page */
 }
 
 /* ---- row scaffolding ---- */
@@ -312,9 +315,15 @@ void fillRowControl(lv_obj_t* w) { lv_obj_set_flex_grow(w, 1); }
 void setValueText(lv_obj_t* lbl, const std::string& v, bool secret);   /* fwd */
 void dropdownSelect(lv_obj_t* d, const char* val);                     /* fwd */
 
-enum BindKind { BK_SWITCH, BK_SLIDER, BK_DROPDOWN, BK_TEXTLBL, BK_TEXTAREA, BK_VALUE };
+enum BindKind { BK_SWITCH, BK_SLIDER, BK_DROPDOWN, BK_TEXTLBL, BK_TEXTAREA, BK_VALUE,
+                BK_WHENKEY };
 struct Bind { std::string key; lv_obj_t* w; BindKind kind; bool secret; };
 std::vector<Bind> s_binds;
+
+/* A gate key is TRUTHY or it is not — never compared against a value. The
+ * firmware publishes gate keys as truthy/empty precisely so no UI has to know
+ * what the interesting value is. */
+bool truthy(const char* v) { return v && *v && strcmp(v, "0") != 0; }
 
 void bindApply(const Bind& b, const char* val) {
     switch (b.kind) {
@@ -330,6 +339,10 @@ void bindApply(const Bind& b, const char* val) {
                 lv_textarea_set_text(b.w, val ? val : "");
             break;
         case BK_VALUE:    lv_label_set_text(b.w, (val && *val) ? val : "\xE2\x80\x94"); break;
+        case BK_WHENKEY:
+            if (truthy(val)) lv_obj_remove_flag(b.w, LV_OBJ_FLAG_HIDDEN);
+            else             lv_obj_add_flag   (b.w, LV_OBJ_FLAG_HIDDEN);
+            break;
     }
 }
 
@@ -470,30 +483,34 @@ void onInlineCommit(lv_event_t* e) {
 
 /* ================= public registry ================= */
 
-void lcdRegisterSettings(const char* path, const char* label, lcd_fn_t fn, int placement) {
-    if (!path || !*path || !fn) return;
-    std::vector<std::string> segs;
-    std::string s;
-    for (const char* p = path; *p; p++) {
-        if (*p == '/') { if (!s.empty()) segs.push_back(s); s.clear(); }
-        else s += *p;
-    }
-    if (!s.empty()) segs.push_back(s);
-    if (segs.empty()) return;
-
+void lcdSettingsContribute(const lcd_seg_t* segs, int nsegs, lcd_fn_t fn) {
+    if (!segs || nsegs <= 0) return;
     Node* cur = &s_root;
-    for (size_t i = 0; i < segs.size(); i++) {
-        Node* n = cur->find(segs[i]);
+    for (int i = 0; i < nsegs; i++) {
+        const lcd_seg_t& s = segs[i];
+        if (!s.id || !*s.id) return;
+        Node* n = cur->find(s.id);
         if (!n) {
             n = new Node();
-            n->id = segs[i];
-            n->label = segs[i];
-            titleCase(n->label);
+            n->id      = s.id;
+            n->label   = s.id;
+            titleCase(n->label);        /* until somebody names it */
+            n->arrival = s_arrival++;
             cur->kids.push_back(n);
         }
-        if (i + 1 == segs.size()) { n->label = label ? label : n->label.c_str(); n->fn = fn; n->placement = placement; }
+        /* First contributor wins, per field. A node nobody names keeps its
+         * title-cased id; a later contributor's different name is simply not
+         * applied — the generator has already warned about the conflict. */
+        if (s.label && *s.label && !n->named) { n->label = s.label; n->named = true; }
+        if (s.shortName && *s.shortName && !n->shortNamed) {
+            n->shortName = s.shortName;
+            n->shortNamed = true;
+        }
+        if (s.has_order && !n->hasOrder) { n->hasOrder = true; n->order = s.order; }
+        if (!n->shortNamed) n->shortName = n->label;   /* short defaults to the label */
         cur = n;
     }
+    if (fn) cur->builders.push_back(fn);
 }
 
 /* ================= helpers ================= */
@@ -707,6 +724,31 @@ lv_obj_t* lcdSettingButton(lv_obj_t* parent, const char* label, lcd_fn_t onClick
     return b;
 }
 
+lv_obj_t* lcdSettingWhenKey(lv_obj_t* row, const char* key) {
+    if (!row || !key || !*key) return row;
+    /* Rides the same binding table as every other storage-bound control, so it
+     * inherits the subscribe-once / unsubscribe-with-the-last-user lifetime and
+     * the tear-down on widget delete. Storage callbacks land on the task that
+     * subscribed, and panes are built on the lcd task, so this touches LVGL
+     * directly like the rest of the table. */
+    bindAttach(row, key, BK_WHENKEY);
+    std::string v = storageGetStr(key, "");
+    if (truthy(v.c_str())) lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
+    else                   lv_obj_add_flag   (row, LV_OBJ_FLAG_HIDDEN);
+    return row;
+}
+
+/* ---- shared row scaffolding (lcd_settings_priv.h) ----
+ * The descriptor runtime builds rows that look exactly like the ones above, so
+ * it uses the same primitives rather than a second set that could drift. */
+
+lv_obj_t* lcdSettingsMakeRow(lv_obj_t* parent)                { return makeRow(parent); }
+void      lcdSettingsRowLabel(lv_obj_t* row, const char* txt) { addRowLabel(row, txt); }
+void      lcdSettingsFillControl(lv_obj_t* w)                 { fillRowControl(w); }
+void      lcdSettingsValueText(lv_obj_t* lbl, const char* v, bool secret) {
+    setValueText(lbl, v ? v : "", secret);
+}
+
 /* ================= gear program ================= */
 
 /* SettingsApp — a thin LcdApp host around the existing page-stack. onCreate
@@ -718,7 +760,14 @@ class SettingsApp : public LcdApp {
 public:
     SettingsApp() : LcdApp({ .name = "Settings", .iconBasename = "gear", .launcherPage = 0 }) {}
     void onCreate(lv_obj_t* root) override { settingsOpen(root); }
-    void onClose() override { s_pages.clear(); }   /* drop dangling page pointers */
+    void onClose() override {
+        s_pages.clear();               /* drop dangling page pointers */
+        /* Modals live on lv_layer_top, outside the app's widget tree — the
+         * app's teardown never reaches them. The descriptor runtime's (forms,
+         * dialogs) and this file's own text editor both go with the app. */
+        lcdSettingsDescReset();
+        if (s_ed.overlay) { lv_obj_delete(s_ed.overlay); s_ed.overlay = nullptr; }
+    }
 };
 }  // namespace
 
@@ -773,7 +822,12 @@ void zoomPane(void* arg) {
 }  // namespace
 
 void lcdSettingsInit(void) {
-    s_root.label = "Settings";
-    lcdRegisterSettings("display/zoom", "UI Zoom", zoomPane, 1);
+    s_root.label     = "Settings";
+    s_root.shortName = "Settings";
+    static const lcd_seg_t kZoom[] = {
+        { .id = "display", .label = "Display", .shortName = "Display", .order = 0, .has_order = false },
+        { .id = "zoom",    .label = "UI Zoom", .shortName = "Zoom",    .order = 1, .has_order = true  },
+    };
+    lcdSettingsContribute(kZoom, 2, zoomPane);
     lcdInstall(new SettingsApp());
 }

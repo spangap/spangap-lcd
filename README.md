@@ -35,7 +35,7 @@ version.
 |---|---|---|
 | **Shell** — launcher, status bar, navigation, recents switcher, the foreground/back/home state machine | [docs/shell.md](docs/shell.md) | [docs/shell-internals.md](docs/shell-internals.md) |
 | **Apps** — the `LcdApp` lifecycle, `lcdInstall`, input groups, per-app keypad focus | [docs/apps.md](docs/apps.md) | [docs/apps-internals.md](docs/apps-internals.md) |
-| **Settings** — `lcdRegisterSettings` + the `lcdSetting*` pane builders | [docs/settings.md](docs/settings.md) | [docs/settings-internals.md](docs/settings-internals.md) |
+| **Settings** — the one settings tree: `lcdSettingsContribute`, the `lcdSetting*` row builders, and the descriptor runtime behind actions/forms/collections | [docs/settings.md](docs/settings.md) | [docs/settings-internals.md](docs/settings-internals.md) |
 | **Terminal** — the virtualized text view and the libvterm-backed VT100 terminal | [docs/terminal.md](docs/terminal.md) | [docs/terminal-internals.md](docs/terminal-internals.md) |
 
 The shared foundation that every function sits on — the display bring-up, the
@@ -74,13 +74,21 @@ code on it:
 
 ```cpp
 #if CONFIG_SPANGAP_LCD
-    lcdInstall(new MyApp());                       // a launcher app (lcd_app.h)
-    lcdRegisterSettings("Net/Wifi", "Wifi", buildPane);   // a settings pane (lcd.h)
+    static const lcd_seg_t kAt[] = {
+        { .id = "network", .label = "Internet", .shortName = "Internet", .order = 2, .has_order = true },
+        { .id = "wifi",    .label = "WiFi",     .shortName = "WiFi",     .order = 1, .has_order = true },
+    };
+    lcdInstall(new MyApp());                    // a launcher app (lcd_app.h)
+    lcdSettingsContribute(kAt, 2, buildPane);   // settings rows at a path (lcd.h)
 #endif
 ```
 
+That second call is the fallback, not the path: describe the rows in the
+straddle's `settings:` block and the build emits them, along with the browser's
+half and the storage defaults, from one source.
+
 Both calls run from the consumer's own init hook. `lcdInstall` and
-`lcdRegisterSettings` must run on the lcd task — register from an init that the
+`lcdSettingsContribute` must run on the lcd task — register from an init that the
 build already routes there, or hop on with `lcdRun()`/`ON_LCD`. See
 [docs/apps.md](docs/apps.md) and [docs/settings.md](docs/settings.md).
 

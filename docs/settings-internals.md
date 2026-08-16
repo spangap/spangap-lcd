@@ -1,24 +1,30 @@
 # Settings — internals
 
-Maintainer reference for `shell/../lcd_settings.cpp` — the built-in Settings
-app, its menu registry, the page-stack nav, the `lcdSetting*` helpers, and the
-two-way storage binding. The [operator guide](settings.md) is the author view.
-Everything runs on the lcd task.
+Maintainer reference for `lcd_settings.cpp` — the built-in Settings app, its
+node registry, the page-stack nav, the `lcdSetting*` helpers and the two-way
+storage binding — and for `lcd_settings_desc.cpp`, the generic runtime behind
+the descriptors (actions, dialogs, forms, collections). The
+[operator guide](settings.md) is the author view. Everything runs on the lcd
+task.
 
 ## 1. What settings adds
 
-- **`lcdRegisterSettings(path, label, fn, placement)`** — builds an in-RAM menu
-  tree of `Node`s by splitting the slash-path; intermediate segments are
-  auto-titled submenus, the leaf gets `fn` + the explicit label + placement. A
-  plain tree, so registration works before `lcdInit()` and from any task.
+- **`lcdSettingsContribute(segs, nsegs, fn)`** — merges a contribution into an
+  in-RAM tree of `Node`s, conjuring whatever the path is missing and appending
+  `fn` to the node's builder list. A `Node` holds BOTH builders and children;
+  there is no leaf flag, because there is no leaf/container distinction. Naming
+  is first-contributor-wins per field (`named`/`shortNamed` guard the label and
+  the short name; `hasOrder` the order), and a node nobody names keeps its
+  title-cased id. A plain tree, so registration works before `lcdInit()` and
+  from any task.
 - **The `lcdSetting*` helpers** — storage-bound row builders.
 - **`SettingsApp`** — a thin `LcdApp` host (gear tile, `Config::name = "Settings"`,
   `iconBasename = "gear"`, `launcherPage = 0`) installed by `lcdSettingsInit()`
   from `shellInit`. Its `onCreate` calls `settingsOpen(root)`; `onClose` clears
   the page-stack pointers. The registry, the builders, two-way binding, scroll
   pills, and every straddle's pane hook are unchanged by the app wrapper.
-- **The built-in Display/UI Zoom pane** — `lcdSettingsInit()` also registers
-  `"display/zoom"`: a −/+ stepper (25% steps, clamped 50–200) over
+- **The built-in Display/UI Zoom pane** — `lcdSettingsInit()` also contributes
+  at `display/zoom`: a −/+ stepper (25% steps, clamped 50–200) over
   `s.lcd.scale`. It only writes the key; the reflow is the `lcd.cpp`
   subscription → `shellApplyZoom()` (shell-internals §10), so a browser/CLI
   write behaves identically.
@@ -33,19 +39,24 @@ revealing the parent exactly as it was (scroll position included). The header
 pages, so Back never deletes the widget whose event it's handling, and descending
 never deletes the row being clicked.
 
-- `pushMenu(node)` renders a page of rows (one per child), sorted by `placement`
-  bucket then case-insensitive label (registration order is dependency order,
-  meaningless to the user). A submenu row gets a chevron; an item row carries the
-  `Node*` and dispatches on click.
-- `pushItem(node)` makes a page and calls `node->fn(page)` to build the pane.
+- `pushNode(node)` makes a page, pushes it, runs every contributed builder onto
+  it in order, then appends a navigation row (label + chevron, carrying the
+  `Node*`) per child. Children sort by `nodeLess`: nodes carrying an order
+  first ascending, the rest after them in contribution order. That is the one
+  rule the web store and the generator also use — and contribution order is
+  meaningful because the generator emits pre-sorted, in init order. The page is
+  on the stack BEFORE the builders run, so a builder that opens a modal sees a
+  coherent stack.
 - `popPage()` deletes the top page; at the root it exits via `lcdGoHomeInternal()`.
 - **Scroll-overflow pills** — small `↑`/`↓` chips at the host's right edge,
   shown from the top page's scroll bounds, re-floated above each freshly pushed
   page. All pages scroll (a menu can outgrow the viewport too); LVGL's
   scroll-vs-tap threshold keeps row clicks working.
 
-The breadcrumb in `s_titleLbl` uses `lcdFont(LcdFace::UI_BOLD, 16)`; menu rows
-use `lcdFont(LcdFace::UI, 16 × lcdUiScale())`.
+The breadcrumb is built from the nodes' SHORT names — this is a 30px strip on a
+phone-sized screen, which is the whole reason a node may carry a short name
+distinct from its long label. It uses `lcdFont(LcdFace::UI_BOLD, 16)`;
+navigation rows use `lcdFont(LcdFace::UI, 16 × lcdUiScale())`.
 
 ## 3. Two-way storage binding
 
@@ -54,7 +65,8 @@ the file-static `s_binds`. The control's `LV_EVENT_VALUE_CHANGED` writes the key
 (`storageSet`); separately the key is **subscribed** (`storageSubscribeChanges` →
 `bindDispatch`) so an external write flows back into the widget via `bindApply`,
 switched on `BindKind` (`BK_SWITCH`/`BK_SLIDER`/`BK_DROPDOWN`/`BK_TEXTLBL`/
-`BK_TEXTAREA`/`BK_VALUE`). Storage callbacks dispatch on the lcd task, so
+`BK_TEXTAREA`/`BK_VALUE`/`BK_WHENKEY`). Storage callbacks dispatch on the lcd
+task, so
 `bindApply` touches LVGL directly; no locks.
 
 `bindAttach` subscribes the key only on its first bind; `bindDelete`
@@ -89,6 +101,11 @@ better — dropdown / value / slider group).
 - **Value** — a label bound `BK_VALUE`, event-driven (the em-dash `—` for empty).
   Long-value rendering is the marquee/wrap split below.
 - **Button** — `onClick` is an `lcd_fn_t` invoked with the row as `arg`.
+- **`lcdSettingWhenKey(row, key)`** — rides the same binding table as a
+  `BK_WHENKEY` bind, so it inherits subscribe-once, unsubscribe-with-the-last-user
+  and tear-down-on-delete for free, and needs no machinery of its own. It
+  toggles `LV_OBJ_FLAG_HIDDEN` on truthiness only; the firmware publishes gate
+  keys truthy/empty so an equality test never has to exist.
 
 ## 5. The marquee tunable (`CONFIG_LCD_SETTINGS_MARQUEE`)
 
@@ -111,5 +128,67 @@ better — dropdown / value / slider group).
   the click event being handled. Push/pop pages; never clear the live page.
 - **`s_pages` holds raw page pointers** — `SettingsApp::onClose` clears it so an
   evicted-then-reopened Settings doesn't dereference deleted pages.
-- A few `dbg(...)` "TEMP diag" traces remain in `pushMenu`/`onRowClick`; they are
-  verbose-level and harmless, but are diagnostics, not features.
+- **A modal must be dismissed asynchronously** — a modal's own button is a
+  descendant of the overlay it closes, so `lcd_settings_desc.cpp` dismisses via
+  `lv_obj_delete_async`. For the same reason a form's context is freed by the
+  overlay's `LV_EVENT_DELETE`, not by `formClose()`: the field widgets' callbacks
+  point into it and it has to outlive the deferred delete.
+- **Never rebuild a collection while walking `s_pills`** — a rebuild deletes
+  widgets, whose delete callbacks mutate that vector. `collStorageCb` therefore
+  notes what changed in one pass and rebuilds in a second.
+
+## 7. The descriptor runtime (`lcd_settings_desc.cpp`)
+
+Simple rows stay CALLS (that is what a hand-written pane writes, and the two
+should be indistinguishable); anything richer is DATA. `lcd_settings_desc.h`
+declares the structs, this file is the single place that knows what "confirm
+then write a key", "collect fields and submit them to a sentinel" or "list an
+array with an editor" mean. Generating data instead of logic keeps the generated
+dispatch file small and puts the behaviour somewhere reviewable — the same
+argument that chose a runtime-interpreted descriptor over generated Vue
+components on the web side.
+
+- **Substitution** is `{field}` replacement and nothing else. `subst()` resolves
+  against an `ItemScope` (one collection item's storage prefix, plus what `{id}`
+  means there); a form resolves against its local field buffer instead. A form's
+  `when_key` tells the two apart by whether the template contains a brace: a
+  braced gate names a sibling field, a bare one names storage.
+- **Subscriptions are refcounted PER SCOPE** (`subAdd`/`subDrop`), with one
+  dispatcher (`descDispatch`) serving pills, collection rebuilds and the open
+  form alike. Per scope, not per (scope, callback): `storageUnsubscribe` drops
+  *every* subscription the task holds on a scope, so with per-pair counts a
+  form dropping its watch on a collection's answer keys would unsubscribe them
+  out from under the collection. One callback per scope, however many users.
+  A status-key template is subscribed at its literal prefix (everything before
+  the first brace), since subscriptions are prefix-matched. The plain-row
+  binding table (`lcd_settings.cpp`) unsubscribes its own exact keys through
+  the same storage API on the same task; its scopes are leaf keys and these are
+  prefixes and sentinel-answer keys, which must never collide as exact strings.
+- **Forms** hold their values locally and reach the device only on submit, which
+  is what makes submit-and-error possible in place of per-keystroke validation.
+  One form is open at a time. The handler answers on the sentinel family's
+  error/ack pair (a collection hands its forms the shared `<cmd>.error` /
+  `<cmd>.done`; a bare form derives `<form-cmd>.error` / `.done`): the error key
+  going non-empty shows the reason and keeps the form open, the ack key moving
+  after a submit closes it — an edit that changes nothing still acks. Submit
+  clears the error key first, in order, so an identical rejection is still a
+  change past the storage actor's write-dedup. No timeouts, no read-back. An
+  item editor additionally carries `_id` — the identity it commits against — so
+  editing the id field itself is an ordinary edit and the owning task still
+  knows which item to apply it to.
+- **Modal lifetime.** Modals live on `lv_layer_top`, outside the app's widget
+  tree, so nothing tears them down implicitly. Every overlay is tracked
+  (`s_modals`); `lcdSettingsDescReset()` (called from the Settings app's
+  `onClose`) force-closes the open form, the on-screen-keyboard editor and any
+  remaining dialogs. A form opened by a collection carries an `owner` pointer,
+  and the collection's teardown (`collDelete`) force-closes it — the item
+  editor's descriptor lives inside the collection context and must not outlive
+  it. Closing from a modal's own button stays deferred (`dismiss` →
+  `lv_obj_delete_async`, untracked at dismiss time so a later reset cannot
+  double-delete); closing from outside its events is synchronous
+  (`formForceClose`).
+- **Collections** never write the array. `<cmd>.add` / `.remove` / `.set` /
+  `.order` are composed from the one `cmd` name, and a reorder sends the whole
+  id order comma-joined for the firmware to apply as a preference permutation.
+  The pane's teardown (`collDelete`) also clears a `candidates` refresh target
+  key, which is the entire "stop scanning on leave" contract.
