@@ -14,6 +14,7 @@
 #include "lcd_internal.h"
 #include "shell_internal.h"   /* shellInit — the phone-style shell */
 
+#include "spangap.h"          /* spangapSafeMode — the boot that must not blank */
 #include "storage.h"
 #include "its.h"
 #include "log.h"
@@ -133,6 +134,9 @@ static void lcdTaskFn(void*) {
      * Installs the built-in Settings/Log/CLI apps; other straddles install their
      * programs from their *LcdRegister hooks via lcdRun(lcdInstall(...)). */
     shellInit(scr);
+    /* A safe-mode boot puts its own screen over the shell (backup / restore /
+     * the factory-reset wipe). No-op on an ordinary boot. */
+    lcdSafeScreenInit();
 
     /* No NO_LIGHT_SLEEP lock: the panel holds its own GRAM, touch wakes the task
      * via a GPIO wake source, and the board keeps the backlight PWM alive across
@@ -150,6 +154,13 @@ static void lcdTaskFn(void*) {
      * ephemeral sys.standby key; the board decides what standby means (and clears
      * the key to wake). 0 = never. */
     NOW_AND_ON_CHANGE("s.lcd.inactivity_timeout", { lcdInactivitySetTimeout(atoi(val)); });
+    /* …except in a safe-mode boot, which must not blank. The screen is showing
+     * the only progress report a wipe has, nobody is going to touch a device
+     * that says "do not power off", and the blank timer measures exactly that:
+     * nobody touching it. A dark panel mid-wipe is indistinguishable from a
+     * dead one. After the subscription above, so it wins over the stored value.
+     * The operation ends in a reboot, which restores the configured timeout. */
+    if (spangapSafeMode() != SAFE_MODE_NONE) lcdInactivitySetTimeout(0);
 
     info("ready (%dx%d)\n", lcdScreenW(), lcdScreenH());
     /* Release lcdInit(): the panel controller is initialised and the UI tree is

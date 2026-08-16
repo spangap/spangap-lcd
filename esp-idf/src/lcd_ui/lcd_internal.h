@@ -122,6 +122,12 @@ void        lcdStatusbarRestyle(void);
  *  should call lcdProgramFullscreen(), not this, to reclaim the bar's space. */
 void        lcdStatusbarSetVisible(bool visible);
 
+/* ---- safe_screen.cpp ---- */
+/** Cover the shell with what this boot is doing, when it is a safe-mode boot
+ *  (backup / restore / factory reset) — and do nothing on an ordinary one.
+ *  Call on the lcd task, after shellInit. */
+void        lcdSafeScreenInit(void);
+
 /* ---- lcd_settings.cpp ---- */
 /** Install the built-in Settings (gear) program (an LcdApp hosting the existing
  *  page-stack). Call on the lcd task (from shellInit). */

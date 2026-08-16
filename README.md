@@ -52,6 +52,20 @@ before any other straddle's `onInit`. There is no hand-written init call. A
 straddle that paints a tile or a settings pane is therefore guaranteed the lcd
 task already exists.
 
+**A safe-mode boot gets the screen too.** spangap-lcd is in the platform's SAFE
+band, so a boot that is backing the state store up, restoring one, or erasing it
+brings the panel up and covers the shell with what it is doing:
+`WIPING FLASH` in the largest type the panel takes, over a progress bar fed by
+the ephemeral `sys.wipe.percent` spangap-core publishes as it erases, with
+`Do not power off`; `BACKING UP` / `RESTORING` for the other two, which have no
+percentage to show. The layer is opaque and clickable on `lv_layer_top`, so the
+shell behind it is never reachable, and it reads one key and draws — it touches
+no store, which is what makes it safe in the one boot whose whole purpose is that
+nothing else touches the store. The bar advances in steps rather than smoothly:
+an SPI-flash erase stops every task running from flash for the length of each
+erase op. See
+[spangap-core's safe-mode.md](../spangap-core/docs/safe-mode.md).
+
 Presence of the straddle is the on/off switch. A consumer lists
 `spangap/spangap-lcd` under `additional_installs:` in its `straddle.yaml` (so a
 `spangap build --no-lcd` can leave it out); when it is staged, `spangap-inside`
