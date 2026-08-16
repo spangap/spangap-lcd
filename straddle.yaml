@@ -35,6 +35,35 @@ init:
 # onto spangap-lcd is the benign additional_installs cycle.
 additional_installs:
   - { install: spangap/lcdmirror, when: spangap/spangap-web }
+
+# Declarative settings: the Display section of the System menu. The screen is a
+# device-wide facility, not a program, so its rows sit on the System page rather
+# than in a menu of their own; order 20 puts them under Hardware and above the
+# unordered blocks the platform straddles contribute there. A board adds its own
+# panel rows (backlight, sleep) to this same section — the section title is the
+# merge key, so they arrive under this heading.
+#
+# s.lcd.scale is a fixed set of steps rather than a free slider: every write
+# reflows the whole shell (fonts, launcher grid, icons), which is a poor thing
+# to do on every pixel of a drag. The default lives in lcd.cpp, which owns the
+# key and clamps it, so no `default:` here.
+settings:
+  - at: [ { id: system } ]
+    order: 20
+    rows:
+      - section: "Display"
+      - dropdown:
+          label: "UI Zoom"
+          key: "s.lcd.scale"
+          options:
+            - { v: 50,  l: "50%" }
+            - { v: 75,  l: "75%" }
+            - { v: 100, l: "100%" }
+            - { v: 125, l: "125%" }
+            - { v: 150, l: "150%" }
+            - { v: 175, l: "175%" }
+            - { v: 200, l: "200%" }
+      - caption: "Scale the whole interface. Content reflows — text and icons stay crisp at every step, not magnified."
 # Board-agnostic LVGL features this shell needs (collected into the buildable's
 # sdkconfig fragments like any other straddle's kconfig:). LV_USE_SNAPSHOT lets
 # the recents switcher paint each running app's screen to a PSRAM buffer for its

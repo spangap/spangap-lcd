@@ -22,8 +22,8 @@ row blocks.
 #include "lcd.h"
 
 static const lcd_seg_t kAt[] = {
-    { .id = "network", .label = "Internet", .shortName = "Internet", .order = 2, .has_order = true },
-    { .id = "wifi",    .label = "WiFi",     .shortName = "WiFi",     .order = 1, .has_order = true },
+    { .id = "net",     .label = "WiFi & Network", .shortName = "Network", .order = 10, .has_order = true },
+    { .id = "wifi",    .label = "WiFi",           .shortName = "WiFi",    .order = 1,  .has_order = true },
 };
 
 lcdSettingsContribute(kAt, 2, ON_LCD {
@@ -41,15 +41,17 @@ lcdSettingsContribute(kAt, 2, ON_LCD {
 - **`id`** is the stable merge key — two contributors sharing a node must spell
   it identically. It is also the node's path id on both surfaces.
 - **`label`** is the long name, shown in the parent's navigation row;
-  **`shortName`** is the header text and defaults to the label. The **first**
-  contributor to supply each wins; a later differing name is ignored (the build
-  warns about the conflict).
+  **`shortName`** is the header text and defaults to the label. The **last**
+  contributor to supply each wins, so the buildable — which contributes after
+  every straddle it stages — has the final say. By convention a node is named
+  once, by the straddle it exists for, and everybody else states only its `id`.
 - **`order`** places a node among its siblings. One rule everywhere: nodes
   carrying an order first, ascending; the rest after them in contribution order
   (which is init order — the platform's nodes land before a consumer's).
 - **`fn`** is called on the lcd task with the node's content pane (an empty
   scrollable flex column); it may be null for a contribution that only names
-  nodes.
+  nodes. A node left with no rows and no rendering descendant gets no navigation
+  row — naming a menu does not by itself put one on the screen.
 
 Call at init, from any task — it populates an in-RAM registry, so it works even
 before `lcdInit()`.
@@ -86,7 +88,9 @@ a settings `fn`. They mirror the browser's `Setting*` components.
 | `lcdSettingValue(parent, label, key)` | read-only, live | string key |
 | `lcdSettingButton(parent, label, onClick)` | action button | — (`onClick` on lcd task) |
 | `lcdSettingWhenKey(row, key)` | wraps any row above; shows it while the key is truthy | string key |
-| `lcdSettingAction(parent, label, act)` | button running a descriptor action | — |
+| `lcdSettingAction(parent, label, act, color)` | button running a descriptor action | — |
+| `lcdSettingActionRow(parent, align, btns, n)` | several content-sized buttons on one row | — |
+| `lcdSettingInfo/InfoValue/InfoFit` | a block of read-only values, own label column | string keys |
 | `lcdSettingCollection(parent, desc)` | an array, as an editable list | the descriptor's array key |
 
 **Writes apply immediately** — there is no "save". A switch flips its key the
@@ -108,6 +112,48 @@ Otherwise it opens a full-screen on-screen keyboard. `secret` masks the value.
 
 For a custom focusable control outside the helpers, add it to `lcdInputGroup()`
 (`lv_group_add_obj`) so the keyboard/keypad can reach it.
+
+## Buttons that share a row
+
+`lcdSettingAction` spans the pane, which is right for a single action and wrong
+for two that are one choice. `lcdSettingActionRow` puts several `lcd_btn_t` on
+one line, each sized to its label, gathered `LCD_ALIGN_LEFT` (the default in the
+yaml), `_CENTER` or `_RIGHT`. A button may carry a `when_key` of its own, gating
+that button rather than the line — a hidden flex child leaves the layout and the
+rest close up around it. The row wraps rather than clipping, so a pair whose
+labels are too wide for the display stacks instead of running off it.
+
+Every button, here and in a dialog and on a collection's item rows, may state a
+`color`: `red`, `green`, `amber`, `blue`, `grey` or an explicit `rrggbb`, from
+the same palette and the same table a status pill uses. Null is the button's own
+colour, and is what almost every button should be.
+
+## Blocks of read-only values
+
+A run of value rows is a readout, and the ordinary row layout — a third of the
+pane for the label, whatever the pane's longest label needs — leaves it full of
+gaps. An **info group** gives that run its own label column: sized to the widest
+label *in the group* and never wider than the third an ordinary row uses, with
+no gap between the lines.
+
+```cpp
+lv_obj_t* g = lcdSettingInfo(pane);
+lcdSettingInfoValue(g, "Status", "wifi.sta.state_text");
+lcdSettingWhenKey(lcdSettingInfoValue(g, "IP", "wifi.sta.ip"), "wifi.sta.up");
+lcdSettingInfoFit(g);
+```
+
+Three calls rather than one because the column is only knowable once every label
+exists — `lcdSettingInfoFit` is what says the run has ended. It measures every
+line, hidden ones included, so a `when_key` line appearing never shifts the
+column. Read-only values only: a control needs room the narrow column does not
+give it, so anything interactive is an ordinary row above or below the group.
+A long value ellipsizes here (and marquees on focus) rather than taking the
+stacked shape a lone `lcdSettingValue` falls back to — the stack has no left
+column, and a group whose lines disagreed about that would not be one.
+
+The group carries no heading: `lcdSettingSection` above it is the heading, which
+also lets several groups sit under one.
 
 ## Long values
 

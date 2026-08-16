@@ -98,10 +98,12 @@ no automatic memory-pressure eviction.
 
 ## UI zoom
 
-The whole interface scales at runtime: **Settings → Display → UI Zoom** is a
-−/+ stepper over `s.lcd.scale` (percent, 25% steps, clamped 50–200; default
-100). Writing the key from anywhere — the stepper, the browser, the CLI — has
-the same effect. A change *reflows* rather than magnifies: fonts are
+The whole interface scales at runtime: **Settings → System → Display → UI Zoom**
+picks one of seven steps over `s.lcd.scale` (percent, 25% apart, 50–200; default
+100). Writing the key from anywhere — the picker, the browser, the CLI — has
+the same effect. It is steps rather than a slider because every write reflows
+the whole shell, which is not a thing to do on each pixel of a drag. A change
+*reflows* rather than magnifies: fonts are
 re-rasterized from their vector faces at the new size, icons are re-rendered
 from their SVG sources, and the launcher grid recomputes its columns and tile
 size — so everything stays crisp at every factor, with bigger tiles and fewer

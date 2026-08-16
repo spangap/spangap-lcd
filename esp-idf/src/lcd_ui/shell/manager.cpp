@@ -253,7 +253,12 @@ void initChrome() {
 
 /* ---- edge-pan helpers (ported verbatim from the legacy launcher) ---- */
 
+/* A real scroll container with room left in `dir`. The flag test matters: any
+ * object whose children overflow reports a non-zero scroll_* distance, so a
+ * plain row with a slightly-too-tall control would otherwise pass for a
+ * scrollable and eat the pan a few pixels at a time. */
 bool canScrollDir(lv_obj_t* o, lcd_scroll_dir_t dir) {
+    if (!lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE)) return false;
     switch (dir) {
         case LCD_SCROLL_UP:    return lv_obj_get_scroll_top(o)    > 0;
         case LCD_SCROLL_DOWN:  return lv_obj_get_scroll_bottom(o) > 0;
@@ -262,12 +267,16 @@ bool canScrollDir(lv_obj_t* o, lcd_scroll_dir_t dir) {
     }
     return false;
 }
+/* Front-most scrollable wins: children are walked last-to-first because that is
+ * LVGL's z-order (a later child draws over its earlier siblings). A UI that
+ * stacks opaque layers in one parent — Settings' page stack, where every parent
+ * page stays alive and scrollable underneath the one on screen — must pan the
+ * page you are looking at, not the buried one that happens to be child 0. */
 lv_obj_t* findScrollable(lv_obj_t* root, lcd_scroll_dir_t dir) {
     if (!root || lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN)) return nullptr;
     if (canScrollDir(root, dir)) return root;
-    uint32_t n = lv_obj_get_child_count(root);
-    for (uint32_t i = 0; i < n; i++) {
-        lv_obj_t* hit = findScrollable(lv_obj_get_child(root, i), dir);
+    for (uint32_t i = lv_obj_get_child_count(root); i > 0; i--) {
+        lv_obj_t* hit = findScrollable(lv_obj_get_child(root, i - 1), dir);
         if (hit) return hit;
     }
     return nullptr;

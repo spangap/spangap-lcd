@@ -377,10 +377,11 @@ extern const lv_font_t lv_font_micro_2x3;
  *  root, one lcd_seg_t per level, each carrying the id (the stable merge key)
  *  and the naming this contributor proposes: `label` (the long name, shown in
  *  the parent's navigation row), `shortName` (the pane header) and `order`. The
- *  FIRST contributor to name a node wins; a later differing name is ignored.
- *  `fn` is called on the lcd task with the node's content widget (an empty,
- *  scrollable flex column — build the rows into it with the lcdSetting*
- *  helpers) and may be null for a contribution that only names nodes.
+ *  LAST contributor to name a node wins. `fn` is called on the lcd task with
+ *  the node's content widget (an empty, scrollable flex column — build the rows
+ *  into it with the lcdSetting* helpers) and may be null for a contribution
+ *  that only names nodes; a node left with no rows and no rendering descendant
+ *  gets no navigation row, so naming a menu does not by itself show one.
  *
  *  Siblings sort by the one global rule: nodes carrying an order first,
  *  ascending; the rest after them in contribution order. Row blocks at one node
@@ -422,9 +423,43 @@ lv_obj_t* lcdSettingButton  (lv_obj_t* parent, const char* label, lcd_fn_t onCli
  *  any helper above: lcdSettingWhenKey(lcdSettingSwitch(p, …), "wifi.up"). */
 lv_obj_t* lcdSettingWhenKey (lv_obj_t* row, const char* key);
 
+/* ---- Info groups ----
+ * A run of read-only values as one compact block: a shared label column sized to
+ * the widest label but never wider than the third an ordinary row gives its
+ * label, and no gap between the lines. A column of short labels therefore reads
+ * narrow instead of leaving a third of the pane empty.
+ *
+ * Read-only values only. The narrow shared column is a promise a control cannot
+ * keep — a switch or a slider needs its own room — so anything interactive is an
+ * ordinary row above or below the group.
+ *
+ *   lv_obj_t* g = lcdSettingInfo(p);
+ *   lcdSettingInfoValue(g, "Status", "wifi.sta.state_text");
+ *   lcdSettingWhenKey(lcdSettingInfoValue(g, "IP", "wifi.sta.ip"), "wifi.sta.up");
+ *   lcdSettingInfoFit(g);
+ */
+
+/** An empty info group. Add lines with lcdSettingInfoValue, then close it with
+ *  lcdSettingInfoFit — the column is only knowable once every label is in. */
+lv_obj_t* lcdSettingInfo     (lv_obj_t* parent);
+/** One line: label, and whatever string the key holds. Returns the line, so
+ *  lcdSettingWhenKey wraps it exactly as it wraps an ordinary row. */
+lv_obj_t* lcdSettingInfoValue(lv_obj_t* group, const char* label, const char* key);
+/** Size the shared label column and close the group. Measures every label,
+ *  hidden ones included, so a `when_key` line appearing never shifts the column. */
+void      lcdSettingInfoFit  (lv_obj_t* group);
+
 /** Button running a descriptor action — a key write, a confirmation dialog, or
- *  a form over a command sentinel. */
-lv_obj_t* lcdSettingAction  (lv_obj_t* parent, const char* label, const lcd_action_t* act);
+ *  a form over a command sentinel. `color` is a palette name or "rrggbb"
+ *  (lcd_settings_desc.h); null leaves the button its default colour. */
+lv_obj_t* lcdSettingAction  (lv_obj_t* parent, const char* label, const lcd_action_t* act,
+                             const char* color = nullptr);
+
+/** Several content-sized action buttons sharing one row, placed left, centre or
+ *  right. A lone `lcdSettingAction` still spans the pane; this is the row for
+ *  buttons that belong beside each other. */
+lv_obj_t* lcdSettingActionRow(lv_obj_t* parent, lcd_align_t align,
+                              const lcd_btn_t* btns, int nbtns);
 
 /** A collection: the array at `desc->key` as titled item rows with an editor,
  *  add forms, removal and optional reordering, all through `desc->cmd`

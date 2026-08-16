@@ -13,19 +13,23 @@ task.
   in-RAM tree of `Node`s, conjuring whatever the path is missing and appending
   `fn` to the node's builder list. A `Node` holds BOTH builders and children;
   there is no leaf flag, because there is no leaf/container distinction. Naming
-  is first-contributor-wins per field (`named`/`shortNamed` guard the label and
-  the short name; `hasOrder` the order), and a node nobody names keeps its
-  title-cased id. A plain tree, so registration works before `lcdInit()` and
-  from any task.
+  is last-setter-wins per field, and a node nobody names keeps its title-cased
+  id (`named`/`shortNamed` only record that somebody did, so the short name can
+  keep tracking the label). A plain tree, so registration works before
+  `lcdInit()` and from any task.
+- **`nodeRenders(n)`** — a node shows only if it has builders or a descendant
+  that does. `pushNode` filters the children through it, so a menu declared for
+  its name and order alone (spangap-core's `apps` / `system`, reticulous's
+  `reticulum`) contributes no dead-end chevron row.
 - **The `lcdSetting*` helpers** — storage-bound row builders.
 - **`SettingsApp`** — a thin `LcdApp` host (gear tile, `Config::name = "Settings"`,
   `iconBasename = "gear"`, `launcherPage = 0`) installed by `lcdSettingsInit()`
   from `shellInit`. Its `onCreate` calls `settingsOpen(root)`; `onClose` clears
   the page-stack pointers. The registry, the builders, two-way binding, scroll
   pills, and every straddle's pane hook are unchanged by the app wrapper.
-- **The built-in Display/UI Zoom pane** — `lcdSettingsInit()` also contributes
-  at `display/zoom`: a −/+ stepper (25% steps, clamped 50–200) over
-  `s.lcd.scale`. It only writes the key; the reflow is the `lcd.cpp`
+- **The Display section of System** — described in `spangap-lcd/straddle.yaml`
+  like any other straddle's settings, not hand-written here: a step dropdown
+  over `s.lcd.scale`. It only writes the key; the reflow is the `lcd.cpp`
   subscription → `shellApplyZoom()` (shell-internals §10), so a browser/CLI
   write behaves identically.
 
@@ -38,6 +42,14 @@ revealing the parent exactly as it was (scroll position included). The header
 (back chevron + breadcrumb title, e.g. `Settings/Net/Wifi`) lives **outside** the
 pages, so Back never deletes the widget whose event it's handling, and descending
 never deletes the row being clicked.
+
+The generator contributes **once per node**, not once per block, because that is
+the only place two straddles' rows can be interleaved — a builder is opaque by
+the time it reaches here. Sections merging under one heading is that interleave;
+see the build-system README. A hand-written `lcdSettingsContribute` runs from
+lcd init, ahead of `spangapSettingsGenRegister()`, so its builder renders before
+the generated one whatever order the yaml states — it cannot join a generated
+section, and a row that has to sit inside one belongs in a `settings:` block.
 
 - `pushNode(node)` makes a page, pushes it, runs every contributed builder onto
   it in order, then appends a navigation row (label + chevron, carrying the
@@ -101,6 +113,25 @@ better — dropdown / value / slider group).
 - **Value** — a label bound `BK_VALUE`, event-driven (the em-dash `—` for empty).
   Long-value rendering is the marquee/wrap split below.
 - **Button** — `onClick` is an `lcd_fn_t` invoked with the row as `arg`.
+- **Info groups** — `lcdSettingInfo` / `lcdSettingInfoValue` / `lcdSettingInfoFit`.
+  Ordinary storage-bound rows on the same `bindAttach` table, in a zero-row-gap
+  flex column, with one difference: their label column is shared and sized by
+  the group rather than fixed at `lv_pct(33)`. LVGL has no cross-sibling
+  max-content, so `Fit` is where the width comes from — it runs
+  `lv_obj_update_layout`, reads each label's natural width, caps the widest at a
+  third of the group's content width, and writes it back to all of them. That is
+  the whole reason the group is three calls: the caller is what knows the run
+  has ended. `Fit` walks the group by child position (child 0 of each line is
+  the label), which is why `InfoValue` creates the label first.
+- **`lcdSettingActionRow`** — a `makeRow` switched to `ROW_WRAP` with a
+  content height, holding `LV_SIZE_CONTENT` buttons; `align` is the flex main
+  alignment. Wrapping is deliberate: a fixed-height non-wrapping row would clip
+  a pair of long labels off the edge of the display instead of stacking them.
+  A per-button `when_key` is `lcdSettingWhenKey` on the button object.
+- **`buttonColor`** — one palette for every button, resolved through the same
+  `pillColor` table a status pill uses, so a red button is the red a red pill
+  is. `lcd_dlg_btn_t`, `lcd_item_action_t` and `lcd_btn_t` all carry `color` as
+  a `const char*`; null is the button's own colour.
 - **`lcdSettingWhenKey(row, key)`** — rides the same binding table as a
   `BK_WHENKEY` bind, so it inherits subscribe-once, unsubscribe-with-the-last-user
   and tear-down-on-delete for free, and needs no machinery of its own. It

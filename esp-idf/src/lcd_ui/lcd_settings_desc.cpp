@@ -139,14 +139,23 @@ lv_obj_t* makeModal(lv_obj_t** overlayOut, const char* title) {
     return card;
 }
 
+lv_color_t pillColor(const std::string& name);   /* fwd — one palette, below */
+
+/** Paint a button from that palette. A colour a button states and a colour a
+ *  pill states are the same word resolved through the same table, so a red
+ *  button is the red a red pill is. */
+void buttonColor(lv_obj_t* b, const char* color) {
+    if (color && *color) lv_obj_set_style_bg_color(b, pillColor(color), 0);
+}
+
 /** A full-width button, used for both modal buttons and the pane-level ones a
  *  collection adds (Add / Scan). Same shape as lcdSettingButton's, but taking
  *  an lv_event_cb_t so it can carry a context pointer. */
-lv_obj_t* wideButton(lv_obj_t* parent, const char* label, bool danger,
+lv_obj_t* wideButton(lv_obj_t* parent, const char* label, const char* color,
                      lv_event_cb_t cb, void* ud) {
     lv_obj_t* b = lv_button_create(parent);
     lv_obj_set_width(b, lv_pct(100));
-    if (danger) lv_obj_set_style_bg_color(b, lv_color_hex(0x8b2b2b), 0);
+    buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
     lv_obj_center(l);
@@ -656,9 +665,9 @@ void formOpen(const lcd_form_t* d, const ItemScope& sc,
      * a stale one from an earlier attempt is never shown. */
     lv_obj_add_flag(ctx->errLbl, LV_OBJ_FLAG_HIDDEN);
 
-    wideButton(card, (d->submit && *d->submit) ? d->submit : "Save", false,
+    wideButton(card, (d->submit && *d->submit) ? d->submit : "Save", nullptr,
                 onFormSubmit, nullptr);
-    wideButton(card, "Cancel", false, onFormCancel, nullptr);
+    wideButton(card, "Cancel", nullptr, onFormCancel, nullptr);
 
     subAdd(ctx->errKey);
     subAdd(ctx->ackKey);
@@ -695,7 +704,7 @@ void dialogOpen(const lcd_dialog_t* d, const ItemScope& sc) {
 
     for (int i = 0; i < d->nbuttons; i++) {
         auto* c = new DlgBtnCtx{ ov, d->buttons[i].act, sc };
-        lv_obj_t* b = wideButton(card, d->buttons[i].label, d->buttons[i].danger,
+        lv_obj_t* b = wideButton(card, d->buttons[i].label, d->buttons[i].color,
                                   onDlgButton, c);
         lv_obj_add_event_cb(b, dlgBtnFree, LV_EVENT_DELETE, c);
     }
@@ -746,13 +755,13 @@ void confirmRemove(const std::string& text, const std::string& key, const std::s
     lv_obj_add_event_cb(ov, [](lv_event_t* e) {
         delete static_cast<RmCtx*>(lv_event_get_user_data(e));
     }, LV_EVENT_DELETE, rc);
-    wideButton(card, "Remove", true, [](lv_event_t* e) {
+    wideButton(card, "Remove", "red", [](lv_event_t* e) {
         auto* r = static_cast<RmCtx*>(lv_event_get_user_data(e));
         std::string k = r->key, id = r->id;      /* the dismiss frees r */
         dismiss(r->ov);
         storageSet(k.c_str(), id.c_str());
     }, rc);
-    wideButton(card, "Cancel", false, [](lv_event_t* e) {
+    wideButton(card, "Cancel", nullptr, [](lv_event_t* e) {
         dismiss(static_cast<RmCtx*>(lv_event_get_user_data(e))->ov);
     }, rc);
 }
@@ -826,11 +835,11 @@ void onItemButton(lv_event_t* e) {
     if (b->act) lcdSettingRunAction(b->act, sc.prefix.c_str(), sc.idValue.c_str());
 }
 
-lv_obj_t* itemRowButton(lv_obj_t* parent, const char* txt, ItemBtnCtx* ctx, bool danger) {
+lv_obj_t* itemRowButton(lv_obj_t* parent, const char* txt, ItemBtnCtx* ctx, const char* color) {
     lv_obj_t* b = lv_button_create(parent);
     lv_obj_set_style_pad_hor(b, 8, 0);
     lv_obj_set_style_pad_ver(b, 3, 0);
-    if (danger) lv_obj_set_style_bg_color(b, lv_color_hex(0x8b2b2b), 0);
+    buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, txt);
     lv_obj_center(l);
@@ -899,20 +908,20 @@ void collRebuild(CollCtx* c) {
 
         if (d->orderable) {
             if (i > 0)     itemRowButton(row, LV_SYMBOL_UP,
-                                         new ItemBtnCtx{ c, i, nullptr, -1, false, false }, false);
+                                         new ItemBtnCtx{ c, i, nullptr, -1, false, false }, nullptr);
             if (i < n - 1) itemRowButton(row, LV_SYMBOL_DOWN,
-                                         new ItemBtnCtx{ c, i, nullptr, +1, false, false }, false);
+                                         new ItemBtnCtx{ c, i, nullptr, +1, false, false }, nullptr);
         }
         for (int a = 0; a < d->nactions; a++)
             itemRowButton(row, d->actions[a].label,
                           new ItemBtnCtx{ c, i, d->actions[a].act, 0, false, false },
-                          d->actions[a].danger);
+                          d->actions[a].color);
         if (d->nedit > 0)
             itemRowButton(row, LV_SYMBOL_EDIT,
-                          new ItemBtnCtx{ c, i, nullptr, 0, false, true }, false);
+                          new ItemBtnCtx{ c, i, nullptr, 0, false, true }, nullptr);
         if (d->has_remove)
             itemRowButton(row, LV_SYMBOL_TRASH,
-                          new ItemBtnCtx{ c, i, nullptr, 0, true, false }, false);
+                          new ItemBtnCtx{ c, i, nullptr, 0, true, false }, nullptr);
     }
 }
 
@@ -1092,9 +1101,11 @@ void lcdSettingsDescReset(void) {
     }
 }
 
-lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action_t* act) {
+lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action_t* act,
+                           const char* color) {
     lv_obj_t* b = lv_button_create(parent);
     lv_obj_set_width(b, lv_pct(100));
+    buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
     lv_obj_center(l);
@@ -1103,6 +1114,46 @@ lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action
     }, LV_EVENT_CLICKED, (void*)act);
     if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
     return b;
+}
+
+lv_obj_t* lcdSettingActionRow(lv_obj_t* parent, lcd_align_t align,
+                              const lcd_btn_t* btns, int nbtns) {
+    if (!btns || nbtns <= 0) return nullptr;
+    lv_obj_t* row = lcdSettingsMakeRow(parent);
+    /* No label column here: the buttons ARE the row, so the whole width is
+     * theirs and `align` says which edge they gather at. The row wraps and
+     * grows instead of keeping the fixed height an ordinary row has — a pair
+     * whose labels are too wide for the display stacks rather than running off
+     * the edge of it, which is the difference between a tight pane and a
+     * broken one. */
+    lv_flex_align_t main = align == LCD_ALIGN_RIGHT  ? LV_FLEX_ALIGN_END
+                         : align == LCD_ALIGN_CENTER ? LV_FLEX_ALIGN_CENTER
+                                                     : LV_FLEX_ALIGN_START;
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_ver(row, 3, 0);
+    lv_obj_set_style_pad_row(row, 4, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(row, main, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    for (int i = 0; i < nbtns; i++) {
+        lv_obj_t* b = lv_button_create(row);
+        lv_obj_set_size(b, LV_SIZE_CONTENT, LV_SIZE_CONTENT);   /* share the line */
+        lv_obj_set_style_pad_hor(b, 12, 0);
+        lv_obj_set_style_pad_ver(b, 5, 0);
+        buttonColor(b, btns[i].color);
+        lv_obj_t* l = lv_label_create(b);
+        lv_label_set_text(l, btns[i].label);
+        lv_obj_center(l);
+        lv_obj_add_event_cb(b, [](lv_event_t* e) {
+            lcdSettingRunAction(static_cast<const lcd_action_t*>(lv_event_get_user_data(e)));
+        }, LV_EVENT_CLICKED, (void*)btns[i].act);
+        if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
+        /* Gating one button, not the row: a hidden flex child leaves the layout
+         * entirely, so the rest close up around it. */
+        if (btns[i].when_key && *btns[i].when_key)
+            lcdSettingWhenKey(b, btns[i].when_key);
+    }
+    return row;
 }
 
 lv_obj_t* lcdSettingCollection(lv_obj_t* parent, const lcd_collection_t* d) {
@@ -1127,14 +1178,14 @@ lv_obj_t* lcdSettingCollection(lv_obj_t* parent, const lcd_collection_t* d) {
 
     for (int i = 0; i < d->nadds; i++) {
         auto* a = new AddBtnCtx{ c, i };
-        lv_obj_t* b = wideButton(parent, d->adds[i].label, false, onAddButton, a);
+        lv_obj_t* b = wideButton(parent, d->adds[i].label, nullptr, onAddButton, a);
         lv_obj_add_event_cb(b, addBtnFree, LV_EVENT_DELETE, a);
     }
 
     if (d->candidates) {
         const lcd_candidates_t* cand = d->candidates;
         if (cand->refresh_label && *cand->refresh_label && cand->refresh)
-            wideButton(parent, cand->refresh_label, false, onRefreshButton,
+            wideButton(parent, cand->refresh_label, nullptr, onRefreshButton,
                        (void*)cand->refresh);
         c->candBox = lv_obj_create(parent);
         lv_obj_remove_style_all(c->candBox);

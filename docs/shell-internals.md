@@ -164,6 +164,18 @@ foreground app is fullscreen or opts out via `Config::statusBar`), the foregroun
 layer's geometry (`y = statusBar.h`, or 0 fullscreen), and trackball-arrows mode
 from the foreground app's flags. Re-run on every open/home and on `shellAppChanged`.
 
+**Edge-pan targeting.** `lcdScroll` hands its deltas to the app's scroll handler
+if it registered one, otherwise `findScrollable()` picks the widget to move. Two
+rules make that pick the one under the finger. It walks children **last to
+first**, because that is LVGL's z-order — a later child draws over its earlier
+siblings — so a UI that stacks opaque layers in one parent (Settings' page stack,
+where every parent page stays alive and scrollable beneath the page on screen)
+pans the page you are looking at. And a candidate must carry
+`LV_OBJ_FLAG_SCROLLABLE`: any object whose children overflow reports a non-zero
+`lv_obj_get_scroll_*`, so without the flag test a row holding a
+slightly-too-tall control passes for a scroll container and swallows the pan a
+few pixels at a time.
+
 **Home-bar drag** is manual (LVGL gestures are unreliable on a short strip): a
 centre-only clickable patch on `lv_layer_top()` with `PRESS_LOCK`, driving the
 lifted-app translate by hand; release computes the lifted fraction and routes to
@@ -356,7 +368,7 @@ in `shellLauncherAddTile`. Tiles are flex-column buttons (icon over label);
 what renders.
 
 **Zoom flow.** `s.lcd.scale` (percent, default 100, clamped 50–200; the
-Settings stepper writes it in 25% steps) is read by `calibrate()` into
+Settings picker offers it in 25% steps) is read by `calibrate()` into
 `lcdUiScale()`. `lcd.cpp` subscribes to the key and calls `shellApplyZoom()`
 (`manager.cpp`): `lcdStyleRecalibrate()` → `shellLauncherRebuild()` (tears the
 launcher down, resets the icon cache once no tile holds a descriptor, rebuilds

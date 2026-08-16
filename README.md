@@ -75,8 +75,8 @@ code on it:
 ```cpp
 #if CONFIG_SPANGAP_LCD
     static const lcd_seg_t kAt[] = {
-        { .id = "network", .label = "Internet", .shortName = "Internet", .order = 2, .has_order = true },
-        { .id = "wifi",    .label = "WiFi",     .shortName = "WiFi",     .order = 1, .has_order = true },
+        { .id = "net",     .label = "WiFi & Network", .shortName = "Network", .order = 10, .has_order = true },
+        { .id = "wifi",    .label = "WiFi",           .shortName = "WiFi",    .order = 1,  .has_order = true },
     };
     lcdInstall(new MyApp());                    // a launcher app (lcd_app.h)
     lcdSettingsContribute(kAt, 2, buildPane);   // settings rows at a path (lcd.h)

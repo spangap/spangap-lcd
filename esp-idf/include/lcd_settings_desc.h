@@ -33,6 +33,25 @@ struct lcd_action_t;
 struct lcd_form_t;
 struct lcd_collection_t;
 
+/* ---- colour ----
+ *
+ * One palette, named the same way wherever a colour is stated: "red", "green",
+ * "amber", "blue", "grey", or an explicit "rrggbb". A status pill and a button
+ * resolve it through the same table, so a red button is the red a red pill is.
+ * Null or empty means the control's own default. */
+
+/** Where a row of content-sized buttons sits across the row. */
+typedef enum { LCD_ALIGN_LEFT, LCD_ALIGN_CENTER, LCD_ALIGN_RIGHT } lcd_align_t;
+
+/** One button of a multi-button row. A lone `button:` row is still a full-width
+ *  button; these are the ones that share a line, so each sizes to its label. */
+typedef struct lcd_btn_t {
+    const char* label    = nullptr;
+    const char* color    = nullptr;   /* palette name or "rrggbb"; null = default */
+    const char* when_key = nullptr;   /* show this button only while truthy */
+    const struct lcd_action_t* act = nullptr;
+} lcd_btn_t;
+
 /* ---- rows ---- */
 
 typedef enum {
@@ -78,8 +97,8 @@ typedef struct lcd_row_t {
 typedef enum { LCD_ACT_SET, LCD_ACT_DIALOG, LCD_ACT_FORM } lcd_action_kind_t;
 
 typedef struct lcd_dlg_btn_t {
-    const char* label  = nullptr;
-    bool        danger = false;
+    const char* label = nullptr;
+    const char* color = nullptr;   /* palette name or "rrggbb"; null = default */
     const struct lcd_action_t* act = nullptr;   /* null: a bare cancel */
 } lcd_dlg_btn_t;
 
@@ -120,9 +139,9 @@ typedef struct lcd_add_t {
 } lcd_add_t;
 
 typedef struct lcd_item_action_t {
-    const char*         label  = nullptr;
-    bool                danger = false;
-    const lcd_action_t* act    = nullptr;
+    const char*         label = nullptr;
+    const char*         color = nullptr;   /* palette name or "rrggbb"; null = default */
+    const lcd_action_t* act   = nullptr;
 } lcd_item_action_t;
 
 /** Scan-and-adopt. The owning task publishes an ephemeral array; picking one of

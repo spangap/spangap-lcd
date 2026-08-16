@@ -7,8 +7,10 @@
  * builders AND a list of children; entering it renders the rows first, then a
  * chevron row per child. No node is owned: lcdSettingsContribute() names a path
  * of ids, conjures whatever is missing, and appends its builder — so several
- * straddles contributing at the same path concatenate. It populates an in-RAM
- * registry, so it works from any init task, even before lcdInit.
+ * straddles contributing at the same path concatenate. A node with no rows and
+ * no rendering descendant gets no chevron row: naming a menu is not the same as
+ * showing one. It populates an in-RAM registry, so it works from any init task,
+ * even before lcdInit.
  *
  * The gear program builds the UI lazily on the lcd task: a shared header (title
  * + back) over a stack of pages. Each node is its own opaque page; descending
@@ -65,6 +67,16 @@ Node s_root;
 int  s_arrival = 0;
 
 void titleCase(std::string& s) { if (!s.empty()) s[0] = (char)toupper((unsigned char)s[0]); }
+
+/* A node renders if it has anything to show: its own rows, or a descendant
+ * that has. Declaring a node is therefore not the same as putting it on the
+ * screen — a straddle may name a menu and give it an order while it is still
+ * empty, and it appears the moment somebody contributes to it. */
+bool nodeRenders(const Node* n) {
+    if (!n->builders.empty()) return true;
+    for (const Node* k : n->kids) if (nodeRenders(k)) return true;
+    return false;
+}
 
 /* THE sibling order, identical on both surfaces and in the generator: nodes
  * carrying an order first, ascending; everything else after them, in
@@ -156,9 +168,10 @@ void afterPagePush(lv_obj_t* pg) {
 }
 
 /* Render one node: its own rows first (every contributed block, in order), then
- * a navigation row per child. The page goes on the stack BEFORE the builders
- * run, so a builder that opens a modal or reads the nav state sees a coherent
- * stack. Children are sorted on a copy, leaving the registry untouched. */
+ * a navigation row per child that has anything to render. The page goes on the
+ * stack BEFORE the builders run, so a builder that opens a modal or reads the
+ * nav state sees a coherent stack. Children are filtered and sorted on a copy,
+ * leaving the registry untouched. */
 void pushNode(Node* node) {
     lv_obj_t* pg = makePage();
     s_pages.push_back({ pg, node });
@@ -166,7 +179,8 @@ void pushNode(Node* node) {
 
     for (lcd_fn_t fn : node->builders) if (fn) fn(pg);
 
-    std::vector<Node*> kids = node->kids;
+    std::vector<Node*> kids;
+    for (Node* k : node->kids) if (nodeRenders(k)) kids.push_back(k);
     std::stable_sort(kids.begin(), kids.end(), nodeLess);
     for (Node* k : kids) {
         lv_obj_t* row = lv_button_create(pg);
@@ -498,15 +512,16 @@ void lcdSettingsContribute(const lcd_seg_t* segs, int nsegs, lcd_fn_t fn) {
             n->arrival = s_arrival++;
             cur->kids.push_back(n);
         }
-        /* First contributor wins, per field. A node nobody names keeps its
-         * title-cased id; a later contributor's different name is simply not
-         * applied — the generator has already warned about the conflict. */
-        if (s.label && *s.label && !n->named) { n->label = s.label; n->named = true; }
-        if (s.shortName && *s.shortName && !n->shortNamed) {
+        /* Last setter wins, per field. A node nobody names keeps its
+         * title-cased id. (The generated contributions all carry the same
+         * already-resolved naming — the generator settles it across the staged
+         * set — so this only decides between hand-written ones.) */
+        if (s.label && *s.label) { n->label = s.label; n->named = true; }
+        if (s.shortName && *s.shortName) {
             n->shortName = s.shortName;
             n->shortNamed = true;
         }
-        if (s.has_order && !n->hasOrder) { n->hasOrder = true; n->order = s.order; }
+        if (s.has_order) { n->hasOrder = true; n->order = s.order; }
         if (!n->shortNamed) n->shortName = n->label;   /* short defaults to the label */
         cur = n;
     }
@@ -724,6 +739,90 @@ lv_obj_t* lcdSettingButton(lv_obj_t* parent, const char* label, lcd_fn_t onClick
     return b;
 }
 
+/* ---- info groups ----
+ * A run of read-only values with one shared label column, sized to the widest
+ * label and capped at the third an ordinary row gives its label, and no gap
+ * between the lines. LVGL has no cross-sibling max-content, so the width is not
+ * knowable while the lines are being built: lcdSettingInfoFit runs a layout pass
+ * once they all exist, reads each label's natural width, and writes the widest
+ * back to all of them. That is also why the group is three calls rather than one
+ * — the caller is what knows the run has ended. */
+
+lv_obj_t* lcdSettingInfo(lv_obj_t* parent) {
+    lv_obj_t* g = lv_obj_create(parent);
+    lv_obj_remove_style_all(g);
+    lv_obj_set_width(g, lv_pct(100));
+    lv_obj_set_height(g, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(g, 8, 0);
+    lv_obj_set_style_pad_ver(g, 2, 0);
+    lv_obj_set_style_pad_row(g, 0, 0);          /* the lines sit against each other */
+    lv_obj_set_flex_flow(g, LV_FLEX_FLOW_COLUMN);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_SCROLLABLE);
+    return g;
+}
+
+lv_obj_t* lcdSettingInfoValue(lv_obj_t* group, const char* label, const char* key) {
+    lv_obj_t* line = lv_obj_create(group);
+    lv_obj_remove_style_all(line);
+    lv_obj_set_width(line, lv_pct(100));
+    lv_obj_set_height(line, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_column(line, 10, 0);
+    lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(line, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Child 0 is the label and child 1 the value — lcdSettingInfoFit walks the
+     * group by position, so this order is load-bearing. */
+    lv_obj_t* lab = lv_label_create(line);
+    lv_label_set_text(lab, label);
+    lv_obj_set_style_text_color(lab, lv_color_hex(0x8a93a0), 0);
+    lv_obj_set_style_text_align(lab, LV_TEXT_ALIGN_RIGHT, 0);
+
+    std::string v = storageGetStr(key, "");
+    lv_obj_t* val = lv_label_create(line);
+    lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+    lv_label_set_text(val, v.empty() ? "\xE2\x80\x94" : v.c_str());
+    bindAttach(val, key, BK_VALUE);
+    /* A long value ellipsizes here rather than taking the stacked label-over-
+     * wrapped-value shape a lone value row falls back to: the stack has no left
+     * column, and a group whose lines disagreed about that would not be one. */
+    lv_obj_set_flex_grow(val, 1);
+    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
+#if CONFIG_LCD_SETTINGS_MARQUEE
+    if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), val);
+    lv_obj_add_event_cb(val, marqueeFocusCb, LV_EVENT_FOCUSED, nullptr);
+    lv_obj_add_event_cb(val, marqueeFocusCb, LV_EVENT_DEFOCUSED, nullptr);
+#endif
+    return line;
+}
+
+void lcdSettingInfoFit(lv_obj_t* group) {
+    if (!group) return;
+    lv_obj_update_layout(group);                /* natural label widths, now real */
+
+    int32_t widest = 0;
+    uint32_t n = lv_obj_get_child_count(group);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t* line = lv_obj_get_child(group, i);
+        if (lv_obj_get_child_count(line) < 1) continue;
+        int32_t w = lv_obj_get_width(lv_obj_get_child(line, 0));
+        if (w > widest) widest = w;
+    }
+    /* Never wider than an ordinary row's label column — narrower is the whole
+     * point, wider would make the group disagree with the rows around it. */
+    int32_t cap = lv_obj_get_content_width(group) / 3;
+    if (cap > 0 && widest > cap) widest = cap;
+    if (widest <= 0) return;
+
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t* line = lv_obj_get_child(group, i);
+        if (lv_obj_get_child_count(line) < 1) continue;
+        lv_obj_set_width(lv_obj_get_child(line, 0), widest);
+    }
+}
+
 lv_obj_t* lcdSettingWhenKey(lv_obj_t* row, const char* key) {
     if (!row || !key || !*key) return row;
     /* Rides the same binding table as every other storage-bound control, so it
@@ -771,63 +870,8 @@ public:
 };
 }  // namespace
 
-/* ---- built-in Display / UI-zoom stepper (plan §6) ---- */
-namespace {
-lv_obj_t* s_zoomLbl = nullptr;
-
-void zoomAdjust(int delta) {
-    int v = storageGetInt("s.lcd.scale", 100) + delta;
-    if (v < 50)  v = 50;
-    if (v > 200) v = 200;
-    storageSet("s.lcd.scale", v);      /* → shellApplyZoom() via the lcd.cpp sub */
-    if (s_zoomLbl) lv_label_set_text_fmt(s_zoomLbl, "%d%%", v);
-}
-
-/* A −/+ stepper (25% steps, clamped 50–200) bound to s.lcd.scale. Writing the
- * key reflows the whole shell (fonts, launcher grid, icons) live. */
-void zoomPane(void* arg) {
-    lv_obj_t* parent = static_cast<lv_obj_t*>(arg);
-    lcdSettingCaption(parent,
-        "Scale the whole interface (50–200%). Content reflows — text and icons "
-        "stay crisp at every step, not magnified.");
-
-    lv_obj_t* row = makeRow(parent);
-    addRowLabel(row, "UI Zoom");
-
-    lv_obj_t* grp = lv_obj_create(row);
-    lv_obj_remove_style_all(grp);
-    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(grp, 12, 0);
-    lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto stepBtn = [](lv_obj_t* p, const char* sym, lv_event_cb_t cb) {
-        lv_obj_t* b = lv_button_create(p);
-        lv_obj_set_size(b, 30, 30);
-        lv_obj_t* l = lv_label_create(b);
-        lv_label_set_text(l, sym);
-        lv_obj_center(l);
-        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
-        return b;
-    };
-    stepBtn(grp, LV_SYMBOL_MINUS, [](lv_event_t*) { zoomAdjust(-25); });
-
-    s_zoomLbl = lv_label_create(grp);
-    lv_obj_set_style_text_color(s_zoomLbl, lv_color_white(), 0);
-    lv_label_set_text_fmt(s_zoomLbl, "%d%%", storageGetInt("s.lcd.scale", 100));
-
-    stepBtn(grp, LV_SYMBOL_PLUS, [](lv_event_t*) { zoomAdjust(25); });
-}
-}  // namespace
-
 void lcdSettingsInit(void) {
     s_root.label     = "Settings";
     s_root.shortName = "Settings";
-    static const lcd_seg_t kZoom[] = {
-        { .id = "display", .label = "Display", .shortName = "Display", .order = 0, .has_order = false },
-        { .id = "zoom",    .label = "UI Zoom", .shortName = "Zoom",    .order = 1, .has_order = true  },
-    };
-    lcdSettingsContribute(kZoom, 2, zoomPane);
     lcdInstall(new SettingsApp());
 }
