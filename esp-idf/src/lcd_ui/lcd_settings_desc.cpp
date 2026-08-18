@@ -34,6 +34,7 @@
 #include "lcd_settings_priv.h"
 
 #include "storage.h"
+#include "timezones.h"
 #include "log.h"
 
 #include <cJSON.h>
@@ -44,6 +45,13 @@
 #include <cstdlib>
 
 namespace {
+
+/* A collection's rows run 20% below the pane's body size (14 px in the shipped
+ * sheet): a list is a block of the device's own data rather than more furniture,
+ * and it reads as one when everything in it — titles, subtitles, status pills,
+ * per-item buttons — sits a step under the fixed rows around it. */
+inline int listTextPx() { return lcdPx(11); }
+inline int listSubPx()  { return lcdPx(10); }
 
 /* ---- template substitution ----
  * `{field}` replacement and nothing else: no expressions, no fallbacks, no
@@ -103,11 +111,21 @@ void modalDelete(lv_event_t* e) {
 }
 
 /** Full-screen dim overlay carrying a centred card. Returns the card (build the
- *  content into it); `*overlayOut` is what to delete to dismiss. */
-lv_obj_t* makeModal(lv_obj_t** overlayOut, const char* title) {
+ *  content into it); `*overlayOut` is what to delete to dismiss.
+ *
+ *  `closeCb` puts a small Close in the card's top-right corner, on the title's
+ *  line, instead of the usual button at the foot. For a card that is one long
+ *  list — a scan's results — a full row of buttons under it is a row of the
+ *  list, and the corner is where a dismiss is looked for anyway. */
+lv_obj_t* makeModal(lv_obj_t** overlayOut, const char* title,
+                    lv_event_cb_t closeCb = nullptr, void* closeUd = nullptr) {
+    /* Read the focus ring's position BEFORE this modal's own widgets join the
+     * group, and hand it back when the modal goes. */
+    lv_obj_t* opener = lcdInputGroup() ? lv_group_get_focused(lcdInputGroup()) : nullptr;
     lv_obj_t* ov = lv_obj_create(lv_layer_top());
     s_modals.push_back(ov);
     lv_obj_add_event_cb(ov, modalDelete, LV_EVENT_DELETE, nullptr);
+    lcdSettingsRefocusOnClose(ov, opener);
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
     lv_obj_set_style_bg_color(ov, lv_color_black(), 0);
@@ -129,11 +147,36 @@ lv_obj_t* makeModal(lv_obj_t** overlayOut, const char* title) {
     lv_obj_set_style_border_color(card, lv_color_hex(0x3a4658), 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
-    if (title && *title) {
-        lv_obj_t* t = lv_label_create(card);
-        lv_label_set_text(t, title);
+    if ((title && *title) || closeCb) {
+        lv_obj_t* head = lv_obj_create(card);
+        lv_obj_remove_style_all(head);
+        lv_obj_set_width(head, lv_pct(100));
+        lv_obj_set_height(head, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(head, 8, 0);
+        lv_obj_remove_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(head, LV_OBJ_FLAG_CLICKABLE);
+
+        lv_obj_t* t = lv_label_create(head);
+        lv_label_set_text(t, (title && *title) ? title : "");
+        lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+        lv_obj_set_flex_grow(t, 1);          /* pushes Close to the far corner */
         lv_obj_set_style_text_color(t, lv_color_white(), 0);
         lv_obj_set_style_text_font(t, lcdFont(LcdFace::UI_BOLD, lcdPx(16)), 0);
+
+        if (closeCb) {
+            lv_obj_t* b = lv_button_create(head);
+            lv_obj_set_style_pad_hor(b, 6, 0);
+            lv_obj_set_style_pad_ver(b, 1, 0);
+            lv_obj_t* l = lv_label_create(b);
+            lv_label_set_text(l, "Close");
+            lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI, lcdPx(11)), 0);
+            lv_obj_center(l);
+            lv_obj_add_event_cb(b, closeCb, LV_EVENT_CLICKED, closeUd);
+            if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
+        }
     }
     *overlayOut = ov;
     return card;
@@ -148,13 +191,30 @@ void buttonColor(lv_obj_t* b, const char* color) {
     if (color && *color) lv_obj_set_style_bg_color(b, pillColor(color), 0);
 }
 
-/** A full-width button, used for both modal buttons and the pane-level ones a
- *  collection adds (Add / Scan). Same shape as lcdSettingButton's, but taking
- *  an lv_event_cb_t so it can carry a context pointer. */
-lv_obj_t* wideButton(lv_obj_t* parent, const char* label, const char* color,
-                     lv_event_cb_t cb, void* ud) {
-    lv_obj_t* b = lv_button_create(parent);
-    lv_obj_set_width(b, lv_pct(100));
+/** A bar of buttons: content-sized, gathered right, wrapping when a line of them
+ *  does not fit — the way the browser puts a dialog's actions. At the foot of a
+ *  modal it goes INSIDE the scrolling body rather than pinned under it, because
+ *  on a panel this small a fixed footer is a third of the dialog and it is the
+ *  fields that want the space. A pane uses it for a collection's own buttons. */
+lv_obj_t* buttonBar(lv_obj_t* parent) {
+    lv_obj_t* r = lv_obj_create(parent);
+    lv_obj_remove_style_all(r);
+    lv_obj_set_width(r, lv_pct(100));
+    lv_obj_set_height(r, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(r, 6, 0);
+    lv_obj_set_style_pad_row(r, 4, 0);
+    lv_obj_set_style_pad_top(r, 4, 0);
+    lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    return r;
+}
+
+/** One button of such a bar: sized to its label, not to the dialog. */
+lv_obj_t* barButton(lv_obj_t* row, const char* label, const char* color,
+                    lv_event_cb_t cb, void* ud) {
+    lv_obj_t* b = lv_button_create(row);
+    lcdSettingsHalfPadVer(b);
     buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
@@ -175,18 +235,16 @@ void dismiss(lv_obj_t* overlay) {
 }
 
 /* ---- refcounted storage subscriptions ----
- * storageUnsubscribe() drops EVERY subscription this task holds on a scope, so
- * neither of two users of one scope may unsubscribe while the other lives.
- * Refcount PER SCOPE — not per (scope, callback): with per-pair counts, a form
- * closing its watch on a collection's array would unsubscribe the scope out
- * from under the collection's own live count. One dispatcher (descDispatch)
- * serves every subscriber in this file, so a scope needs exactly one real
- * subscription however many users it has.
+ * One dispatcher (descDispatch) serves every subscriber in this file, so a scope
+ * needs exactly one real subscription however many users it has — and the
+ * refcount is PER SCOPE, not per (scope, callback): with per-pair counts, a form
+ * closing its watch on a collection's array would drop the scope out from under
+ * the collection's own live count.
  *
- * The plain-row binding table (lcd_settings.cpp) unsubscribes its exact keys
- * through the same storage API on the same task; its scopes are leaf keys and
- * ours are array/status prefixes and sentinel-answer keys, which never collide
- * as exact strings — the invariant both tables rely on. */
+ * The drop goes through storageUnsubscribeCb, so it takes down this file's
+ * dispatcher and nothing else. Anything else on the lcd task watching the same
+ * scope — the plain-row binding table in lcd_settings.cpp, a module's own live
+ * watch on one of its keys — keeps its subscription. */
 
 void descDispatch(const char* key, const char* val);
 
@@ -205,7 +263,7 @@ void subDrop(const std::string& scope) {
         if (it->scope != scope) continue;
         if (--it->refs > 0) return;
         s_subs.erase(it);
-        storageUnsubscribe(scope.c_str());
+        storageUnsubscribeCb(scope.c_str(), descDispatch);
         return;
     }
 }
@@ -258,7 +316,7 @@ lv_obj_t* makePill(lv_obj_t* parent, const std::string& key) {
     lv_obj_set_style_pad_hor(l, 6, 0);
     lv_obj_set_style_pad_ver(l, 1, 0);
     lv_obj_set_style_text_color(l, lv_color_white(), 0);
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI, lcdPx(12)), 0);
+    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI, listTextPx()), 0);
     s_pills.push_back({ key, l });
     lv_obj_add_event_cb(l, pillDelete, LV_EVENT_DELETE, nullptr);
     pillApply(l, storageGetStr(key.c_str(), "").c_str());
@@ -281,6 +339,8 @@ struct FormField {
     lv_obj_t* rowObj  = nullptr;    /* the container, hidden/shown by when_key */
     lv_obj_t* widget  = nullptr;
     lv_obj_t* valLbl  = nullptr;    /* text rows on the on-screen-keyboard path */
+    lv_obj_t* rowObj2 = nullptr;    /* timezone rows span two rows: region, zone */
+    lv_obj_t* widget2 = nullptr;    /* the zone dropdown */
     std::string value;
     bool dirty = false;             /* operator typed here: a template default freezes */
 };
@@ -294,19 +354,28 @@ struct FormCtx {
     std::string editId;             /* the id an item editor is committing against */
     ItemScope   sc;
     const void* owner = nullptr;    /* the CollCtx this form belongs to, or null */
+    int  itemIdx   = -1;            /* >= 0: an item detail page of that collection */
     bool submitted = false;
 };
 FormCtx* s_form = nullptr;
 
+/** What `{name}` means inside a form: a field it carries, else — for an item
+ *  editor — the item's own stored value. The fallback is what lets a detail page
+ *  name the thing it is editing ("{ssid}" in a heading) without also having to
+ *  offer it as a row. Empty for a bare form, which has no item behind it. */
 std::string formLookup(const std::string& name) {
     if (!s_form) return "";
     for (auto& f : s_form->fields) {
         const char* fn = f.row->field;
         if (fn && name == fn) return f.value;
     }
-    return "";
+    return fieldOf(s_form->sc, name);
 }
 
+bool headingRow(const lcd_row_t* r);   /* fwd: a section / caption row */
+/* fwd: an item detail page's per-item buttons (defined with the collections,
+ * since they are the collection's, not the form's) */
+void buildItemButtons(lv_obj_t* row, FormCtx* ctx);
 void formRefresh();          /* fwd: re-evaluate gates + untouched defaults */
 void formClose();            /* from the form's own buttons: deferred delete */
 void formForceClose();       /* from outside its events: synchronous delete */
@@ -340,6 +409,61 @@ void dropdownSelectValue(lv_obj_t* d, const lcd_row_t* r, const std::string& val
     }
 }
 
+/* ---- timezone picker data ----
+ * An LCD_ROW_TIMEZONE field renders as two dropdowns — region, then zone —
+ * fed from the firmware's built-in zone table (timezones.h): rodata arrays,
+ * nothing read from disk and nothing parsed. Only the newline-joined option
+ * strings the lv_dropdowns copy are transient heap. Both dropdowns show
+ * exactly what they store, so the live widget's own option string is the
+ * value source and nothing else needs to be kept. */
+
+/** Newline-joined regions: the unique first path segments of TZ_NAMES. The
+ *  table is name-sorted, so equal regions are adjacent. */
+std::string tzRegionOptions() {
+    std::string out, last;
+    for (int i = 0; i < TZ_COUNT; i++) {
+        const char* slash = strchr(TZ_NAMES[i], '/');
+        std::string region = slash ? std::string(TZ_NAMES[i], slash - TZ_NAMES[i])
+                                   : TZ_NAMES[i];
+        if (region == last) continue;
+        if (!out.empty()) out += '\n';
+        out += region;
+        last = region;
+    }
+    return out;
+}
+
+/** Newline-joined zones of one region — the name minus the region prefix, so
+ *  a nested country level reads "Argentina/Buenos_Aires". */
+std::string tzZoneList(const std::string& region) {
+    std::string prefix = region + "/";
+    std::string out;
+    for (int i = 0; i < TZ_COUNT; i++) {
+        if (strncmp(TZ_NAMES[i], prefix.c_str(), prefix.size()) != 0) continue;
+        if (!out.empty()) out += '\n';
+        out += TZ_NAMES[i] + prefix.size();
+    }
+    return out;
+}
+
+/** Select the entry of a live dropdown whose text equals `want`. */
+bool ddSelectText(lv_obj_t* dd, const std::string& want) {
+    std::string all(lv_dropdown_get_options(dd) ? lv_dropdown_get_options(dd) : "");
+    size_t start = 0;
+    for (uint32_t i = 0; ; i++) {
+        size_t nl = all.find('\n', start);
+        std::string one = all.substr(start, nl == std::string::npos ? nl : nl - start);
+        if (one == want) { lv_dropdown_set_selected(dd, i); return true; }
+        if (nl == std::string::npos) return false;
+        start = nl + 1;
+    }
+}
+
+/** The dropdown's currently selected text. */
+std::string ddSelectedText(lv_obj_t* dd) {
+    return nthOption(lv_dropdown_get_options(dd), lv_dropdown_get_selected(dd));
+}
+
 void formApplyValue(FormField& f) {
     switch (f.row->kind) {
         case LCD_ROW_SWITCH:
@@ -352,6 +476,18 @@ void formApplyValue(FormField& f) {
         case LCD_ROW_DROPDOWN:
             dropdownSelectValue(f.widget, f.row, f.value);
             break;
+        case LCD_ROW_TIMEZONE: {
+            if (!f.widget || !f.widget2) break;
+            size_t slash = f.value.find('/');
+            std::string region = slash == std::string::npos ? f.value : f.value.substr(0, slash);
+            std::string zone   = slash == std::string::npos ? "" : f.value.substr(slash + 1);
+            if (!region.empty() && ddSelectText(f.widget, region)) {
+                std::string zones = tzZoneList(region);
+                lv_dropdown_set_options(f.widget2, zones.c_str());
+                ddSelectText(f.widget2, zone);
+            }
+            break;
+        }
         case LCD_ROW_TEXT:
             if (f.valLbl) lcdSettingsValueText(f.valLbl, f.value.c_str(), f.row->secret);
             else if (f.widget && !(lv_obj_get_state(f.widget) & LV_STATE_FOCUSED))
@@ -364,6 +500,8 @@ void formApplyValue(FormField& f) {
 void formRefresh() {
     if (!s_form) return;
     for (auto& f : s_form->fields) {
+        if (headingRow(f.row) && f.rowObj && f.row->label && strchr(f.row->label, '{'))
+            lv_label_set_text(f.rowObj, substWith(f.row->label, formLookup).c_str());
         /* An untouched template default tracks its siblings; once the operator
          * has typed in the field it is theirs and stops moving under them. */
         if (!f.dirty && f.row->dflt && *f.row->dflt) {
@@ -378,6 +516,10 @@ void formRefresh() {
                 : truthy(storageGetStr(f.row->when_key, ""));
             if (on) lv_obj_remove_flag(f.rowObj, LV_OBJ_FLAG_HIDDEN);
             else    lv_obj_add_flag   (f.rowObj, LV_OBJ_FLAG_HIDDEN);
+            if (f.rowObj2) {   /* a timezone field's second row gates with it */
+                if (on) lv_obj_remove_flag(f.rowObj2, LV_OBJ_FLAG_HIDDEN);
+                else    lv_obj_add_flag   (f.rowObj2, LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
 }
@@ -415,10 +557,16 @@ void onFieldTap(lv_event_t* e) {
     s_kb.overlay = ov;
 
     lv_obj_t* ta = lv_textarea_create(ov);
+    lcdSettingsHalfPadVer(ta);
     lv_obj_set_size(ta, lv_pct(96), 56);
     lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 6);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_password_mode(ta, f->row->secret);
+    if (f->row->placeholder_key && *f->row->placeholder_key)
+        lv_textarea_set_placeholder_text(
+            ta, storageGetStr(f->row->placeholder_key, "").c_str());
+    else if (f->row->placeholder)
+        lv_textarea_set_placeholder_text(ta, f->row->placeholder);
     lv_textarea_set_text(ta, f->value.c_str());
     s_kb.ta = ta;
 
@@ -462,12 +610,46 @@ void onFieldDropdown(lv_event_t* e) {
     formRefresh();
 }
 
+void onFieldTzRegion(lv_event_t* e) {
+    auto* f = static_cast<FormField*>(lv_event_get_user_data(e));
+    std::string region = ddSelectedText(static_cast<lv_obj_t*>(lv_event_get_target_obj(e)));
+    std::string zones = tzZoneList(region);
+    lv_dropdown_set_options(f->widget2, zones.c_str());
+    lv_dropdown_set_selected(f->widget2, 0);
+    std::string zone = nthOption(zones.c_str(), 0);
+    f->value = zone.empty() ? region : region + "/" + zone;
+    f->dirty = true;
+    formRefresh();
+}
+
+void onFieldTzZone(lv_event_t* e) {
+    auto* f = static_cast<FormField*>(lv_event_get_user_data(e));
+    std::string region = ddSelectedText(f->widget);
+    std::string zone = ddSelectedText(static_cast<lv_obj_t*>(lv_event_get_target_obj(e)));
+    f->value = zone.empty() ? region : region + "/" + zone;
+    f->dirty = true;
+    formRefresh();
+}
+
+/** A form's own headings template like everything else does, against the local
+ *  field buffer: "SSID: {ssid}" over the item being edited. Kept live by
+ *  formRefresh, so a heading naming a field the operator is editing follows it. */
+bool headingRow(const lcd_row_t* r) {
+    return r->kind == LCD_ROW_SECTION || r->kind == LCD_ROW_CAPTION;
+}
+
 void buildFormField(lv_obj_t* parent, FormField& f) {
     const lcd_row_t* r = f.row;
-    if (r->kind == LCD_ROW_SECTION) { f.rowObj = lcdSettingSection(parent, r->label); return; }
-    if (r->kind == LCD_ROW_CAPTION) { f.rowObj = lcdSettingCaption(parent, r->label); return; }
+    if (headingRow(r)) {
+        std::string txt = substWith(r->label, formLookup);
+        f.rowObj = (r->kind == LCD_ROW_SECTION) ? lcdSettingSection(parent, txt.c_str())
+                                                : lcdSettingCaption(parent, txt.c_str());
+        return;
+    }
 
-    lv_obj_t* row = lcdSettingsMakeRow(parent);
+    /* Compact rows: a modal is a window onto a pane, and the fewer of its rows
+     * fit the more it scrolls for content that would have fitted. */
+    lv_obj_t* row = lcdSettingsMakeRow(parent, /*compact=*/true);
     lcdSettingsRowLabel(row, r->label);
     f.rowObj = row;
 
@@ -494,6 +676,7 @@ void buildFormField(lv_obj_t* parent, FormField& f) {
         case LCD_ROW_DROPDOWN: {
             lv_obj_t* d = lv_dropdown_create(row);
             lcdSettingsFillControl(d);
+            lcdSettingsHalfPadVer(d);
             /* Show the labels, store the values — the list is for a person. */
             lv_dropdown_set_options(d, (r->opt_labels && *r->opt_labels) ? r->opt_labels
                                                                         : r->options);
@@ -501,13 +684,61 @@ void buildFormField(lv_obj_t* parent, FormField& f) {
             lv_obj_add_event_cb(d, onFieldDropdown, LV_EVENT_VALUE_CHANGED, &f);
             break;
         }
+        case LCD_ROW_TIMEZONE: {
+            /* A picker's "value if left alone" is its current selection: seed
+             * from the applied zone so opening and submitting is a no-op edit. */
+            if (f.value.empty() && r->placeholder_key && *r->placeholder_key)
+                f.value = storageGetStr(r->placeholder_key, "");
+
+            std::string regions = tzRegionOptions();
+
+            lv_obj_t* d1 = lv_dropdown_create(row);
+            lcdSettingsFillControl(d1);
+            lcdSettingsHalfPadVer(d1);
+            lv_dropdown_set_options(d1, regions.c_str());
+            f.widget = d1;
+            lv_obj_add_event_cb(d1, onFieldTzRegion, LV_EVENT_VALUE_CHANGED, &f);
+
+            /* The zone dropdown gets a second, label-less row of its own —
+             * two full-width lists read better than two crammed halves. */
+            lv_obj_t* row2 = lcdSettingsMakeRow(parent, /*compact=*/true);
+            lcdSettingsRowLabel(row2, "");
+            f.rowObj2 = row2;
+            lv_obj_t* d2 = lv_dropdown_create(row2);
+            lcdSettingsFillControl(d2);
+            lcdSettingsHalfPadVer(d2);
+            lv_dropdown_set_options(d2, "");   /* never LVGL's sample options */
+            f.widget2 = d2;
+            lv_obj_add_event_cb(d2, onFieldTzZone, LV_EVENT_VALUE_CHANGED, &f);
+
+            /* No seed (or one formApplyValue can't match): show the first
+             * region's zones and make the visible selection the value, so
+             * what the operator sees is always what submit sends. */
+            if (f.value.empty()) {
+                std::string region = nthOption(regions.c_str(), 0);
+                std::string zones = tzZoneList(region);
+                lv_dropdown_set_options(d2, zones.c_str());
+                std::string zone = nthOption(zones.c_str(), 0);
+                if (!region.empty())
+                    f.value = zone.empty() ? region : region + "/" + zone;
+            }
+            break;
+        }
         case LCD_ROW_TEXT:
             if (lcdHasKeyboard()) {
                 lv_obj_t* ta = lv_textarea_create(row);
                 lv_textarea_set_one_line(ta, true);
                 lv_textarea_set_password_mode(ta, r->secret);
-                if (r->placeholder) lv_textarea_set_placeholder_text(ta, r->placeholder);
+                /* A placeholder the device publishes outranks the compiled-in
+                 * one: it is the value this field would take if left empty,
+                 * which only the firmware knows (a MAC, a default port). */
+                if (r->placeholder_key && *r->placeholder_key)
+                    lv_textarea_set_placeholder_text(
+                        ta, storageGetStr(r->placeholder_key, "").c_str());
+                else if (r->placeholder)
+                    lv_textarea_set_placeholder_text(ta, r->placeholder);
                 lcdSettingsFillControl(ta);
+                lcdSettingsHalfPadVer(ta);
                 if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
                 f.widget = ta;
                 lv_obj_add_event_cb(ta, onFieldInline, LV_EVENT_READY,     &f);
@@ -611,11 +842,15 @@ void formApply(const char* key, const char* val) {
 /** Open a form. `errKey`/`ackKey` are where the owning task answers (a
  *  collection passes its shared `<cmd>.error` / `<cmd>.done`); `prefill` seeds
  *  fields by name; `editId` is set when this is an item editor rather than an
- *  add; `owner` ties the form to the collection whose teardown closes it. */
+ *  add; `owner` ties the form to the collection whose teardown closes it, and
+ *  `itemIdx >= 0` makes it that collection's ITEM DETAIL PAGE — the fields plus
+ *  everything the item can be made to do, which is why a list row now carries no
+ *  buttons of its own. */
 void formOpen(const lcd_form_t* d, const ItemScope& sc,
               const std::string& errKey, const std::string& ackKey,
               const std::vector<std::pair<std::string, std::string>>& prefill,
-              const std::string& editId, const void* owner = nullptr) {
+              const std::string& editId, const void* owner = nullptr,
+              int itemIdx = -1) {
     if (s_form) formForceClose();
     FormCtx* ctx = new FormCtx();
     ctx->d        = d;
@@ -625,6 +860,7 @@ void formOpen(const lcd_form_t* d, const ItemScope& sc,
     ctx->ackKey   = ackKey;
     ctx->editId   = editId;
     ctx->owner    = owner;
+    ctx->itemIdx  = itemIdx;
     ctx->fields.resize(d->nfields);
     for (int i = 0; i < d->nfields; i++) ctx->fields[i].row = &d->fields[i];
     s_form = ctx;
@@ -647,17 +883,23 @@ void formOpen(const lcd_form_t* d, const ItemScope& sc,
     lv_obj_t* card = makeModal(&ctx->overlay,
                                (d->title && *d->title) ? d->title : nullptr);
     lv_obj_add_event_cb(ctx->overlay, formCtxFree, LV_EVENT_DELETE, ctx);
+    /* One scroll container holding everything below the title — fields, the
+     * rejection line, and the buttons. Nothing is pinned: on a panel this size
+     * a fixed footer costs more than scrolling past it does. */
     lv_obj_t* body = lv_obj_create(card);
     lv_obj_remove_style_all(body);
     lv_obj_set_width(body, lv_pct(100));
     lv_obj_set_height(body, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_height(body, lcdScreenH() / 2, 0);
+    lv_obj_set_style_max_height(body, (lcdScreenH() * 2) / 3, 0);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(body, 4, 0);
+    /* A step under the pane's body size: the dialog is a detail view, and its
+     * rows are already compact ones. */
+    lv_obj_set_style_text_font(body, lcdFont(LcdFace::UI, lcdPx(12)), 0);
 
     for (auto& f : ctx->fields) buildFormField(body, f);
 
-    ctx->errLbl = lv_label_create(card);
+    ctx->errLbl = lv_label_create(body);
     lv_label_set_long_mode(ctx->errLbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(ctx->errLbl, lv_pct(100));
     lv_obj_set_style_text_color(ctx->errLbl, lv_color_hex(0xe06c6c), 0);
@@ -665,9 +907,14 @@ void formOpen(const lcd_form_t* d, const ItemScope& sc,
      * a stale one from an earlier attempt is never shown. */
     lv_obj_add_flag(ctx->errLbl, LV_OBJ_FLAG_HIDDEN);
 
-    wideButton(card, (d->submit && *d->submit) ? d->submit : "Save", nullptr,
+    /* Left to right: what the item can be made to do, then leaving, then
+     * committing. Destructive first and primary last, so the rightmost button
+     * — the one under a thumb reaching from the edge — is the safe one. */
+    lv_obj_t* btns = buttonBar(body);
+    buildItemButtons(btns, ctx);
+    barButton(btns, "Cancel", nullptr, onFormCancel, nullptr);
+    barButton(btns, (d->submit && *d->submit) ? d->submit : "Save", nullptr,
                 onFormSubmit, nullptr);
-    wideButton(card, "Cancel", nullptr, onFormCancel, nullptr);
 
     subAdd(ctx->errKey);
     subAdd(ctx->ackKey);
@@ -702,9 +949,10 @@ void dialogOpen(const lcd_dialog_t* d, const ItemScope& sc) {
     lv_obj_set_style_text_color(t, lv_color_white(), 0);
     lv_label_set_text(t, subst(d->text, sc).c_str());
 
+    lv_obj_t* btns = buttonBar(card);
     for (int i = 0; i < d->nbuttons; i++) {
         auto* c = new DlgBtnCtx{ ov, d->buttons[i].act, sc };
-        lv_obj_t* b = wideButton(card, d->buttons[i].label, d->buttons[i].color,
+        lv_obj_t* b = barButton(btns, d->buttons[i].label, d->buttons[i].color,
                                   onDlgButton, c);
         lv_obj_add_event_cb(b, dlgBtnFree, LV_EVENT_DELETE, c);
     }
@@ -728,8 +976,9 @@ void rebootNotice() {
 struct CollCtx {
     const lcd_collection_t* d;
     lv_obj_t* box     = nullptr;    /* item rows */
-    lv_obj_t* candBox = nullptr;    /* candidate rows */
+    lv_obj_t* candBox = nullptr;    /* candidate rows, inside the scan popup */
     std::string arrayScope, candScope, statusScope;
+    lv_obj_t* candOverlay = nullptr;   /* the scan popup, while it is open */
     /* Where every one of this collection's sentinels answers. */
     std::string errKey, ackKey;
     /* The item editor, assembled once from `edit:` + `<cmd>.set`. It has to
@@ -755,19 +1004,21 @@ void confirmRemove(const std::string& text, const std::string& key, const std::s
     lv_obj_add_event_cb(ov, [](lv_event_t* e) {
         delete static_cast<RmCtx*>(lv_event_get_user_data(e));
     }, LV_EVENT_DELETE, rc);
-    wideButton(card, "Remove", "red", [](lv_event_t* e) {
+    lv_obj_t* btns = buttonBar(card);
+    barButton(btns, "Remove", "red", [](lv_event_t* e) {
         auto* r = static_cast<RmCtx*>(lv_event_get_user_data(e));
         std::string k = r->key, id = r->id;      /* the dismiss frees r */
         dismiss(r->ov);
         storageSet(k.c_str(), id.c_str());
     }, rc);
-    wideButton(card, "Cancel", nullptr, [](lv_event_t* e) {
+    barButton(btns, "Cancel", nullptr, [](lv_event_t* e) {
         dismiss(static_cast<RmCtx*>(lv_event_get_user_data(e))->ov);
     }, rc);
 }
 
 void collRebuild(CollCtx* c);
 void candRebuild(CollCtx* c);
+void candPopupClose(CollCtx* c);   /* the scan popup; below with the scan button */
 
 /** One item's storage prefix and identity. */
 ItemScope itemScope(const lcd_collection_t* d, int idx) {
@@ -826,22 +1077,78 @@ void onItemButton(lv_event_t* e) {
         return;
     }
     if (b->edit) {
-        /* The item editor is the collection's `edit:` rows over `<cmd>.set` —
-         * the sentinel family stays derived from the one `cmd` name, so the
-         * descriptor never spells the keys out. */
-        formOpen(&b->c->editForm, sc, b->c->errKey, b->c->ackKey, {}, sc.idValue, b->c);
+        /* The item's detail page: the collection's `edit:` rows over
+         * `<cmd>.set` — the sentinel family stays derived from the one `cmd`
+         * name, so the descriptor never spells the keys out — plus, from
+         * buildItemButtons, everything else the item can be made to do. */
+        formOpen(&b->c->editForm, sc, b->c->errKey, b->c->ackKey, {}, sc.idValue,
+                 b->c, b->idx);
         return;
     }
     if (b->act) lcdSettingRunAction(b->act, sc.prefix.c_str(), sc.idValue.c_str());
 }
 
+/* -- the detail page's own buttons --
+ * A per-item action and removal both leave the item's detail page behind: the
+ * action may make the page's own contents stale (a network you just connected
+ * to), and a removal takes the item out from under it. So each closes the page
+ * first and then runs, which also puts a confirmation dialog on a clear screen
+ * instead of stacking it on the page it is about to invalidate. */
+struct DetailBtnCtx { CollCtx* c; int idx; const lcd_action_t* act; bool remove; };
+
+void detailBtnFree(lv_event_t* e) { delete static_cast<DetailBtnCtx*>(lv_event_get_user_data(e)); }
+
+void onDetailButton(lv_event_t* e) {
+    auto* b = static_cast<DetailBtnCtx*>(lv_event_get_user_data(e));
+    const lcd_collection_t* d = b->c->d;
+    ItemScope sc  = itemScope(d, b->idx);       /* copies: the close frees b */
+    const lcd_action_t* act = b->act;
+    bool remove   = b->remove;
+    std::string rmKey = std::string(d->cmd) + ".remove";
+    std::string confirm = remove && d->remove_confirm && *d->remove_confirm
+                        ? subst(d->remove_confirm, sc) : "";
+
+    formClose();
+    if (!remove) {
+        if (act) lcdSettingRunAction(act, sc.prefix.c_str(), sc.idValue.c_str());
+        return;
+    }
+    if (confirm.empty()) storageSet(rmKey.c_str(), sc.idValue.c_str());
+    else                 confirmRemove(confirm, rmKey, sc.idValue);
+}
+
+void buildItemButtons(lv_obj_t* row, FormCtx* ctx) {
+    if (!ctx || ctx->itemIdx < 0 || !ctx->owner) return;
+    CollCtx* c = const_cast<CollCtx*>(static_cast<const CollCtx*>(ctx->owner));
+    const lcd_collection_t* d = c->d;
+    ItemScope sc = itemScope(d, ctx->itemIdx);
+
+    if (d->has_remove) {
+        auto* bc = new DetailBtnCtx{ c, ctx->itemIdx, nullptr, true };
+        lv_obj_t* b = barButton(row, "Delete", "red", onDetailButton, bc);
+        lv_obj_add_event_cb(b, detailBtnFree, LV_EVENT_DELETE, bc);
+    }
+    for (int a = 0; a < d->nactions; a++) {
+        const lcd_item_action_t& ia = d->actions[a];
+        auto* bc = new DetailBtnCtx{ c, ctx->itemIdx, ia.act, false };
+        lv_obj_t* b = barButton(row, ia.label, ia.color, onDetailButton, bc);
+        lv_obj_add_event_cb(b, detailBtnFree, LV_EVENT_DELETE, bc);
+        /* The gate is the item's, so the key templates against it — "Connect"
+         * is gone on the network already connected. Resolved and subscribed
+         * live, so it goes the moment the device says so. */
+        if (ia.when_key && *ia.when_key)
+            lcdSettingWhenKey(b, subst(ia.when_key, sc).c_str());
+    }
+}
+
 lv_obj_t* itemRowButton(lv_obj_t* parent, const char* txt, ItemBtnCtx* ctx, const char* color) {
     lv_obj_t* b = lv_button_create(parent);
-    lv_obj_set_style_pad_hor(b, 8, 0);
-    lv_obj_set_style_pad_ver(b, 3, 0);
+    lv_obj_set_style_pad_hor(b, 6, 0);
+    lv_obj_set_style_pad_ver(b, 2, 0);
     buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI, listTextPx()), 0);
     lv_obj_center(l);
     lv_obj_add_event_cb(b, onItemButton, LV_EVENT_CLICKED, ctx);
     lv_obj_add_event_cb(b, itemBtnFree, LV_EVENT_DELETE, ctx);
@@ -849,7 +1156,12 @@ lv_obj_t* itemRowButton(lv_obj_t* parent, const char* txt, ItemBtnCtx* ctx, cons
     return b;
 }
 
-lv_obj_t* listRow(lv_obj_t* parent) {
+/* One entry of a collection. The rows of a list are the device's own data
+ * sitting inside the fixed furniture of a settings pane, so they are banded:
+ * two dark greys alternating, neutral where the chrome around them is blue-
+ * tinted, edge to edge with no gap between rows so the banding reads as one
+ * block. `idx` is the row's position in the list — the band it gets. */
+lv_obj_t* listRow(lv_obj_t* parent, int idx) {
     lv_obj_t* r = lv_obj_create(parent);
     lv_obj_remove_style_all(r);
     lv_obj_set_width(r, lv_pct(100));
@@ -857,8 +1169,10 @@ lv_obj_t* listRow(lv_obj_t* parent) {
     lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_hor(r, 8, 0);
-    lv_obj_set_style_pad_ver(r, 3, 0);
+    lv_obj_set_style_pad_ver(r, 6, 0);
     lv_obj_set_style_pad_column(r, 6, 0);
+    lv_obj_set_style_bg_color(r, lv_color_hex((idx & 1) ? 0x282828 : 0x1e1e1e), 0);
+    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
     lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
     return r;
 }
@@ -871,12 +1185,17 @@ lv_obj_t* titleBlock(lv_obj_t* row, const std::string& title, const std::string&
     lv_obj_set_flex_grow(col, 1);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    /* An lv_obj is clickable by default, and this one covers most of the row —
+     * it would swallow the tap that is meant to open the item. The labels inside
+     * it are labels, which are not. */
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* t = lv_label_create(col);
     lv_label_set_text(t, title.c_str());
     lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
     lv_obj_set_width(t, lv_pct(100));
     lv_obj_set_style_text_color(t, lv_color_white(), 0);
+    lv_obj_set_style_text_font(t, lcdFont(LcdFace::UI, listTextPx()), 0);
 
     if (!sub.empty()) {
         lv_obj_t* s = lv_label_create(col);
@@ -884,9 +1203,15 @@ lv_obj_t* titleBlock(lv_obj_t* row, const std::string& title, const std::string&
         lv_label_set_long_mode(s, LV_LABEL_LONG_DOT);
         lv_obj_set_width(s, lv_pct(100));
         lv_obj_set_style_text_color(s, lv_color_hex(0x8a93a0), 0);
-        lv_obj_set_style_text_font(s, lcdFont(LcdFace::MONO, lcdPx(12)), 0);
+        lv_obj_set_style_text_font(s, lcdFont(LcdFace::MONO, listSubPx()), 0);
     }
     return col;
+}
+
+/** Has this collection anything to say about one item beyond its row? If not,
+ *  the row is a readout and stays unclickable. */
+bool hasDetailPage(const lcd_collection_t* d) {
+    return d->nedit > 0 || d->nactions > 0 || d->has_remove;
 }
 
 void collRebuild(CollCtx* c) {
@@ -900,28 +1225,32 @@ void collRebuild(CollCtx* c) {
     }
     for (int i = 0; i < n; i++) {
         ItemScope sc = itemScope(d, i);
-        lv_obj_t* row = listRow(c->box);
+        lv_obj_t* row = listRow(c->box, i);
         titleBlock(row, subst(d->item, sc),
                    (d->subtitle && *d->subtitle) ? subst(d->subtitle, sc) : "");
 
         if (d->status && *d->status) makePill(row, subst(d->status, sc));
 
+        /* Reordering stays on the row: it is about the row's place in the list,
+         * not about the item, and it needs its neighbours in view to make sense.
+         * Everything that acts on the ITEM — the editor, the per-item actions,
+         * removal — lives on its detail page, which the row opens. A row of
+         * five buttons is a row nobody can hit. */
         if (d->orderable) {
             if (i > 0)     itemRowButton(row, LV_SYMBOL_UP,
                                          new ItemBtnCtx{ c, i, nullptr, -1, false, false }, nullptr);
             if (i < n - 1) itemRowButton(row, LV_SYMBOL_DOWN,
                                          new ItemBtnCtx{ c, i, nullptr, +1, false, false }, nullptr);
         }
-        for (int a = 0; a < d->nactions; a++)
-            itemRowButton(row, d->actions[a].label,
-                          new ItemBtnCtx{ c, i, d->actions[a].act, 0, false, false },
-                          d->actions[a].color);
-        if (d->nedit > 0)
-            itemRowButton(row, LV_SYMBOL_EDIT,
-                          new ItemBtnCtx{ c, i, nullptr, 0, false, true }, nullptr);
-        if (d->has_remove)
-            itemRowButton(row, LV_SYMBOL_TRASH,
-                          new ItemBtnCtx{ c, i, nullptr, 0, true, false }, nullptr);
+        /* No chevron: a banded block of rows in a pane of chevron-less rows is
+         * already visibly a list of things, and the affordance would cost the
+         * width the title needs. */
+        if (hasDetailPage(d)) {
+            auto* ctx = new ItemBtnCtx{ c, i, nullptr, 0, false, true };
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(row, onItemButton, LV_EVENT_CLICKED, ctx);
+            lv_obj_add_event_cb(row, itemBtnFree, LV_EVENT_DELETE, ctx);
+        }
     }
 }
 
@@ -932,7 +1261,8 @@ void candCtxFree(lv_event_t* e) { delete static_cast<CandCtx*>(lv_event_get_user
 
 void onCandidatePick(lv_event_t* e) {
     auto* cc = static_cast<CandCtx*>(lv_event_get_user_data(e));
-    const lcd_collection_t* d = cc->c->d;
+    CollCtx* c = cc->c;                    /* the close below frees cc's row */
+    const lcd_collection_t* d = c->d;
     const lcd_candidates_t* cand = d->candidates;
     if (!cand || d->nadds == 0) return;
 
@@ -963,7 +1293,11 @@ void onCandidatePick(lv_event_t* e) {
         std::string v = storageGetStr((candSc.prefix + "." + from).c_str(), "");
         if (!v.empty()) prefill.push_back({ fn, v });
     }
-    formOpen(form, ItemScope{}, cc->c->errKey, cc->c->ackKey, prefill, "", cc->c);
+    /* Picking one answers the question the scan asked, so the popup goes and the
+     * scan with it, and the add form opens over a clear screen. The prefill is
+     * already read by here, which is the order that matters. */
+    candPopupClose(c);
+    formOpen(form, ItemScope{}, c->errKey, c->ackKey, prefill, "", c);
 }
 
 void candRebuild(CollCtx* c) {
@@ -971,18 +1305,16 @@ void candRebuild(CollCtx* c) {
     lv_obj_clean(c->candBox);
     const lcd_candidates_t* cand = c->d->candidates;
     int n = storageArrayCount(cand->key);
+    if (n == 0) { lcdSettingCaption(c->candBox, "Scanning\xE2\x80\xA6"); return; }
     for (int i = 0; i < n; i++) {
         char buf[96];
         snprintf(buf, sizeof(buf), "%s.%d", cand->key, i);
         ItemScope sc;
         sc.prefix = buf;
-        lv_obj_t* row = listRow(c->candBox);
+        lv_obj_t* row = listRow(c->candBox, i);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         titleBlock(row, subst(cand->item, sc),
                    (cand->subtitle && *cand->subtitle) ? subst(cand->subtitle, sc) : "");
-        lv_obj_t* ch = lv_label_create(row);
-        lv_label_set_text(ch, LV_SYMBOL_PLUS);
-        lv_obj_set_style_text_color(ch, lv_color_hex(0x8a93a0), 0);
         auto* cc = new CandCtx{ c, i };
         lv_obj_add_event_cb(row, onCandidatePick, LV_EVENT_CLICKED, cc);
         lv_obj_add_event_cb(row, candCtxFree, LV_EVENT_DELETE, cc);
@@ -1022,8 +1354,70 @@ void onAddButton(lv_event_t* e) {
              {}, "", a->c);
 }
 
+/* -- the scan popup --
+ * Candidates are what the device can SEE, which is a different question from
+ * what it is configured for, and a transient answer to it: they arrive over
+ * seconds, they change, and they are gone the moment you stop asking. Rendered
+ * into the pane they push the configured list around while you are reading it,
+ * and land under a button that may be most of a screen below the fold. So the
+ * scan button opens them as a popup — the results are the whole screen, they
+ * start at the top of it, and closing it is what stops the scan. */
+
+/** Stop the scan. The refresh target is a plain key, so clearing it is the whole
+ *  "stop scanning" contract — no straddle carries a timer for it. */
+void candScanStop(const lcd_collection_t* d) {
+    const lcd_candidates_t* cand = d->candidates;
+    if (cand && cand->refresh && cand->refresh->kind == LCD_ACT_SET && cand->refresh->key)
+        storageSet(cand->refresh->key, "0");
+}
+
+/** The popup went away by some path other than candPopupClose — a reset while
+ *  the Settings app closes. Found by overlay rather than by a captured pointer:
+ *  the deletes are async, so a context that has already been torn down must not
+ *  be reachable from one, and a collection drops out of s_colls before it dies. */
+void onCandPopupDelete(lv_event_t* e) {
+    lv_obj_t* ov = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    for (CollCtx* c : s_colls)
+        if (c->candOverlay == ov) { c->candOverlay = nullptr; c->candBox = nullptr; return; }
+}
+
+void candPopupClose(CollCtx* c) {
+    if (!c->candOverlay) return;
+    candScanStop(c->d);
+    lv_obj_t* ov = c->candOverlay;
+    c->candOverlay = nullptr;     /* the delete callback would do this too, but
+                                   * the dismiss is async and a second press
+                                   * must not open a second popup meanwhile */
+    c->candBox = nullptr;
+    dismiss(ov);
+}
+
 void onRefreshButton(lv_event_t* e) {
-    lcdSettingRunAction(static_cast<const lcd_action_t*>(lv_event_get_user_data(e)));
+    auto* c = static_cast<CollCtx*>(lv_event_get_user_data(e));
+    if (c->candOverlay) return;
+    const lcd_candidates_t* cand = c->d->candidates;
+
+    /* Titled for what it is showing, not for the button that opened it: by the
+     * time it is on screen the asking is done. */
+    lv_obj_t* card = makeModal(&c->candOverlay,
+                               (cand->found && *cand->found) ? cand->found
+                                                             : cand->refresh_label,
+                               [](lv_event_t* ev) {
+                                   candPopupClose(static_cast<CollCtx*>(lv_event_get_user_data(ev)));
+                               }, c);
+    lv_obj_add_event_cb(c->candOverlay, onCandPopupDelete, LV_EVENT_DELETE, nullptr);
+
+    /* The list IS the popup's body: one scroll container, so a busy band scrolls
+     * inside the card instead of growing it off the screen. */
+    c->candBox = lv_obj_create(card);
+    lv_obj_remove_style_all(c->candBox);
+    lv_obj_set_width(c->candBox, lv_pct(100));
+    lv_obj_set_height(c->candBox, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(c->candBox, (lcdScreenH() * 2) / 3, 0);
+    lv_obj_set_flex_flow(c->candBox, LV_FLEX_FLOW_COLUMN);
+
+    candRebuild(c);                       /* whatever the last scan left cached */
+    lcdSettingRunAction(cand->refresh);   /* then ask for a fresh one */
 }
 
 void collDelete(lv_event_t* e) {
@@ -1038,12 +1432,11 @@ void collDelete(lv_event_t* e) {
         if (!c->arrayScope.empty())  subDrop(c->arrayScope);
         if (!c->candScope.empty())   subDrop(c->candScope);
         if (!c->statusScope.empty()) subDrop(c->statusScope);
-        /* Leaving the pane stops the scan. The refresh target is a plain key,
-         * so clearing it here is the whole "stop scanning on leave" contract —
-         * no straddle carries a visibility timer for it. */
-        const lcd_candidates_t* cand = c->d->candidates;
-        if (cand && cand->refresh && cand->refresh->kind == LCD_ACT_SET && cand->refresh->key)
-            storageSet(cand->refresh->key, "0");
+        /* Leaving the pane stops the scan and takes its popup with it — the
+         * popup lives on lv_layer_top, outside the pane's widget tree, so
+         * nothing else would. */
+        candPopupClose(c);
+        candScanStop(c->d);
         delete c;
         return;
     }
@@ -1052,6 +1445,8 @@ void collDelete(lv_event_t* e) {
 }  // namespace
 
 /* ================= public ================= */
+
+void lcdSettingsRebootNotice(void) { rebootNotice(); }
 
 void lcdSettingRunAction(const lcd_action_t* act, const char* itemPrefix,
                          const char* idValue) {
@@ -1105,6 +1500,7 @@ lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action
                            const char* color) {
     lv_obj_t* b = lv_button_create(parent);
     lv_obj_set_width(b, lv_pct(100));
+    lcdSettingsHalfPadVer(b);
     buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
@@ -1139,7 +1535,7 @@ lv_obj_t* lcdSettingActionRow(lv_obj_t* parent, lcd_align_t align,
         lv_obj_t* b = lv_button_create(row);
         lv_obj_set_size(b, LV_SIZE_CONTENT, LV_SIZE_CONTENT);   /* share the line */
         lv_obj_set_style_pad_hor(b, 12, 0);
-        lv_obj_set_style_pad_ver(b, 5, 0);
+        lv_obj_set_style_pad_ver(b, 2, 0);
         buttonColor(b, btns[i].color);
         lv_obj_t* l = lv_label_create(b);
         lv_label_set_text(l, btns[i].label);
@@ -1165,36 +1561,45 @@ lv_obj_t* lcdSettingCollection(lv_obj_t* parent, const lcd_collection_t* d) {
     c->setCmd = std::string(d->cmd) + ".set";
     c->errKey = std::string(d->cmd) + ".error";
     c->ackKey = std::string(d->cmd) + ".done";
+    /* No title: the page belongs to the ITEM, and the collection's name over it
+     * ("Known networks") says nothing about which one. A pane that wants the
+     * item named puts a `section:` row at the top of `edit:` — templated over
+     * the item, so it can be the item. */
     c->editForm = lcd_form_t{ .fields = d->edit, .nfields = d->nedit,
                               .cmd = c->setCmd.c_str(), .submit = "Save",
-                              .title = (d->label && *d->label) ? d->label : nullptr };
+                              .title = nullptr };
 
     c->box = lv_obj_create(parent);
     lv_obj_remove_style_all(c->box);
     lv_obj_set_width(c->box, lv_pct(100));
     lv_obj_set_height(c->box, LV_SIZE_CONTENT);
+    /* Above and below the banded block, not between the rows: the bands have to
+     * meet for the alternation to read as one list. */
+    lv_obj_set_style_pad_ver(c->box, 4, 0);
     lv_obj_set_flex_flow(c->box, LV_FLEX_FLOW_COLUMN);
     lv_obj_remove_flag(c->box, LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < d->nadds; i++) {
-        auto* a = new AddBtnCtx{ c, i };
-        lv_obj_t* b = wideButton(parent, d->adds[i].label, nullptr, onAddButton, a);
-        lv_obj_add_event_cb(b, addBtnFree, LV_EVENT_DELETE, a);
+    /* The collection's own buttons share one bar under the list, gathered right
+     * like a dialog's: scanning first, because finding a thing is what you reach
+     * for before describing one by hand. Each is sized to its label, so two of
+     * them cost one line instead of two full-width ones. */
+    const lcd_candidates_t* cand = d->candidates;
+    bool wantScan = cand && cand->refresh && cand->refresh_label && *cand->refresh_label;
+    if (wantScan || d->nadds > 0) {
+        lv_obj_t* bar = buttonBar(parent);
+        if (wantScan)
+            barButton(bar, cand->refresh_label, nullptr, onRefreshButton, c);
+        for (int i = 0; i < d->nadds; i++) {
+            auto* a = new AddBtnCtx{ c, i };
+            lv_obj_t* b = barButton(bar, d->adds[i].label, nullptr, onAddButton, a);
+            lv_obj_add_event_cb(b, addBtnFree, LV_EVENT_DELETE, a);
+        }
     }
 
-    if (d->candidates) {
-        const lcd_candidates_t* cand = d->candidates;
-        if (cand->refresh_label && *cand->refresh_label && cand->refresh)
-            wideButton(parent, cand->refresh_label, nullptr, onRefreshButton,
-                       (void*)cand->refresh);
-        c->candBox = lv_obj_create(parent);
-        lv_obj_remove_style_all(c->candBox);
-        lv_obj_set_width(c->candBox, lv_pct(100));
-        lv_obj_set_height(c->candBox, LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(c->candBox, LV_FLEX_FLOW_COLUMN);
-        lv_obj_remove_flag(c->candBox, LV_OBJ_FLAG_SCROLLABLE);
-        c->candScope = cand->key;
-    }
+    /* Candidates have no place on the pane: they live in the scan popup, which
+     * the button above opens. The subscription is the pane's, though, so a scan
+     * already running when the popup is reopened fills it at once. */
+    if (cand) c->candScope = cand->key;
 
     c->arrayScope = d->key;
     if (d->status && *d->status) c->statusScope = literalPrefix(d->status);
@@ -1206,6 +1611,5 @@ lv_obj_t* lcdSettingCollection(lv_obj_t* parent, const lcd_collection_t* d) {
     lv_obj_add_event_cb(c->box, collDelete, LV_EVENT_DELETE, nullptr);
 
     collRebuild(c);
-    if (c->candBox) candRebuild(c);
     return c->box;
 }

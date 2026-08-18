@@ -4,10 +4,8 @@
  * polling): clock from s.lcd.date_format, wifi from wifi.sta.*, battery from
  * battery.percent. Geometry/colour come from the stylesheet, not #defines.
  *
- * M1 ports the legacy bar (clock + wifi opacity + battery) onto the stylesheet so
- * the shell does not regress. M2 adds the upstream-reachability glyph
- * (wifi.sta.up), RSSI bars (replacing the opacity hack), and the per-app icon
- * areas (LcdApp::setStatusIcon) behind the same renderer.
+ * Wifi strength is shown as glyph opacity; LcdApp::setStatusIcon has no renderer
+ * behind it yet.
  */
 #include "shell_internal.h"
 #include "stylesheet.h"
@@ -179,12 +177,4 @@ lv_obj_t* lcdStatusbarAddIndicator(void) {
      * their order, so the newest sits nearest the battery. */
     if (s_batt) lv_obj_move_to_index(slot, lv_obj_get_index(s_batt));
     return slot;
-}
-
-void lcdStatusbarRestyle(void) {
-    /* Re-point the labels that name a font at the freshly-resolved sheet font
-     * (a UI-zoom change). The symbol labels (battery/wifi) inherit the theme, so
-     * only the clock carries an explicit font. */
-    if (s_clock && lcdStyle().core.font)
-        lv_obj_set_style_text_font(s_clock, lcdStyle().core.font, 0);
 }

@@ -3,9 +3,9 @@
  *
  * Public API is lcd.h; the input HAL is lcd_input.h. This header wires the
  * internal modules: core task (lcd.cpp), panel bring-up (lcd_panel.cpp), LVGL
- * bring-up (lcd_lvgl.cpp), icon cache + loader (lcd_icons.cpp), launcher
- * (lcd_launcher.cpp), status bar (lcd_statusbar.cpp). Everything here runs on
- * the lcd task unless noted.
+ * bring-up (lcd_lvgl.cpp), icon cache + loader (lcd_icons.cpp), and the shell
+ * (shell/, glued by shell_internal.h). Everything here runs on the lcd task
+ * unless noted.
  */
 #pragma once
 
@@ -63,8 +63,10 @@ void        lcdPauseIdleInputTimers(void);
  * lcdScreenSleep/lcdScreenWake are the standby primitives — declared in lcd.h, as
  * the board (not the lcd component) drives them off the sys.standby key. */
 /** Set the inactivity timeout (seconds; <=0 = never) and (re)arm the timer. On
- *  expiry the lcd component sets the ephemeral sys.standby key; the board acts on
- *  it. Driven by the s.lcd.inactivity_timeout subscription. */
+ *  expiry the backlight drops right down and a 10 s grace timer starts; only that one sets
+ *  the ephemeral sys.standby key, which the board acts on. Any input in between
+ *  undims and restarts the countdown. Driven by the s.lcd.inactivity_timeout
+ *  subscription. */
 void        lcdInactivitySetTimeout(int seconds);
 /** Register user input: re-arms the inactivity timer. Always returns false (waking
  *  from standby is the board's job, via sys.standby); kept bool for callers. */
@@ -87,8 +89,8 @@ void        lcdBootSettleKick(void);
  *  it so a trackball-only board navigates the same UI. */
 lv_group_t* lcdInputGroup(void);
 
-/** Set trackball→arrows mode (the launcher calls this as the shown layer
- *  changes; see lcdProgramScrollwheelArrows). Hides the pointer while on. */
+/** Set trackball→arrows mode (the manager calls this as the foreground app
+ *  changes; see LcdApp::setScrollwheelArrows). Hides the pointer while on. */
 void        lcdScrollwheelArrowsApply(bool on);
 
 /** Hide the ball cursor immediately (no dwell fade). The input box calls this the
@@ -102,21 +104,19 @@ void        lcdPointerHide(void);
  * calls lcdLauncherIconLoaded(base, px). */
 /** Start the icon loader task. Call after lv_init(). */
 void        lcdIconsInit(void);
-/** Drop every cached raster (a runtime zoom change; re-request at the new px). */
-void        lcdIconsReset(void);
 
 /* ---- shell/launcher.cpp ---- */
 /** An icon just landed in the cache — set the real image on matching tiles. */
 void        lcdLauncherIconLoaded(const char* basename, int px);
-/** Re-request every tile's icon (after a zoom / icon-cache reset). */
-void        lcdLauncherReload(void);
+
+/* ---- shell/manager.cpp ---- */
 /** Hide the current program layer and reveal the launcher. */
 void        lcdGoHomeInternal(void);
+/** Raise the running-app switcher over whatever is on screen. */
+void        lcdShowRecentsInternal(void);
 
 /* ---- shell/statusbar.cpp ---- */
 void        lcdStatusbarInit(void);
-/** Re-point the status bar's fonts after a UI-zoom recalibration. Lcd task. */
-void        lcdStatusbarRestyle(void);
 /** Show/hide the opaque top status bar (e.g. for an immersive program screen).
  *  The shell coordinates this with the foreground app's geometry — programs
  *  should call lcdProgramFullscreen(), not this, to reclaim the bar's space. */

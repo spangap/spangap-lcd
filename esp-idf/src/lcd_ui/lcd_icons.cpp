@@ -198,11 +198,3 @@ void lcdIconRequest(const char* basename, int px) {
     req.px = px;
     if (s_loadQ && xQueueSend(s_loadQ, &req, 0) != pdTRUE) warn("icon load queue full\n");
 }
-
-void lcdIconsReset(void) {
-    /* Drop every cached raster (a zoom change re-requests at the new size). Any
-     * lv_image still pointing at a freed dsc must be re-sourced before the next
-     * redraw — the launcher reload does exactly that. Lcd task only. */
-    for (auto& kv : s_cache) { free(kv.second->pixels); delete kv.second; }
-    s_cache.clear();
-}

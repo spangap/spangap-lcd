@@ -56,8 +56,8 @@ typedef struct lcd_btn_t {
 
 typedef enum {
     LCD_ROW_SECTION, LCD_ROW_CAPTION, LCD_ROW_SWITCH, LCD_ROW_SLIDER,
-    LCD_ROW_TEXT, LCD_ROW_DROPDOWN, LCD_ROW_VALUE, LCD_ROW_BUTTON,
-    LCD_ROW_LIST,
+    LCD_ROW_TEXT, LCD_ROW_DROPDOWN, LCD_ROW_TIMEZONE, LCD_ROW_VALUE,
+    LCD_ROW_BUTTON, LCD_ROW_LIST,
 } lcd_row_kind_t;
 
 /** One row, as data. A pane's own rows are emitted as lcdSetting* CALLS (that
@@ -86,7 +86,12 @@ typedef struct lcd_row_t {
     bool        copyable       = false;     /* value rows; the web's copy affordance */
     const char* options        = nullptr;   /* dropdown values, newline-separated */
     const char* opt_labels     = nullptr;   /* dropdown labels, 1:1 with options */
+    /* A timezone row carries NO options: it renders region + zone dropdowns
+     * from the firmware's built-in zone table (timezones.h). Its
+     * placeholder_key names the storage key whose value (the applied zone)
+     * seeds the initial selection. Form fields only. */
     const char* placeholder    = nullptr;
+    const char* placeholder_key = nullptr;  /* placeholder text the device publishes */
     const char* dflt           = nullptr;   /* form prefill; may template. Never seeded */
     const struct lcd_action_t* act      = nullptr;   /* button */
     const struct lcd_collection_t* coll = nullptr;   /* list */
@@ -139,26 +144,34 @@ typedef struct lcd_add_t {
 } lcd_add_t;
 
 typedef struct lcd_item_action_t {
-    const char*         label = nullptr;
-    const char*         color = nullptr;   /* palette name or "rrggbb"; null = default */
-    const lcd_action_t* act   = nullptr;
+    const char*         label    = nullptr;
+    const char*         color    = nullptr;   /* palette name or "rrggbb"; null = default */
+    const char*         when_key = nullptr;   /* "{field}"-templated over the item */
+    const lcd_action_t* act      = nullptr;
 } lcd_item_action_t;
 
-/** Scan-and-adopt. The owning task publishes an ephemeral array; picking one of
- *  its rows opens the collection's first add form, prefilled. The runtime
- *  clears the refresh target key when the pane goes away, so nothing has to
- *  carry a "stop scanning on leave" timer. */
+/** Scan-and-adopt. The owning task publishes an ephemeral array; the `refresh`
+ *  button opens it as a popup and picking one of its rows opens the collection's
+ *  first add form, prefilled. The runtime clears the refresh target key when
+ *  that popup closes or the pane goes away, so nothing has to carry a "stop
+ *  scanning on leave" timer. */
 typedef struct lcd_candidates_t {
     const char*         key           = nullptr;
     const char*         item          = nullptr;  /* "{field}" over what the task publishes */
     const char*         subtitle      = nullptr;
-    const char*         refresh_label = nullptr;
+    const char*         refresh_label = nullptr;  /* the button that opens the results */
+    const char*         found         = nullptr;  /* the results popup's title */
     const lcd_action_t* refresh       = nullptr;
     const char*         map           = nullptr;  /* field renames, "from:to,from:to" */
 } lcd_candidates_t;
 
 /** An array-of-objects in storage, edited entirely through sentinels: the UI
- *  never writes the array, the owning task is its only writer. */
+ *  never writes the array, the owning task is its only writer.
+ *
+ *  A row shows the item and nothing else: its title, its subtitle, its status
+ *  pill, and the reorder arrows when `orderable`. Everything that acts on the
+ *  item — `edit`, `actions`, `remove` — is on the item's DETAIL PAGE, which the
+ *  row opens when tapped anywhere. */
 typedef struct lcd_collection_t {
     const char* label     = nullptr;
     const char* key       = nullptr;   /* the array */

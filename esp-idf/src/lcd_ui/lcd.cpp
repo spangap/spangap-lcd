@@ -1,10 +1,10 @@
 /**
- * lcd.cpp — lcd task + public API (lcdRun / lcdRegister / lcdSetBacklight /
- * lcdGoHome) and config defaults.
+ * lcd.cpp — lcd task + public API (lcdRun / lcdSetBacklight / lcdGoHome /
+ * lcdShowRecents) and config defaults.
  *
- * The lcd task owns the one LVGL context. It is an itsPoll task: lcdRun /
- * lcdRegister hand work onto it as ITS aux messages (mirroring how storage
- * delivers ON_CHANGE), and storage change subscriptions are dispatched here
+ * The lcd task owns the one LVGL context. It is an itsPoll task: lcdRun hands
+ * work onto it as ITS aux messages (mirroring how storage delivers
+ * ON_CHANGE), and storage change subscriptions are dispatched here
  * too. Because itsPoll's notification accounting must stay intact, this task
  * NEVER does flash I/O — icon files are read by the loader task in
  * lcd_icons.cpp and the bytes handed back via lcdRun.
@@ -12,6 +12,7 @@
 #include "lcd.h"
 #include "lcd_input.h"
 #include "lcd_internal.h"
+#include "lcd_settings_priv.h"   /* lcdSettingsRebootNotice — the UI-zoom restart */
 #include "shell_internal.h"   /* shellInit — the phone-style shell */
 
 #include "spangap.h"          /* spangapSafeMode — the boot that must not blank */
@@ -22,6 +23,7 @@
 #include "pm.h"
 
 #include "esp_attr.h"
+#include "esp_system.h"       /* esp_restart — the UI-zoom restart */
 #include "freertos/semphr.h"
 
 #include <cstdlib>
@@ -105,6 +107,10 @@ void lcdGoHome(void) {
     lcdRun([](void*) { lcdGoHomeInternal(); });
 }
 
+void lcdShowRecents(void) {
+    lcdRun([](void*) { lcdShowRecentsInternal(); });
+}
+
 bool lcdNotifyActivity(void) {
     /* On the lcd task (e.g. a consumer keyboard read_cb): act inline and report
      * whether it woke the screen, so the caller can swallow the waking key.
@@ -130,7 +136,7 @@ static void lcdTaskFn(void*) {
     lcdIconsInit();
 
     lv_obj_t* scr = lv_screen_active();
-    /* The phone-style shell: status bar + paged launcher + LcdApp lifecycle.
+    /* The phone-style shell: status bar + launcher + LcdApp lifecycle.
      * Installs the built-in Settings/Log/CLI apps; other straddles install their
      * programs from their *LcdRegister hooks via lcdRun(lcdInstall(...)). */
     shellInit(scr);
@@ -144,12 +150,20 @@ static void lcdTaskFn(void*) {
      * device can light-sleep with the screen on. */
 
     /* Live config. Backlight target applies on this task (held dark until the boot
-     * reveal). Icons are rasterized on demand at the tile size (no icon_res
-     * bucket); a zoom change reloads the launcher via lcdStyleRecalibrate. */
+     * reveal). Icons are rasterized on demand at the tile size. */
     NOW_AND_ON_CHANGE("s.lcd.backlight", { lcdBacklightSetTarget((uint8_t)atoi(val)); });
-    /* UI zoom: recalibrate fonts + reflow the launcher/statusbar on change (the
-     * initial value is already applied at lcdStyleBegin, so subscribe-only). */
-    storageSubscribeChanges("s.lcd.scale", ON_CHANGE { shellApplyZoom(); });
+    /* UI zoom is read once, by lcdStyleBegin, when the shell is built. A change
+     * restarts the device: the scale sizes every font, icon, tile and pane the
+     * shell has already laid out, and the rows the setting is being changed from
+     * are themselves part of what has to be rebuilt. So the pane says it reboots
+     * and this is what does it — cover the screen, then restart off a one-shot
+     * timer so the notice reaches the panel before the chip goes. */
+    storageSubscribeChanges("s.lcd.scale", ON_CHANGE {
+        lcdSettingsRebootNotice();
+        lv_timer_t* t = lv_timer_create([](lv_timer_t*) { storageSave(); esp_restart(); },
+                                        400, nullptr);
+        lv_timer_set_repeat_count(t, 1);
+    });
     /* Inactivity: after s.lcd.inactivity_timeout s with no input we set the
      * ephemeral sys.standby key; the board decides what standby means (and clears
      * the key to wake). 0 = never. */
@@ -220,8 +234,9 @@ void lcdInit(void) {
 
     storageBegin();
     storageDefault("s.lcd.backlight",    200);
-    storageDefault("s.lcd.scale",        100);   /* UI zoom %, clamp 50–200 */
+    storageDefault("s.lcd.scale",        100);   /* UI zoom %, clamp 50–250 */
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
+    storageDefault("s.lcd.launcher_order", "");   /* empty = install order */
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */
     storageEnd();
 

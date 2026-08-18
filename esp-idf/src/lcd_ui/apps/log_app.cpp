@@ -1,7 +1,7 @@
 /**
  * log_app.cpp — the on-device Log program as an LcdApp (the first real one).
  *
- * Direct port of the legacy Log program (lcd_apps.cpp): a virtualized text view
+ * The on-device Log program: a virtualized text view
  * in Spleen 5x8, an ITS client of the log task's log:1 DC port (plain text,
  * {"ansi":0}), with per-line severity colour. The lifecycle maps cleanly:
  *   onCreate  <- build the text view + open the ITS connection (was logFn)

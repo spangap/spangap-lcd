@@ -341,18 +341,39 @@ void lcdPointerSetVisibleMs(int ms) {
     }
 }
 
-/* ---- inactivity timeout -> standby, backlight fade, boot reveal ----
- * After s.lcd.inactivity_timeout seconds with no user input the lcd component does
- * NOT itself blank — it only sets the ephemeral `sys.standby` key. The board owns
- * what standby means: it subscribes to sys.standby and calls lcdScreenSleep() /
- * lcdScreenWake() (and powers its own input down/up). The board's centre button
+/* ---- inactivity timeout -> dim -> standby, backlight fade, boot reveal ----
+ * The timeout runs in two stages. After s.lcd.inactivity_timeout seconds with no
+ * user input the backlight drops right down (dimLevel): the screen is still on and
+ * still usable,
+ * and it is asking whether anyone is there. Only if nothing happens for the ten
+ * seconds after that does the lcd component set the ephemeral `sys.standby` key.
+ * Any input in the grace window undims and restarts the countdown, so keeping the
+ * screen awake costs a touch rather than a wake-up.
+ *
+ * The grace window is a constant, not a setting: it is the time it takes to notice
+ * the screen has dimmed and reach for it, which is a property of people rather
+ * than of a preference.
+ *
+ * Stage two only sets the key — the lcd component does NOT itself blank. The board
+ * owns what standby means: it subscribes to sys.standby and calls lcdScreenSleep()
+ * / lcdScreenWake() (and powers its own input down/up). The board's centre button
  * sets/clears the same key, so the timeout and the button share one path. While
  * asleep the lcd loop stops rendering so the chip can light-sleep.
  *
  * The backlight is faded (not snapped) on wake and on the one-shot boot reveal, and
  * is held dark from boot until the launcher has settled with its icons placed — so
  * the UI never flashes on half-built. lcdScreenSleep snaps it to 0 (dark fast). */
-static lv_timer_t* s_blankTimer = nullptr;
+static constexpr uint32_t kDimGraceMs = 10000;   /* dimmed -> asleep */
+static constexpr uint32_t kDimFadeMs  = 400;     /* the dim itself: slow enough to notice */
+static constexpr int32_t  kDimLevel   = 20;      /* backlight duty while dimmed (of 255) */
+/* Going dark is brisk: by then the decision is made, whether by the grace window
+ * running out or by a button held on purpose, and a lingering fade just reads as
+ * a slow device. Coming back is the softer one — see lcdScreenWake. */
+static constexpr uint32_t kSleepFadeMs = 150;
+
+static lv_timer_t* s_blankTimer = nullptr;   /* fires at the timeout -> dim */
+static lv_timer_t* s_dimTimer   = nullptr;   /* fires kDimGraceMs later -> standby */
+static bool        s_dimmed     = false;     /* in the grace window */
 static int         s_blankMs    = 0;       /* <=0 = never time out */
 static volatile bool s_mirrorWant = false; /* desired hold (set from any task; authoritative) */
 static bool        s_mirrorHold = false;   /* applied hold (lcd task): stay awake, no blank */
@@ -383,14 +404,25 @@ static void backlightFadeTo(int32_t level, uint32_t ms, lv_anim_completed_cb_t d
     lv_anim_start(&a);
 }
 
+/* kDimLevel, or half the configured level when that is dimmer still. Half of a
+ * bright screen is barely a change and goes unnoticed, which is the one thing the
+ * dim cannot afford to do; an already-dim screen halves instead, so the step is
+ * always downward. Never 0 while the screen is lit — dark would read as asleep. */
+static int32_t dimLevel(void) {
+    int32_t half = (int32_t)s_blTarget / 2;
+    int32_t lvl  = half < kDimLevel ? half : kDimLevel;
+    return (s_blTarget > 0 && lvl < 1) ? 1 : lvl;
+}
+
 void lcdBacklightSetTarget(uint8_t level) {
     s_blTarget = level;
     /* Live slider change: apply at once while awake and past the boot reveal;
      * before the reveal (or while asleep) just remember it — the fade-in uses it. */
     if (s_booted && !s_screenOff) {
         lv_anim_delete(&s_blCur, blAnimExec);
-        lcdPanelBacklight(level);
-        s_blCur = level;
+        int32_t now = s_dimmed ? dimLevel() : (int32_t)level;
+        lcdPanelBacklight((uint8_t)now);
+        s_blCur = now;
     }
 }
 
@@ -412,12 +444,36 @@ void lcdBootSettleKick(void) {
     lv_timer_set_repeat_count(s_settle, 1);
 }
 
+/* Stage two: the grace window ran out with nobody there. */
+static void dimExpired(lv_timer_t*) {
+    s_dimTimer = nullptr;
+    s_dimmed   = false;      /* the sleep fade takes the backlight from here */
+    storageSet("sys.standby", 1);
+}
+
+/* Stage one: half brightness, and ten seconds to object. */
+static void dimEnter(void) {
+    if (s_dimmed || s_screenOff || s_fadingOut) return;
+    s_dimmed = true;
+    backlightFadeTo(dimLevel(), kDimFadeMs);
+    s_dimTimer = lv_timer_create(dimExpired, kDimGraceMs, nullptr);
+    lv_timer_set_repeat_count(s_dimTimer, 1);
+}
+
+/* Somebody objected (or the screen is being taken somewhere else entirely). */
+static void dimLeave(void) {
+    if (s_dimTimer) { lv_timer_delete(s_dimTimer); s_dimTimer = nullptr; }
+    if (!s_dimmed) return;
+    s_dimmed = false;
+    if (!s_screenOff && !s_fadingOut) backlightFadeTo(s_blTarget, 200);
+}
+
 static void armBlankTimer(void) {
     if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
     /* A connected remote viewer holds the panel awake: never arm the blank timer
      * until it disconnects (lcdMirrorKeepAwake). */
     if (s_mirrorHold || s_blankMs <= 0 || s_screenOff) return;
-    s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; storageSet("sys.standby", 1); },
+    s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; dimEnter(); },
                                    (uint32_t)s_blankMs, nullptr);
     lv_timer_set_repeat_count(s_blankTimer, 1);   /* one-shot: fires once, self-deletes */
 }
@@ -436,10 +492,12 @@ static void blSleepDone(lv_anim_t*) {
 void lcdScreenSleep(void) {
     if (s_screenOff || s_fadingOut) return;
     if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+    if (s_dimTimer)   { lv_timer_delete(s_dimTimer);   s_dimTimer   = nullptr; }
+    s_dimmed = false;   /* the fade to 0 below starts from wherever the dim left it */
     /* Ramp the backlight down (the loop keeps rendering to drive the anim while
      * s_screenOff is still false); blSleepDone powers the panel off at 0. */
     s_fadingOut = true;
-    backlightFadeTo(0, 300, blSleepDone);
+    backlightFadeTo(0, kSleepFadeMs, blSleepDone);
 }
 
 void lcdScreenWake(void) {
@@ -450,6 +508,7 @@ void lcdScreenWake(void) {
     bool wasOff = s_screenOff;
     s_fadingOut = false;                          /* cancel a fade-out in progress */
     s_screenOff = false;
+    dimLeave();                                   /* full brightness, grace timer off */
     if (wasOff) {
         tickTimerRun(true);                       /* resume LVGL time before the fade anim runs */
         lcdPanelDisplayPower(true);               /* panel was off — bring it back */
@@ -482,6 +541,7 @@ void lcdMirrorApplyHold(void) {
          * so no subscriber ever sees it and the screen never blanks again. */
         storageSet("sys.standby", 0);
         if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+        dimLeave();                     /* a viewer connecting is somebody being there */
     } else {
         armBlankTimer();                /* restore the configured timeout */
     }
@@ -496,6 +556,7 @@ void lcdMirrorKeepAwake(bool on) {
  * board's job (it clears sys.standby), not ours, so this no longer wakes and always
  * returns false — kept bool for lcdNotifyActivity's callers. */
 bool lcdActivity(void) {
+    dimLeave();                          /* a touch in the grace window is the answer */
     if (s_blankTimer) lv_timer_reset(s_blankTimer);
     else              armBlankTimer();   /* (re)arm if a setting change left it off */
     return false;
@@ -584,6 +645,14 @@ bool lcdLvglInit(void) {
 
     /* Focus group for non-pointer input (populated by the launcher). */
     s_group = lv_group_create();
+    /* Where the ring goes when the widget under it is deleted. LVGL defaults to
+     * the PREVIOUS group member, which walks BACKWARDS out of whatever was
+     * being torn down and, from the first member, wraps onto the very last
+     * widget ever added — the bottom of a long pane, dragged into view by the
+     * scroll-on-focus every object carries. Forwards is the direction a
+     * teardown actually goes: deleting a list of rows walks the ring off the
+     * end of the list and onto the controls after it, where the operator is. */
+    lv_group_set_refocus_policy(s_group, LV_GROUP_REFOCUS_POLICY_NEXT);
 
     /* Board input setup (create touch handles, wire input INT lines) — on the lcd
      * task, with the panel and the shared GPIO ISR service already up. */
@@ -738,7 +807,7 @@ int         lcdScreenH(void)     { return s_h; }
 void        lcdDisplaySize(int* w, int* h) { if (w) *w = s_w; if (h) *h = s_h; }
 lv_group_t* lcdInputGroup(void)  { return s_group; }
 
-/* ---- trackball → arrow keys (see lcdProgramScrollwheelArrows) ---- */
+/* ---- trackball → arrow keys (see LcdApp::setScrollwheelArrows) ---- */
 static bool s_swArrows = false;
 void lcdScrollwheelArrowsApply(bool on) {
     s_swArrows = on;

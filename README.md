@@ -1,7 +1,7 @@
 # spangap-lcd — the on-device LVGL UI
 
 **spangap-lcd** is the on-device user interface for the [spangap](../spangap)
-platform: a phone-style shell (status bar, paged launcher, navigation, recents
+platform: a phone-style shell (status bar, scrolling launcher, navigation, recents
 switcher) on top of a per-app object model, with built-in Settings, Log and CLI
 apps, drawn with [LVGL](https://lvgl.io) v9 on an SPI display. It is the screen
 counterpart to the browser SPA in [spangap-web](../spangap-web) — a separate UI
@@ -188,8 +188,18 @@ non-scroll content register their own pan handler — see [docs/apps.md](docs/ap
 
 `lcdSetBacklight(level)` (0..255) writes `s.lcd.backlight`; a subscription
 applies it on the lcd task, so writing the key directly (browser, CLI) has the
-identical effect. After `s.lcd.inactivity_timeout` seconds with no input the
-component does **not** blank itself — it only sets the ephemeral `sys.standby`
+identical effect.
+
+The timeout runs in **two stages**. After `s.lcd.inactivity_timeout` seconds with
+no input the backlight drops to 20/255 (or half the configured level, if that is
+already dimmer) — the screen is still on and still usable,
+and it is asking whether anyone is there. Only if nothing happens for the ten
+seconds after that does the component set the ephemeral `sys.standby` key. Any
+input in that window undims and restarts the countdown, so keeping the screen
+awake costs a touch instead of a wake-up. The ten seconds are a constant, not a
+setting: it is how long it takes to notice the screen dim and reach for it.
+
+Even at stage two the component does **not** blank itself — it only sets the
 key. **Standby is the board's policy:** the board subscribes to `sys.standby`
 and calls `lcdScreenSleep()` / `lcdScreenWake()` (backlight off + panel display
 off, GRAM retained for an instant fade-in wake) and powers its own input
@@ -215,8 +225,8 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | Key | Default | Meaning |
 |---|---|---|
 | `s.lcd.backlight` | `200` | Backlight 0..255 (0 = off); applied live. |
-| `s.lcd.scale` | `100` | UI zoom in percent, clamped 50–200; a change reflows fonts, icons, and the launcher grid live (see [docs/shell.md](docs/shell.md#ui-zoom)). |
-| `s.lcd.inactivity_timeout` | `30` | Seconds of no input before `sys.standby` is set; `0` = never. |
+| `s.lcd.scale` | `100` | UI zoom in percent, clamped 50–250; read when the shell is built, so a change restarts the device (see [docs/shell.md](docs/shell.md#ui-zoom)). |
+| `s.lcd.inactivity_timeout` | `30` | Seconds of no input before the backlight drops right down; `sys.standby` follows 10 s later. `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
 | `sys.standby` | — | Ephemeral. Set by the component on inactivity, set/cleared by the board's button; the board acts on it. |
 
@@ -328,6 +338,12 @@ engine (several bit in [lcd_input_box.cpp](esp-idf/src/lcd_ui/lcd_input_box.cpp)
 - **Flex `flex_grow` fills the main axis; per-item cross alignment doesn't exist.**
   To top-align one child and bottom-align another in the same row, size a sub-column
   to the row and justify within it (that's how the compose Send bottom-aligns).
+- **A `flex_grow` item's margins are spent but not budgeted.** `find_track()` only
+  measures non-grow items (`lv_obj_get_width_with_margin`), while `children_repos()`
+  advances the cursor past every item's margins — so a margin on a grow item pushes
+  its siblings that far past the container's edge, silently. Express the space as
+  the container's padding and column gap instead, which the track does count.
+  (A slider's knob overhangs its box by half a knob; that is why.)
 
 ## Dependencies
 

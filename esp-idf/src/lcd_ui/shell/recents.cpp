@@ -1,11 +1,10 @@
 /**
- * recents.cpp — the app switcher (plan §5.5). A modal overlay listing the
- * running set (apps whose root layer currently exists) as horizontal cards. Each
- * card is a half-scale PSRAM snapshot of that app's screen (LcdApp::_captureThumb,
- * taken by the manager the moment the app left the foreground) with its name
- * below — the live miniature, not an icon on a flat tile. An app that has no
- * snapshot yet falls back to its launcher icon. A memory readout (internal /
- * external heap) sits at the top — a genuinely useful on-device diagnostic.
+ * recents.cpp — the app switcher. A modal overlay listing the running set (apps
+ * whose root layer currently exists) as horizontal cards. Each card is a
+ * half-scale PSRAM snapshot of that app's screen (LcdApp::_captureThumb, taken by
+ * the manager the moment the app left the foreground) with its name below — the
+ * live miniature, not an icon on a flat tile. An app that has no snapshot yet
+ * falls back to its launcher icon.
  *
  * Tap a card to switch to it; swipe a card up to terminate that app (stop ->
  * onClose + free root + ledger + snapshot, drop from the running set). Built lazily,
@@ -16,14 +15,11 @@
 #include "lcd_internal.h"   /* lcdScreenW/H, lcdIcon*, lcdInputGroup */
 #include "log.h"
 
-#include "esp_heap_caps.h"
-
 #include <vector>
 
 namespace {
 
 lv_obj_t* s_overlay = nullptr;
-lv_obj_t* s_mem     = nullptr;
 lv_obj_t* s_cards   = nullptr;   /* horizontal card strip */
 
 /* Per-card vertical-swipe drag state. Only one card is touched at a time, so a
@@ -39,8 +35,6 @@ int       s_dragStartY = 0;
 bool      s_dragging   = false;
 bool      s_dragMoved  = false;
 
-int headerH() { return 22; }
-
 /* px the finger may wander and still count as a tap, not a swipe/scroll */
 const int kTapSlop = 12;
 
@@ -51,17 +45,6 @@ lv_point_t activePoint() {
     return p;
 }
 int activePointerY() { return activePoint().y; }
-
-void updateMem() {
-    if (!s_mem) return;
-    size_t iFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t iTot  = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
-    size_t eFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    size_t eTot  = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
-    lv_label_set_text_fmt(s_mem, "RAM  int %u/%uK   ext %u/%uK",
-                          (unsigned)(iFree / 1024), (unsigned)(iTot / 1024),
-                          (unsigned)(eFree / 1024), (unsigned)(eTot / 1024));
-}
 
 /* Spring a cancelled drag back to its resting place (translate 0, full opa). */
 void springCard(lv_obj_t* card) {
@@ -193,6 +176,7 @@ void addCard(LcdApp* app) {
 
 void build() {
     const LcdStyle& st = lcdStyle();
+    int cardsH = lcdScreenH() - st.statusBar.h;
     s_overlay = lv_obj_create(lv_screen_active());
     lv_obj_remove_style_all(s_overlay);
     lv_obj_set_pos(s_overlay, 0, st.statusBar.h);
@@ -201,15 +185,10 @@ void build() {
     lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
     lv_obj_remove_flag(s_overlay, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_mem = lv_label_create(s_overlay);
-    lv_obj_align(s_mem, LV_ALIGN_TOP_LEFT, 8, 4);
-    lv_obj_set_style_text_color(s_mem, lv_color_hex(0x9098A0), 0);
-    if (st.core.font) lv_obj_set_style_text_font(s_mem, st.core.font, 0);
-
     s_cards = lv_obj_create(s_overlay);
     lv_obj_remove_style_all(s_cards);
-    lv_obj_set_pos(s_cards, 0, headerH());
-    lv_obj_set_size(s_cards, lcdScreenW(), lcdScreenH() - st.statusBar.h - headerH());
+    lv_obj_set_pos(s_cards, 0, 0);
+    lv_obj_set_size(s_cards, lcdScreenW(), cardsH);
     lv_obj_set_style_bg_opa(s_cards, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(s_cards, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_cards, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -234,7 +213,6 @@ void shellRecentsShow(void) {
         lv_label_set_text(empty, "No running apps");
         lv_obj_set_style_text_color(empty, lv_color_hex(0x9098A0), 0);
     }
-    updateMem();
     lv_obj_remove_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_overlay);   /* above the program layers */
     /* Fade in over 200ms (the app fades out underneath, driven by the manager). */

@@ -7,12 +7,11 @@
  * only place LVGL may be touched.
  *
  * Layering (bottom -> top): launcher (program icons) | per-program layers |
- * opaque status bar. A component registers a program with lcdRegister(); when
- * its icon is opened, lcd creates (or re-shows) that program's own layer and
- * calls the registered fn with the layer as its argument. The fn must touch
- * nothing outside that layer. A swipe up from the bottom edge (or lcdGoHome())
- * hides the layer back to the launcher; layers persist, so re-opening resumes
- * where it left off.
+ * opaque status bar. A component contributes a program by handing an LcdApp
+ * (lcd_app.h) to lcdInstall(); opening its tile creates (or re-shows) that app's
+ * own layer, which is the only thing it may touch. A swipe up from the bottom
+ * edge (or lcdGoHome()) hides the layer back to the launcher; layers persist, so
+ * re-opening resumes where it left off.
  *
  * Gated on CONFIG_SPANGAP_LCD. lcdInit() is called by spangapInit(). The display
  * is configured through Kconfig (CONFIG_LCD_*); a consumer supplies only input
@@ -24,8 +23,8 @@
 #include "lvgl.h"
 #include "lcd_settings_desc.h"
 
-/** Callback run on the lcd task. `arg` is reserved for lcdRun() (defaults
- *  null) and is the program's layer object (lv_obj_t*) for lcdRegister(). */
+/** Callback run on the lcd task. `arg` is whatever the lcdRun() caller passed
+ *  (defaults null). */
 typedef void (*lcd_fn_t)(void* arg);
 
 /** Lambda -> lcd_fn_t sugar, mirroring storage's ON_CHANGE. No captures. */
@@ -45,14 +44,14 @@ void lcdInit(void);
 void lcdRun(lcd_fn_t fn, void* arg = nullptr);
 
 /* Launcher programs are LcdApp objects (lcd_app.h): subclass LcdApp and hand an
- * instance to lcdInstall(). The old lcdRegister(name, icon, fn) free-function
- * model has been retired. lcdShowProgram() (below) still opens a program by its
- * LcdApp::Config::name. */
+ * instance to lcdInstall(). The free functions below act on whichever app is in
+ * the foreground; an app itself uses the LcdApp methods, which act on itself and
+ * so carry no ordering trap. */
 
-/** Bring a registered program's layer to the front (building it on first use,
- *  exactly as a tile tap would) by its registered `name`. No-op if no program
- *  with that name is registered. Must run on the lcd task — call from a
- *  registered fn, an lcdRun() callback, or another lcd-task handler. */
+/** Bring an installed program's layer to the front (building it on first use,
+ *  exactly as a tile tap would) by its LcdApp::Config::name. No-op if no program
+ *  with that name is installed. Must run on the lcd task — call from an lcdRun()
+ *  callback or another lcd-task handler. */
 void lcdShowProgram(const char* name);
 
 /** Set backlight 0..255 (0 = off). Persists s.lcd.backlight. Any task. */
@@ -67,13 +66,13 @@ void lcdSetBacklight(uint8_t level);
 bool lcdNotifyActivity(void);
 
 /** Hide the current program layer and return to the launcher. Runs on the lcd
- *  task; safe to call from a registered fn (e.g. a Back button). */
+ *  task; safe to call from any task (it hops on). */
 void lcdGoHome(void);
 
-/** True when the launcher is the current view (no program layer shown) — so a
- *  board's Home gesture/button can tell that lcdGoHome() would be a no-op and act
- *  differently (e.g. go straight to standby). Lcd task. */
-bool lcdAtLauncher(void);
+/** Raise the running-app switcher (cards for every app with a live layer) over
+ *  whatever is on screen — the same view the half-swipe-up gesture reaches. Runs
+ *  on the lcd task; safe to call from any task (it hops on). */
+void lcdShowRecents(void);
 
 /** Put the display into / out of standby: backlight off + panel display off (GRAM
  *  retained, so wake is instant) / panel back on with a 300 ms backlight fade-in.
@@ -90,7 +89,7 @@ void lcdScreenWake(void);
  *  while that layer is the one on screen, comes back when it goes Home, and is
  *  re-hidden when the program is re-opened — so callers just toggle it as their
  *  own view changes. Percentage-sized children of the layer reflow to the new
- *  height automatically. Runs on the lcd task; call from a registered fn. */
+ *  height automatically. Lcd task. */
 void lcdProgramFullscreen(bool on);
 
 /** Add a content-agnostic indicator slot to the status bar's right-hand cluster,
@@ -103,23 +102,18 @@ void lcdProgramFullscreen(bool on);
  *  Returns null if the status bar isn't up yet. Lcd task. */
 lv_obj_t* lcdStatusbarAddIndicator(void);
 
-/** Program property (mirrors lcdProgramFullscreen): while this program's layer
- *  is the one on screen, the trackball emits arrow keys into the focus group
- *  instead of moving the pointer — so an on-device terminal / vim can navigate.
- *  The launcher turns it off when the layer goes Home and back on when it's
- *  re-shown. Call from a registered fn. */
-void lcdProgramScrollwheelArrows(bool on);
-
-/** True while the trackball is in arrow-key mode (see above). The board's
- *  pointer_read consults this to decide whether to move the pointer or feed
- *  arrows to lcdInputGroup(). Lcd task. */
+/** True while the trackball is in arrow-key mode — an app asked for it with
+ *  LcdApp::setScrollwheelArrows(), so the trackball emits arrow keys into the
+ *  focus group instead of moving the pointer (an on-device terminal / vim can
+ *  then navigate). The board's pointer_read consults this to decide whether to
+ *  move the pointer or feed arrows to lcdInputGroup(). Lcd task. */
 bool lcdScrollwheelArrowsActive(void);
 
 /** True while a text-entry box's caret is live (blinking / edit mode). Fills the
  *  caret's screen position and whether it sits on the first line. A relative-
  *  pointing HAL (trackball) drives the caret with arrow keys while this holds, and
  *  parks its cursor on the returned point when the user walks out. Independent of
- *  lcdScrollwheelArrowsActive (which is a whole-program latch); a board treats
+ *  lcdScrollwheelArrowsActive (which is a whole-app latch); a board treats
  *  either as "drive arrows". Any out-param may be null. Lcd task. */
 bool lcdCaretActive(int* x, int* y, bool* atTop);
 
@@ -135,7 +129,7 @@ typedef enum { LCD_SCROLL_UP, LCD_SCROLL_DOWN, LCD_SCROLL_LEFT, LCD_SCROLL_RIGHT
 /** Pan the currently shown program's content (or the launcher when none is up)
  *  `amount` pixels in `dir`. For a touchless, trackball-only board: when the
  *  pointer is driven into a screen edge the board calls this so the trackball
- *  pans the widget under the cursor / pages the launcher icons instead of the
+ *  pans the widget under the cursor / scrolls the launcher instead of the
  *  motion being swallowed by the clamp. It locates the relevant scrollable
  *  widget within the active layer and clamps to its range, so it is a no-op when
  *  nothing can scroll that way — UNLESS the shown program registered its own pan
@@ -154,9 +148,8 @@ void lcdScroll(lcd_scroll_dir_t dir, int amount);
 typedef void (*lcd_scroll_fn_t)(int dx, int dy);
 
 /** Make the current program handle edge-pan itself via `fn` (null clears it),
- *  for content lcdScroll()'s generic widget-scroll can't drive. Like
- *  lcdProgramScrollwheelArrows the binding is per-program and active only while
- *  that program is shown. Call from a registered fn. */
+ *  for content lcdScroll()'s generic widget-scroll can't drive. The binding is
+ *  per-program and active only while that program is shown. Lcd task. */
 void lcdProgramScrollHandler(lcd_scroll_fn_t fn);
 
 /** The shared keypad focus group that hardware button / keyboard indevs target.

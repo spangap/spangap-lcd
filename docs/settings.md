@@ -79,10 +79,10 @@ a settings `fn`. They mirror the browser's `Setting*` components.
 
 | Helper | Control | Bound to |
 |---|---|---|
-| `lcdSettingSection(parent, title)` | bold section divider | — |
+| `lcdSettingSection(parent, title)` | section divider: the bold face at half again the body size | — |
 | `lcdSettingCaption(parent, text)` | greyed, wrapped help text | — |
 | `lcdSettingSwitch(parent, label, key)` | toggle | int key (0/1) |
-| `lcdSettingSlider(parent, label, key, min, max)` | slider + live numeric readout, clamped | int key |
+| `lcdSettingSlider(parent, label, key, min, max)` | slider, with a live mono readout right-aligned in a fixed six-digit column at the row's right edge, clamped | int key |
 | `lcdSettingText(parent, label, key, secret=false)` | text field (inline edit or on-screen keyboard) | string key |
 | `lcdSettingDropdown(parent, label, key, optionsCsv)` | dropdown | string key |
 | `lcdSettingValue(parent, label, key)` | read-only, live | string key |
@@ -91,7 +91,7 @@ a settings `fn`. They mirror the browser's `Setting*` components.
 | `lcdSettingAction(parent, label, act, color)` | button running a descriptor action | — |
 | `lcdSettingActionRow(parent, align, btns, n)` | several content-sized buttons on one row | — |
 | `lcdSettingInfo/InfoValue/InfoFit` | a block of read-only values, own label column | string keys |
-| `lcdSettingCollection(parent, desc)` | an array, as an editable list | the descriptor's array key |
+| `lcdSettingCollection(parent, desc)` | an array, as an editable list: alternating dark-grey bands, its text a step under the body size | the descriptor's array key |
 
 **Writes apply immediately** — there is no "save". A switch flips its key the
 instant it's toggled.
@@ -188,15 +188,76 @@ puts a button in front of it:
   the on-screen keyboard — one form serves both paths, so nothing branches on
   `lcdHasKeyboard()` any more.
 
-A **collection** (`lcd_collection_t`) renders the array at its `key` as titled
-rows with an optional subtitle and status pill, per-item action buttons, an item
-editor, removal and — with `orderable` — up/down reordering. It **never writes
-the array**: it writes `<cmd>.add`, `<cmd>.remove`, `<cmd>.set` and
-`<cmd>.order`, and the owning task is the array's only writer. A reorder sends
-the complete id order comma-joined, which the firmware applies as a *preference
-permutation* (recognized ids into that relative order, unknown ids ignored,
-unmentioned ids left in place) — idempotent, and harmless against a concurrent
-edit.
+  **Nothing a form shows is on the device until Save.** Typing fills the local
+  buffer and no more; Save serializes it to the sentinel and the owning task
+  either rejects it (a sentence appears, the form stays open) or accepts it (the
+  form closes). Cancel discards the buffer. That is the whole reason a form is
+  the only dialog with inputs — a pane row writes its key the instant you touch
+  it, and a set of fields that must be judged together cannot.
+
+  A form's rows are compact ones (three quarters of a pane row's height) at a
+  step below the pane's body size, and everything under the title — fields, the
+  rejection line, and the buttons — is in one scroll container. The buttons are
+  sized to their labels and gathered right: destructive first, then Cancel, then
+  the submit. Nothing is pinned; on this panel a fixed footer costs more than
+  scrolling past it does.
+
+  A `section:` or `caption:` inside a form templates over the field buffer and
+  follows it as it is edited. In an **item editor** a name the form has no field
+  for falls back to the item's stored value, which is what lets a detail page put
+  `section: "{ssid}"` at the top and *not* also offer the SSID as a row — leaving
+  a field out of `edit:` is how a page says "not this", and the handler carries
+  it forward untouched. A text field's `placeholder_key` shows a hint the device
+  publishes — the MAC it would use if the field is left blank.
+
+A **collection** (`lcd_collection_t`) renders the array at its `key` as banded
+rows — two alternating dark greys, so a block of the device's own data is
+visibly not more furniture — each carrying a title, an optional subtitle, a
+status pill, and, with `orderable`, up/down arrows.
+
+**That is all a row carries** — no chevron either: a banded block inside a pane
+of chevron-less rows already reads as a list of things, and the affordance would
+cost width the title needs. Everything that acts on the item — the `edit` rows,
+the per-item `actions`, removal — is on the item's **detail page**, which tapping
+anywhere on the row opens. It is the `edit` form with the item's buttons added to
+its foot: Delete (red) first, then each action, then Cancel and Save. The page
+carries no title of its own, because the collection's name over it says nothing
+about *which* item; a `section:` row at the top of `edit:`, templated over the
+item, is how a page names itself. An action or a removal closes the page before
+it runs, so a confirmation lands on a clear screen rather than on top of the page
+it is about to invalidate. Five buttons on a 320 px row is a row nobody can hit;
+reordering stays on the row because it is about the row's place, not the item,
+and needs its neighbours in view.
+
+The collection's **own** buttons — a `candidates` scan and each `add:` — share
+one bar under the list, sized to their labels and gathered right, scanning
+first.
+
+**Scan results are a popup**, not part of the pane — the same on both surfaces. What the device can *see* is
+a different question from what it is configured for, and a transient answer to
+it: results arrive over seconds, they change, and they are gone the moment you
+stop asking. In the pane they would push the configured list around while you
+read it, and land under a button that may be most of a screen below the fold.
+As a popup they are the whole screen and they start at the top of it. It is
+headed by the clause's `found:` text — what is on screen, not the button that
+opened it — with a small Close in the top-right corner rather than a button row
+beneath, which on a card that is one long list would just be another row of it.
+The list scrolls inside the card; picking one closes the popup and opens the add
+form prefilled. Opening it starts the scan and closing it stops the scan, which
+is the whole "stop scanning on leave" contract — the same key the pane's
+teardown clears.
+
+An action carries an optional `when_key`, templated over the item to build a
+key (`"wifi.netjoinable.{id}"`) and subscribed live, which is how "Connect"
+disappears from the network already connected. Truthiness only: the owning task
+publishes the gate, so no UI compares anything.
+
+A collection **never writes the array**: it writes `<cmd>.add`, `<cmd>.remove`,
+`<cmd>.set` and `<cmd>.order`, and the owning task is the array's only writer. A
+reorder sends the complete id order comma-joined, which the firmware applies as
+a *preference permutation* (recognized ids into that relative order, unknown ids
+ignored, unmentioned ids left in place) — idempotent, and harmless against a
+concurrent edit.
 
 A `candidates` clause adds scan-and-adopt: an ephemeral array the task
 publishes, rendered like the item rows, where picking one opens the first add

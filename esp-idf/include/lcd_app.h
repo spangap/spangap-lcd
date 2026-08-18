@@ -1,20 +1,18 @@
 /**
  * lcd_app.h — the on-device app object model for the phone-style shell.
  *
- * An LcdApp is one launcher program with a real lifecycle. It replaces the old
- * lcdRegister(name, icon, fn) + scattered-free-function model: instead of a
- * build-once function pointer and a pile of lcdProgram* setters keyed off "the
- * currently shown layer", an app is an object that owns exactly its root layer
- * and overrides the lifecycle it cares about.
+ * An LcdApp is one launcher program with a real lifecycle: an object that owns
+ * exactly its root layer and overrides the lifecycle points it cares about. Its
+ * methods act on ITSELF, so there is no "currently shown layer" ordering trap —
+ * that is the difference from the lcd.h free functions, which act on whatever is
+ * in the foreground and are for callers outside an app.
  *
- * Threading is unchanged from the launcher: EVERY method here runs on the lcd
- * task (LVGL is single-threaded). Build/show/hide/back/close are all called by
- * the shell at the same points the legacy launcher called its fn / showFn /
- * eviction. Cross-task work still hops on with lcdRun()/ON_LCD (lcd.h).
+ * EVERY method here runs on the lcd task (LVGL is single-threaded); the shell
+ * calls build/show/hide/back/close. Cross-task work hops on with lcdRun()/ON_LCD
+ * (lcd.h).
  *
- * Only compiled-meaningful when CONFIG_LCD_PHONE=y (the new shell). The legacy
- * launcher does not use this header. Available alongside lcd.h, which keeps the
- * retained display / input / text-view / settings surface.
+ * Only compiled-meaningful when CONFIG_LCD_PHONE=y. Available alongside lcd.h,
+ * which carries the display / input / text-view / settings surface.
  */
 #ifndef SPANGAP_LCD_APP_H
 #define SPANGAP_LCD_APP_H
@@ -49,17 +47,12 @@ public:
         bool        statusBar    = true;  /* keep the status bar while shown */
         bool        navBar       = false; /* request the on-screen Back/Home/Recents bar */
         bool        fullscreen   = false; /* immersive: reclaim the status-bar rows on show */
-        uint8_t     launcherPage = 0;     /* which launcher page the tile lands on */
     };
 
     explicit LcdApp(const Config& cfg) : m_cfg(cfg) {}
     virtual ~LcdApp() {}
 
-    /* ---- Lifecycle (all on the lcd task) ----
-     * Maps to the legacy launcher as: onCreate <- Entry::fn (build once, lazily,
-     * on first open), onShow <- Entry::showFn (every open after build), onHide <-
-     * the hide path when another layer becomes current, onClose <- the
-     * LV_EVENT_DELETE path under eviction. onBack is new (there was no Back). */
+    /* ---- Lifecycle (all on the lcd task) ---- */
     virtual void onCreate(lv_obj_t* root) = 0; /* build UI once, into root */
     virtual void onShow() {}                    /* brought to foreground */
     virtual void onHide() {}                     /* sent to background */
@@ -80,12 +73,11 @@ public:
      * Defined out-of-line below (needs lcdInstall, declared after the class). */
     void onInit() final;
 
-    /* ---- Services the app calls (replace the old free functions) ----
-     * Valid from onCreate onward (root exists). They operate on THIS app, not on
-     * "the currently shown layer", so there is no ordering trap. */
+    /* ---- Services the app calls ----
+     * Valid from onCreate onward (root exists). They operate on THIS app. */
     lv_obj_t*   root()        { return m_root; }
-    lv_group_t* inputGroup();                        /* was lcdInputGroup() */
-    void        goHome();                            /* was lcdGoHome() */
+    lv_group_t* inputGroup();
+    void        goHome();
     /** Stop this app: run onClose() teardown, free its root layer + ledger, drop
      *  it from the running set, and — if it was in the foreground — hand the
      *  screen back to the launcher. The single termination entry point: the
@@ -93,9 +85,11 @@ public:
      *  the foreground when it can no longer function (e.g. its connection
      *  dropped), so it never sits dead in limbo. A no-op if not built. Lcd task. */
     void        stop();
-    void        setFullscreen(bool on);              /* was lcdProgramFullscreen() */
-    void        setScrollwheelArrows(bool on);       /* was lcdProgramScrollwheelArrows() */
-    void        setScrollHandler(lcd_scroll_fn_t fn); /* was lcdProgramScrollHandler() */
+    void        setFullscreen(bool on);
+    /** Trackball → arrow keys into the focus group instead of pointer motion,
+     *  while this app is the one on screen (an on-device terminal / vim). */
+    void        setScrollwheelArrows(bool on);
+    void        setScrollHandler(lcd_scroll_fn_t fn);
     /** Push a status-bar app icon (3 alignment areas, multi-state). M2 wires the
      *  renderer; a stub until then. `area` 0..2, `state` app-defined. */
     void        setStatusIcon(int area, const char* iconBasename, int state);
@@ -126,13 +120,13 @@ public:
     lv_draw_buf_t* _thumb() const { return m_thumb; }
     void           _captureThumb();   /* snapshot m_root -> m_thumb (replaces prior) */
     void           _freeThumb();
-    /* UI state that rides the app across hide/show (as the legacy flags rode the
-     * layer). The manager reads these in applyChrome() while the app is shown. */
+    /* UI state that rides the app across hide/show. The manager reads these in
+     * applyChrome() while the app is shown. */
     bool            _fullscreen() const { return m_fullscreen; }
     bool            _arrows() const     { return m_arrows; }
     lcd_scroll_fn_t _scrollFn() const   { return m_scrollFn; }
-    /* Keypad focus to restore when this app is re-shown (per-app, as the legacy
-     * launcher kept per-entry — stops a hidden app stranding the shared group). */
+    /* Keypad focus to restore when this app is re-shown. Per-app, so a hidden app
+     * can't strand the shared group. */
     lv_obj_t*       _savedFocus() const         { return m_savedFocus; }
     void            _setSavedFocus(lv_obj_t* o) { m_savedFocus = o; }
     /** Free every ledgered timer/anim. Called by the shell after onClose(). */

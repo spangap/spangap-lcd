@@ -95,13 +95,12 @@ The service methods are thin delegators to the manager so an app never touches
 - `setScrollHandler(fn)` sets `m_scrollFn`, consulted by `lcdScroll`.
 
 The UI-state flags (`_fullscreen`/`_arrows`/`_scrollFn`) ride on the app across
-hide/show (the manager reads them in `applyChrome`), as the legacy launcher's
-per-entry flags rode the layer.
+hide/show; the manager reads them in `applyChrome`.
 
 ## 5. Built-in apps (apps/)
 
-Both Log and CLI are direct ports of the legacy programs and share a shape: the
-ITS connection lives for the **life of the layer**, not its visibility, so an app
+Log and CLI share a shape: the ITS connection lives for the **life of the
+layer**, not its visibility, so an app
 hidden behind another keeps receiving and re-opening shows current state.
 `onCreate` builds the view and opens the connection; `onClose` closes it. ITS
 recv/disconnect callbacks carry no user pointer, so each app's connection state —

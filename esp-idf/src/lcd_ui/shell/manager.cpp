@@ -1,15 +1,12 @@
 /**
  * manager.cpp — the phone shell's foreground/back/home state machine, plus the
- * home-bar gesture chrome and the retained legacy public surface (lcd.h) that
- * unconverted straddles still call.
+ * home-bar gesture chrome and the lcd.h free functions, which act on whichever
+ * app is in the foreground (an app acts on itself through its LcdApp methods).
  *
- * Stack-free model (like the donor's MAIN/APP/RECENTS screens): the launcher is
- * the root, apps are peers, one app foreground at a time. "Running" apps (the
- * recents set, M3) are exactly the apps whose root layer currently exists —
- * onCreate called, onClose/eviction not yet — so the resident layer IS the
- * membership, no separate bookkeeping. This mirrors the legacy launcher's
- * openEntry/lcdGoHomeInternal layer lifecycle exactly; only the typed LcdApp
- * replaces the Entry/function-pointer.
+ * Stack-free model: the launcher is the root, apps are peers, one app foreground
+ * at a time. "Running" apps (the recents set) are exactly the apps whose root
+ * layer currently exists — onCreate called, onClose/eviction not yet — so the
+ * resident layer IS the membership, no separate bookkeeping.
  *
  * The program layer's user_data holds the owning LcdApp* (non-null marks a
  * program layer vs the launcher grid), so a layer DELETE can null the app's root
@@ -27,7 +24,7 @@ lv_obj_t*   s_screenObj   = nullptr;
 LcdApp*     s_foreground  = nullptr;       /* null <=> at the launcher */
 ShellScreen s_screen      = ShellScreen::LAUNCHER;
 
-/* Home-bar drag chrome (on lv_layer_top; ported from the legacy launcher). */
+/* Home-bar drag chrome (on lv_layer_top). */
 lv_obj_t* s_homebar    = nullptr;
 lv_obj_t* s_bottomLine = nullptr;
 int      s_dragStartY = 0;
@@ -214,7 +211,7 @@ void homebarReleased(lv_event_t* e) {
 void initChrome() {
     /* Bottom drag-up zone on the top layer: a centre-only clickable patch, above
      * all program content. PRESS_LOCK pins the press here as the finger slides
-     * up; the handlers drive the drag by hand. (Ported from the legacy launcher.) */
+     * up; the handlers drive the drag by hand. */
     int barH = lcdScreenH() / 10;
     int barW = 90;
     lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
@@ -251,7 +248,7 @@ void initChrome() {
     showHomebar(false); showLine(false);   /* boot lands on the launcher */
 }
 
-/* ---- edge-pan helpers (ported verbatim from the legacy launcher) ---- */
+/* ---- edge-pan helpers ---- */
 
 /* A real scroll container with room left in `dir`. The flag test matters: any
  * object whose children overflow reports a non-zero scroll_* distance, so a
@@ -294,36 +291,21 @@ void shellInit(lv_obj_t* screen) {
     lv_obj_set_style_bg_color(screen, lv_color_hex(lcdStyle().launcher.bg), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lcdStatusbarInit();        /* top: opaque status bar (shell renderer) */
-    shellLauncherInit(screen); /* bottom: paged icon grid */
+    shellLauncherInit(screen); /* bottom: scrolling icon grid */
     initChrome();              /* home-bar gesture + hairline on lv_layer_top */
     shellNavInstall();         /* ESC -> Back top-level key hook */
 
     /* Built-in apps. Settings is hosted by the existing page-stack unchanged —
-     * lcdSettingsInit() registers the gear through the lcdRegister bridge, so it
-     * lands as a real LcdApp with zero edits to lcd_settings.cpp or any straddle
-     * pane (plan §3, §8.1: "SettingsApp is a host, not a generator"). Log and CLI
-     * are first-class LcdApps. Other straddles' programs install themselves via
-     * the same bridge. */
+     * lcdSettingsInit() wraps the page-stack in a thin SettingsApp host and
+     * installs it, so Settings is an ordinary LcdApp with no special-casing here.
+     * Log and CLI are first-class LcdApps; other straddles install their own
+     * programs the same way, from their *LcdRegister hooks. */
     lcdSettingsInit();                 /* gear (Settings host) */
     lcdInstall(lcdMakeLogApp());       /* Log */
     lcdInstall(lcdMakeCliApp());       /* CLI */
     lcdInstall(lcdMakeActmonApp());    /* Activity (CPU/PM graphs) */
 
     info("phone shell ready\n");
-}
-
-void shellApplyZoom(void) {
-    /* Runtime UI zoom (s.lcd.scale). Recalibrate the sheet (new font sizes +
-     * theme), then rebuild the launcher and restyle the status bar so their
-     * geometry/fonts reflow crisply. New-size fonts are fresh cache entries, so
-     * any still-open app layer keeps its (valid) old-size fonts until it is
-     * next rebuilt — no dangling. report_style_change refreshes theme-inherited
-     * text. Lcd task (storage change dispatch). */
-    lcdStyleRecalibrate();
-    shellLauncherRebuild();
-    lcdStatusbarRestyle();
-    lv_obj_report_style_change(NULL);
-    info("ui zoom applied (%d%%)\n", (int)(lcdUiScale() * 100 + 0.5f));
 }
 
 void shellOpenApp(LcdApp* app) {
@@ -335,7 +317,7 @@ void shellOpenApp(LcdApp* app) {
 
     LcdApp* prev = s_foreground;
     /* Foreground BEFORE onCreate so an app's setFullscreen/setScrollwheelArrows
-     * during build bind to itself (mirrors the legacy s_current-first order). */
+     * during build bind to itself, not to the outgoing foreground. */
     s_foreground = app;
     s_screen     = ShellScreen::APP;
     if (firstBuild) app->onCreate(layer);
@@ -440,21 +422,17 @@ void shellStopApp(LcdApp* app) {
 /* Memory-pressure eviction is the same teardown as an explicit stop. */
 void shellEvictApp(LcdApp* app) { shellStopApp(app); }
 
-/* ---- retained legacy public surface (lcd.h) — bridges the unconverted apps ---- */
-
-bool lcdAtLauncher(void) { return s_foreground == nullptr; }
+/* ---- lcd.h free functions: act on the foreground app ---- */
 
 void lcdShowProgram(const char* name) {
     if (LcdApp* a = shellFindApp(name)) shellOpenApp(a);
 }
 
-void lcdGoHomeInternal(void) { shellNavigate(NavIntent::HOME); }
+void lcdGoHomeInternal(void)      { shellNavigate(NavIntent::HOME); }
+void lcdShowRecentsInternal(void) { shellNavigate(NavIntent::RECENTS); }
 
 void lcdProgramFullscreen(bool on) {
     if (s_foreground) s_foreground->setFullscreen(on);
-}
-void lcdProgramScrollwheelArrows(bool on) {
-    if (s_foreground) s_foreground->setScrollwheelArrows(on);
 }
 void lcdProgramScrollHandler(lcd_scroll_fn_t fn) {
     if (s_foreground) s_foreground->setScrollHandler(fn);

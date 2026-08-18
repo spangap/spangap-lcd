@@ -2,11 +2,10 @@
  * shell_internal.h — cross-file glue for the phone shell (src/lcd_ui/shell + apps).
  *
  * Only compiled when CONFIG_LCD_PHONE=y. Public app API is lcd_app.h; the
- * retained display/input glue is lcd_internal.h. Everything here runs on the lcd
- * task. The shell provides the full legacy public surface (lcd.h: lcdRegister,
- * lcdShowProgram, lcdGoHome, lcdProgram*, lcdScroll, lcdAtLauncher, lcdLauncherAdd
- * for onRegMsg, the statusbar entry points) so unconverted straddles keep linking
- * while apps migrate to LcdApp one at a time.
+ * display/input glue is lcd_internal.h. Everything here runs on the lcd task.
+ * The shell also defines the lcd.h free functions (lcdShowProgram, lcdGoHome,
+ * lcdShowRecents, lcdProgram*, lcdScroll, the statusbar entry points): the C API
+ * a straddle's lcd/ slice calls from outside an LcdApp method.
  */
 #pragma once
 
@@ -17,8 +16,7 @@
 
 /* ---- shell.cpp / manager.cpp: the state machine ---- */
 /** Build the whole shell into `screen` (status bar, launcher, nav) and install
- *  the built-in apps. Called from lcd.cpp's task bring-up instead of the legacy
- *  lcdLauncherInit/lcdSettingsInit/lcdAppsInit/lcdStatusbarInit quartet. */
+ *  the built-in apps. Called once from lcd.cpp's task bring-up. */
 void shellInit(lv_obj_t* screen);
 
 /** The single navigation consumer. Producers (gesture, ESC, Home button, nav
@@ -67,19 +65,13 @@ void shellRecentsShow(void);
 void shellRecentsHide(void);
 bool shellRecentsVisible(void);
 
-/* ---- launcher.cpp: paged icon grid ---- */
-/** Build the paged launcher into `screen` (called by shellInit). */
+/* ---- launcher.cpp: scrolling icon grid ---- */
+/** Build the launcher into `screen` (called by shellInit). */
 void shellLauncherInit(lv_obj_t* screen);
-/** Add a tile for an installed app on its Config::launcherPage. */
+/** Add a tile for an installed app to the end of the grid. */
 void shellLauncherAddTile(LcdApp* app);
 /** The launcher's root container (a lower sibling of program layers). */
 lv_obj_t* shellLauncherRoot(void);
-/** Tear down + rebuild the launcher at the current UI scale (tile geometry +
- *  fonts + icon sizes reflow). Called on a runtime zoom change. Lcd task. */
-void shellLauncherRebuild(void);
-/** Recalibrate + reflow the whole shell for a new UI zoom (s.lcd.scale): new
- *  font sizes, launcher grid, statusbar. Lcd task. */
-void shellApplyZoom(void);
 
 /* ---- statusbar.cpp: renderer + setters (lcd_internal.h declares the
  *      lcdStatusbarInit / lcdStatusbarSetVisible entry points the shell reuses) ---- */

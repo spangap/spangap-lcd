@@ -1,10 +1,10 @@
 /**
- * stylesheet_320x240.cpp — the one shipped sheet: 320x240 dark. Fonts are now
- * TOKENS ({face, basePx}); calibrate() resolves them through lcdFont() so the
- * shell renders vector faces at any size/zoom (or bitmaps under LCD_FONT_BITMAP).
- * Geometry values are the launcher's current pixel constants made data: status
- * bar 24px, tiles derived from a 72px floor, bg 0x101418, status-bar navy
- * 0x0A2342. Recents/nav/gesture carry the donor's 320x240 thresholds.
+ * stylesheet_320x240.cpp — the one shipped sheet: 320x240 dark. Fonts are TOKENS
+ * ({face, basePx}); calibrate() resolves them through lcdFont() so the shell
+ * renders vector faces at any size/zoom (or bitmaps under LCD_FONT_BITMAP).
+ * Geometry is the launcher's pixel constants as data: status bar 24px, tile
+ * columns derived from a 72px floor and `rows` rows fitting the height, bg
+ * 0x101418, status-bar navy 0x0A2342.
  */
 #include "stylesheet.h"
 
@@ -36,13 +36,10 @@ extern const LcdStyle lcdStyleDefault320x240 = {   /* extern: const has internal
         .padLeft   = 8,
         .padRow    = 8,
         .padCol    = 8,
-        .dotSize   = 8,
-        .dotActive = 20,
         .minTilePx = 72,    /* cols = floor(usableW / minTilePx*uiScale) */
         .bg        = 0x101418,
         .labelSpec = { LcdFace::UI, 14 },
         .labelFont = nullptr,   /* resolved at calibrate() */
-        .iconRes   = "36x36",
     },
 
     .navBar = {

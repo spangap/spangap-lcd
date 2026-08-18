@@ -23,15 +23,15 @@ task.
   `reticulum`) contributes no dead-end chevron row.
 - **The `lcdSetting*` helpers** — storage-bound row builders.
 - **`SettingsApp`** — a thin `LcdApp` host (gear tile, `Config::name = "Settings"`,
-  `iconBasename = "gear"`, `launcherPage = 0`) installed by `lcdSettingsInit()`
+  `iconBasename = "gear"`) installed by `lcdSettingsInit()`
   from `shellInit`. Its `onCreate` calls `settingsOpen(root)`; `onClose` clears
   the page-stack pointers. The registry, the builders, two-way binding, scroll
   pills, and every straddle's pane hook are unchanged by the app wrapper.
 - **The Display section of System** — described in `spangap-lcd/straddle.yaml`
   like any other straddle's settings, not hand-written here: a step dropdown
-  over `s.lcd.scale`. It only writes the key; the reflow is the `lcd.cpp`
-  subscription → `shellApplyZoom()` (shell-internals §10), so a browser/CLI
-  write behaves identically.
+  over `s.lcd.scale`. It only writes the key; the restart that applies it is the
+  `lcd.cpp` subscription (shell-internals §10), so a browser/CLI write behaves
+  identically.
 
 ## 2. The page-stack nav
 
@@ -99,11 +99,28 @@ Rows share the `makeRow`/`addRowLabel` scaffolding: a flex row with a 1/3-width
 right-aligned label column and the control(s) in the remaining 2/3,
 left-aligned so a control sits next to its label rather than pushed to the far
 edge (`fillRowControl` stretches a control across the 2/3 where that reads
-better — dropdown / value / slider group).
+better — dropdown / value / slider group). `makeRow(parent, compact)` gives ¾ of
+`SETTINGS_ROW_H` for the rows inside a modal.
+
+**Vertical economy** is deliberate and lives in three places, because a pane of
+stacked rows on a 240 px panel runs out of screen long before it runs out of
+width. Every button and input field goes through `halfPadVer`, which halves
+whatever vertical padding the theme gave it (halves rather than imposes, so the
+widget keeps the theme's proportions); the page's `pad_row` is 4; and the page
+carries `SETTINGS_ROW_H / 2` of bottom padding, so the end of a scrolled pane
+reads as an end rather than as content cut off at the edge of the glass.
 
 - **Switch** — a compact `lv_switch` (36×18) with a high-contrast off state.
-- **Slider** — a `lv_slider` plus a live numeric readout label; both bind the key
-  (`BK_SLIDER` + `BK_VALUE`) so an external write refreshes the number too.
+- **Slider** — a `lv_slider` that grows to fill the control column, with a live
+  numeric readout right-aligned after it; both bind the key (`BK_SLIDER` +
+  `BK_VALUE`) so an external write refreshes the number too. The readout is mono
+  in a fixed six-digit column (`numColWidth`) shared by every slider in the
+  build, NOT sized per range — sized per range, each row's slider started at a
+  different x. LVGL centres the knob on the end of the indicator, so half of it
+  hangs outside the slider's box at either bound; the room for that
+  (`height/2 + knob pad + LV_DPX(3)` for the pressed grow) is the GROUP's
+  `pad_left` and `pad_column`, never a margin on the slider — see the
+  grow-item-margin gotcha in the straddle README.
 - **Text** — two paths on `lcdHasKeyboard()`: inline `lv_textarea` (joined to the
   focus group, committing on `LV_EVENT_READY`/`DEFOCUSED`) vs a full-screen
   `lv_keyboard` overlay over a value label. The overlay's `TextRef` is
@@ -164,6 +181,22 @@ better — dropdown / value / slider group).
   `lv_obj_delete_async`. For the same reason a form's context is freed by the
   overlay's `LV_EVENT_DELETE`, not by `formClose()`: the field widgets' callbacks
   point into it and it has to outlive the deferred delete.
+- **Deleting the focused widget moves the ring, and LVGL's default choice is
+  wrong here.** Whatever is deleted, the ring has to land somewhere: LVGL walks
+  the group — one global list in insertion order, never cleared — from the
+  object being removed. Its stock policy is the PREVIOUS member, which walks
+  backwards out of a teardown and, from the first member, wraps onto the last
+  widget ever added: the bottom row of the pane, dragged into view by the
+  scroll-on-focus every object carries, blinking a caret if that row is a text
+  field. `lcd_lvgl.cpp` sets `LV_GROUP_REFOCUS_POLICY_NEXT` (forwards is the
+  direction a teardown goes — off the end of a deleted list and onto the
+  controls after it), and every overlay states its own answer with
+  `lcdSettingsRefocusOnClose`: the widget it took focus from, or the top of the
+  visible page if that widget did not survive. It fires on the overlay's
+  `LV_EVENT_DELETE`, which LVGL sends BEFORE deleting children, so there is
+  nothing focused left to walk from — and only when the ring is still inside
+  that overlay, so a page closing to open a dialog does not pull focus out from
+  under it.
 - **Never rebuild a collection while walking `s_pills`** — a rebuild deletes
   widgets, whose delete callbacks mutate that vector. `collStorageCb` therefore
   notes what changed in one pass and rebuilds in a second.
@@ -186,15 +219,20 @@ components on the web side.
   braced gate names a sibling field, a bare one names storage.
 - **Subscriptions are refcounted PER SCOPE** (`subAdd`/`subDrop`), with one
   dispatcher (`descDispatch`) serving pills, collection rebuilds and the open
-  form alike. Per scope, not per (scope, callback): `storageUnsubscribe` drops
-  *every* subscription the task holds on a scope, so with per-pair counts a
-  form dropping its watch on a collection's answer keys would unsubscribe them
-  out from under the collection. One callback per scope, however many users.
+  form alike. Per scope, not per (scope, callback): with per-pair counts a
+  form dropping its watch on a collection's answer keys would take them out
+  from under the collection. One callback per scope, however many users.
   A status-key template is subscribed at its literal prefix (everything before
-  the first brace), since subscriptions are prefix-matched. The plain-row
-  binding table (`lcd_settings.cpp`) unsubscribes its own exact keys through
-  the same storage API on the same task; its scopes are leaf keys and these are
-  prefixes and sentinel-answer keys, which must never collide as exact strings.
+  the first brace), since subscriptions are prefix-matched.
+- **Both tables drop their watch with `storageUnsubscribeCb`, never
+  `storageUnsubscribe`.** The lcd task is shared: the shell watches keys of its
+  own on it (backlight, inactivity timeout, UI zoom, a board's panel keys), and
+  `storageUnsubscribe(scope)` drops *every* subscription the calling task holds
+  on that scope — so a settings page that unsubscribed by scope would silently
+  disconnect the module that owns the key, and the setting would go on writing
+  it with nothing left to apply it. Unsubscribing the exact callback keeps the
+  descriptor runtime, the plain-row binding table in `lcd_settings.cpp`, and
+  the key's owner independent of one another.
 - **Forms** hold their values locally and reach the device only on submit, which
   is what makes submit-and-error possible in place of per-keystroke validation.
   One form is open at a time. The handler answers on the sentinel family's
@@ -223,3 +261,39 @@ components on the web side.
   id order comma-joined for the firmware to apply as a preference permutation.
   The pane's teardown (`collDelete`) also clears a `candidates` refresh target
   key, which is the entire "stop scanning on leave" contract.
+- **An item's buttons are on its detail page, not its row.** `collRebuild` gives
+  a row the reorder arrows and nothing else; if `hasDetailPage()` (any `edit`
+  rows, any `actions`, or `remove`) the whole row is clickable and opens the
+  editor form with `itemIdx` set, and `buildItemButtons` appends Delete and the
+  per-item actions to that form's button row. The editor's `title` is
+  deliberately null — the collection's name says nothing about *which* item, and
+  a `section:` row templated over the item does. `formLookup` falls back to
+  `fieldOf(sc, name)` when the form has no field of that name, which is what
+  makes `section: "{ssid}"` resolve on a page that does not offer the SSID as a
+  row. The collection's own buttons (a `candidates` scan, then each `add:`) share
+  one right-gathered `buttonBar` under the list.
+- **The scan popup.** `candidates` render into `CollCtx::candBox`, which exists
+  only while the popup does: `onRefreshButton` builds the modal, points `candBox`
+  at its scroll body, runs `refresh`, and `candRebuild` fills it off the same
+  `descDispatch` subscription the pane holds (so a scan already running fills it
+  at once). The card is built by `makeModal`'s `closeCb` form, which puts Close
+  in the title row's right corner instead of at the foot. `candPopupClose`
+  clears the refresh key and dismisses. Two teardown
+  hazards, both handled: the popup lives on `lv_layer_top` so `collDelete` has to
+  close it explicitly, and `dismiss` is async — so the overlay's delete callback
+  finds its collection by scanning `s_colls` for the overlay rather than carrying
+  a `CollCtx*`, which a torn-down collection would leave dangling. Each of those closes the form
+  *before* it runs (`onDetailButton` copies the scope out first, since the close
+  frees its context): an action can invalidate the page it was pressed on, and a
+  removal takes the item out from under it, so a confirmation must not stack on
+  top of it. An action's `when_key` is `subst`-ed against the item into a real
+  storage key and handed to `lcdSettingWhenKey`, which copies it — the binding
+  table stores `std::string`, so unlike the pane helpers this one takes a
+  temporary safely.
+- **Modal geometry.** Everything below the title lives in one scroll container
+  capped at ⅔ of the screen: fields, the rejection label, then the button row.
+  The buttons are content-sized in a right-gathered `ROW_WRAP`
+  (`modalButtonRow` / `modalButton`) rather than the full-width stack they were,
+  and the container carries a smaller font while the field rows are built
+  `compact` — three quarters of `SETTINGS_ROW_H`. A fixed footer on a 240 px
+  panel is a third of the dialog.

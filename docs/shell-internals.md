@@ -12,11 +12,12 @@ display/LVGL/task foundation in `src/lcd_ui/`:
 
 - **manager.cpp** — the foreground/back/home state machine, the home-bar drag
   chrome, and the retained free-function surface (`lcdShowProgram`, `lcdGoHome`/
-  `lcdGoHomeInternal`, `lcdProgramFullscreen`, `lcdProgramScrollwheelArrows`,
-  `lcdProgramScrollHandler`, `lcdScroll`, `lcdAtLauncher`) that bridges
-  unconverted callers to the foreground app.
-- **launcher.cpp** — the paged icon grid (a horizontal pager of flex-wrap pages
-  + a dot row), `shellLauncherAddTile`, and the icon-loaded hook.
+  `lcdGoHomeInternal`, `lcdShowRecents`/`lcdShowRecentsInternal`,
+  `lcdProgramFullscreen`, `lcdProgramScrollHandler`, `lcdScroll`) — the C API a
+  straddle's `lcd/` slice calls from outside an `LcdApp` method.
+- **launcher.cpp** — the scrolling icon grid (one vertical flex-wrap container
+  with a hairline scrollbar), `shellLauncherAddTile`, drag-to-reorder over
+  `s.lcd.launcher_order`, the edit-mode wiggle, and the icon-loaded hook.
 - **statusbar.cpp** — the opaque top bar renderer (clock/wifi/upstream/battery),
   all event-driven off storage subscriptions. `lcdStatusbarAddIndicator()` hands
   a straddle a bare, content-width flex slot in the right-hand cluster, inserted
@@ -31,21 +32,19 @@ display/LVGL/task foundation in `src/lcd_ui/`:
   consumed as Back) when the foreground app owns raw keys — a terminal/arrow-mode
   app (`_arrows()`) or a focused textarea — so the gesture only means Back where
   it would otherwise be inert.
-- **recents.cpp** — the app switcher (cards over the running set + a heap readout).
+- **recents.cpp** — the app switcher (cards over the running set).
 - **stylesheet.{h,cpp}** + **stylesheet_320x240.cpp** — theme/geometry as data.
 - **lcd_app.cpp** — the `LcdApp` install registry and service methods (covered in
   [apps-internals.md](apps-internals.md)).
 
 Nothing on screen is special-cased chrome: even Settings is just another installed
 `LcdApp`. `lcd_settings.cpp`'s `lcdSettingsInit()` wraps the existing settings
-page-stack in a thin `SettingsApp` host and `lcdInstall`s it (gear icon,
-`launcherPage` 0), so it lifts, backgrounds, and appears in recents like any app.
+page-stack in a thin `SettingsApp` host and `lcdInstall`s it (gear icon), so it
+lifts, backgrounds, and appears in recents like any app.
 The built-in Log and CLI terminals are likewise `LcdApp` subclasses under
 `src/lcd_ui/apps/`. All of this compiles only when `CONFIG_LCD_PHONE=y`, which
-makes the shell the single UI: the standalone `lcd_launcher.cpp` / `lcd_apps.cpp`
-/ `lcd_statusbar.cpp` are gone, and the legacy free-function surface they exported
-(`lcdRegister` and friends, listed in the manager bullet above) now lives *inside*
-the shell as a bridge so unconverted straddles still link.
+makes the shell the single UI — including the free functions in the manager
+bullet above, which are part of it rather than a layer over it.
 
 ## 2. The lcd task & threading (foundation)
 
@@ -240,21 +239,33 @@ hand-off, no locks, solving "the lcd task can't do flash I/O or heavy CPU":
    indirection, no decoder, zero flash on the lcd task.
 
 There is no fixed resolution anywhere: a tile requests its icon at the sheet's
-`launcher.iconPx × lcdUiScale()`, recents at `recents.iconPx × lcdUiScale()`,
-and a zoom change resets the cache (`lcdIconsReset()`) so everything re-requests
-at the new size — crisp at every factor by construction. The internal API is
+`launcher.iconPx × lcdUiScale()` and recents at `recents.iconPx × lcdUiScale()`,
+so a boot at a different UI zoom rasterizes everything at the size it will be
+drawn — crisp at every factor by construction. The internal API is
 `lcdIconRequest(base, px)` / `lcdIconReady(base, px)` / `lcdIconDsc(base, px)`
-(`lcd_internal.h`); descriptor pointers are stable for the cache's lifetime, so
-`lcdIconsReset()` must only run when no live widget still points at one (the
-launcher rebuild deletes its tiles first, and skips the reset while recents is
-visible).
+(`lcd_internal.h`); descriptor pointers are stable for the cache's lifetime, and
+the cache lives as long as the boot does.
 
 ## 8. Inactivity, standby, boot reveal
 
 The inactivity timer (`lcd_lvgl.cpp`, armed by the `s.lcd.inactivity_timeout`
-subscription) sets the ephemeral `sys.standby` key on expiry; the **board** owns
-what standby means and calls `lcdScreenSleep()`/`lcdScreenWake()` off that key.
-`lcdActivity()` re-arms the timer on every input edge. `sys.standby` is the only
+subscription) expires into `dimEnter()`, which drops the backlight to `dimLevel()`
+and starts a second one-shot, `kDimGraceMs` (10 s). Only that second timer sets the ephemeral
+`sys.standby` key; the **board** owns what standby means and calls
+`lcdScreenSleep()`/`lcdScreenWake()` off it. `lcdActivity()` calls `dimLeave()`
+and re-arms on every input edge, so a touch in the grace window restores full
+brightness and buys another full timeout — the point of dimming first is that
+the screen asks before it goes, and answering costs a touch rather than a wake.
+
+`dimLevel()` is `kDimLevel` (20 of 255), or half `s.lcd.backlight` when that is
+dimmer still, floored at 1 while the configured level is non-zero. A fixed low
+duty rather than a fraction because half of a bright screen is barely a change,
+and a dim nobody notices asks nothing; halving only takes over for a screen
+already below it, so the step is always downward. Reaching 0 would read as asleep
+and defeat the question outright.
+Every path that takes the screen elsewhere — `lcdScreenSleep`, `lcdScreenWake`, a
+mirror viewer's keep-awake hold — clears the grace timer first, so it can never
+fire against a screen that has already moved on. `sys.standby` is the only
 lever either direction: a mirror viewer's keep-awake hold (`lcdMirrorApplyHold`)
 also leaves standby by clearing that key rather than calling `lcdScreenWake()`
 itself, so the board's view of standby never drifts from the panel's — storage
@@ -293,10 +304,9 @@ codepoints). Every created UI/MONO font gets its `.fallback` chained to
 `lcdFont(SYMBOLS, px)`, so `LV_SYMBOL_*` call sites don't change and symbols
 scale with the text they sit in. Fonts are cached per `(face, px)` (key
 `(face<<8)|px`); an engine failure (missing file, OOM) falls back to a bitmap
-without caching the failure. `lcdFontsReset()` frees every cached font — note
-that the zoom path deliberately does *not* call it (§10): old-size entries stay
-valid for still-open app layers, and new sizes are just new cache entries. A
-caller that does reset must first re-style every widget holding a freed font.
+without caching the failure. `lcdFontsReset()` frees every cached font; a caller
+that resets must first re-style every widget holding a freed font, so nothing in
+the shell calls it — the cache lives as long as the boot does.
 
 Size handling inside `lcdFont()`: px clamps to 4–200; `MONO` at 5–6 px returns
 Tom Thumb 4×6 and at 7–8 px Spleen 5×8 (hand-tuned bitmaps beat antialiased
@@ -352,7 +362,7 @@ fields next to them are *outputs*. `calibrate()` resolves
 basis is the panel-height ratio, not `lv_display_get_dpi()` — driver DPI is
 too often bogus.
 
-**Theme.** `lcdStyleBegin()`/`lcdStyleRecalibrate()` install a dark
+**Theme.** `lcdStyleBegin()` installs a dark
 `lv_theme_default` wrap (primary/secondary colours + the resolved UI font), so
 labels created by any straddle's `lcd/` slice inherit the platform font with
 zero effort — only the clock, titles, and mono content name fonts explicitly
@@ -360,22 +370,93 @@ zero effort — only the clock, titles, and mono content name fonts explicitly
 FontAwesome through its symbol fallback).
 
 **Derived launcher grid.** Tile size derives from the viewport, not the sheet
-(`launcher.cpp gridFor()`): `cols = floor(usableW / (minTilePx × uiScale))`,
-`tileW` fills the row, `tileH` from content (icon + label line height + pads),
-`rows` from the page height, and capacity = cols × rows drives the page spill
-in `shellLauncherAddTile`. Tiles are flex-column buttons (icon over label);
-`cols`/`rows`/`tileW`/`tileH` still exist in the sheet but the derived grid is
-what renders.
+(`launcher.cpp gridFor()`): `cols = floor(usableW / (minTilePx × uiScale))` and
+`tileW` fills the row; `tileH` divides the viewport height into `launcher.rows`
+rows, floored at the bare icon + label line height so a panel too short to hold
+that many rows scrolls instead of clipping the label. `launcher.rows` is
+therefore a *fit target* — how many rows must be reachable without scrolling —
+not a capacity: the grid is one flex-wrap container and takes any number of
+tiles. Tiles are flex-column buttons (icon over label); `cols`/`tileW`/`tileH`
+still exist in the sheet but the derived grid is what renders.
 
-**Zoom flow.** `s.lcd.scale` (percent, default 100, clamped 50–200; the
-Settings picker offers it in 25% steps) is read by `calibrate()` into
-`lcdUiScale()`. `lcd.cpp` subscribes to the key and calls `shellApplyZoom()`
-(`manager.cpp`): `lcdStyleRecalibrate()` → `shellLauncherRebuild()` (tears the
-launcher down, resets the icon cache once no tile holds a descriptor, rebuilds
-at the new scale) → `lcdStatusbarRestyle()` → `lv_obj_report_style_change(NULL)`.
-New-size fonts are fresh cache entries, so a still-open app layer keeps its
-valid old-size fonts until its next rebuild — nothing dangles, content
-*reflows* instead of magnifying pixels.
+**Tile order.** `s.lcd.launcher_order` is a comma-separated list of
+`Config::name`. `applyOrder()` reads it, `std::stable_sort`s a vector of tile
+records by each app's position in it (unnamed apps all rank `INT_MAX`, so
+stability leaves them in install order after the named ones), and realizes the
+permutation with `lv_obj_move_to_index(tile, i)` for ascending `i`. Every tile
+add ends in `applyOrder()`, so incremental installation still lands each tile
+where the key wants it without a separate insert-position path.
+
+The key is live (`NOW_AND_ON_CHANGE`), which also absorbs the write a drop makes:
+`applyOrder()` only moves children, so the change notification for our own
+`storageSet` sorts to the order already on screen and stops. `saveOrder()` reads
+the order back off the container's children — each tile carries its `LcdApp*` in
+`lv_obj_set_user_data`, which is what makes that a one-pass walk.
+
+**Drag to reorder.** `dragBegin()` takes the tile. It follows the
+finger through `translate_x/y`, **not** a position or `LV_OBJ_FLAG_FLOATING`:
+flex owns the position (a `set_pos` would be overwritten at the next layout), and
+taking the tile out of the flow would *close* the gap instead of opening one. The
+reserved slot the translate leaves behind is exactly the space that opens up.
+
+`dragFollow()` recomputes the translate as `finger − grabOffset − base`, where
+`base = coords − currentTranslate` — so it stays correct after the slot moves
+under it. `dragReindex()` moves the tile to the index of whichever sibling's slot
+contains its centre, then `lv_obj_update_layout()` + `dragFollow()` again, since
+the reindex changed its base. The pad gaps between slots match no sibling, which
+is the hysteresis: a tile straddling two stays put until it commits.
+
+`dragTargetIndex()` picks the destination by **counting** the other tiles whose
+slot sorts before the dragged tile's centre in reading order, rather than
+hit-testing the slot under it. Hit-testing cannot reach the last position: the
+space after the final icon belongs to no slot, so there is nothing there to trade
+places with (the pad gaps between slots have the same problem). Counting always
+yields an index in `[0, n-1]`, and the boundary at each slot's centre is the snap
+point.
+
+`LV_OBJ_FLAG_SCROLLABLE` comes off the grid for a drag so the gesture can't be
+stolen. The grab threshold (`kDragSlopPx`, 3) is well inside LVGL's
+`scroll_limit` (10), so the flag is always off before a scroll could be decided.
+The cost is that the grid can't scroll normally mid-drag, which `dragScrollTick()`
+covers: a finger held near either edge scrolls it by hand at 6 px per 60 ms, then
+re-follows and re-indexes.
+
+`lv_indev_active()` is only live while LVGL is processing an input event — it
+reads back null from a plain timer — so `dragScrollTick()` can't ask for the
+pointer position. The event handlers leave it in `s_lastPX/s_lastPY`, which is
+also what `dragFollow()` reads, so both paths aim at the same point.
+
+**Gesture model.** The 700 ms hold that enters edit mode is timed from
+`LV_EVENT_PRESSING` against the press timestamp, not taken from
+`LV_EVENT_LONG_PRESSED`: LVGL's long-press threshold belongs to the whole indev,
+so raising it for tiles would raise it for every other widget too. LVGL sends
+`PRESSING` on every read while a finger is down, moving or not, so the press
+timestamp is the whole clock. Out of edit mode a moved press is left alone and
+the grid scrolls it; in edit mode a moved press grabs at once. `s_suppressClick`
+covers the `CLICKED` LVGL still sends after a drag or an edit-mode entry.
+
+**Wiggle.** One `lv_timer` at 100 ms walks an 8-frame cycle over five stops
+(−20°, −10°, 0°, +10°, +20°, out and back, in LVGL's 0.1° units — each end
+visited once) and applies it to every tile's `lv_image` via
+`lv_image_set_rotation`; the pivot is set to the icon centre at tile build. The
+tile in hand is held at 0° instead — the cue that it is lifted. The wiggle IS
+edit mode: `editEnter()` starts it, and any `CLICKED` (a tile's, or the grid's
+own, so bare grid works too) ends it.
+
+**Zoom flow.** `s.lcd.scale` (percent, default 100, clamped 50–250; the
+Settings picker offers 10% steps to 150 and 25% steps above it) is read **once**,
+by `calibrate()` at `lcdStyleBegin()`, into `lcdUiScale()`. Everything the shell
+builds — sheet fonts, the derived launcher grid, icon raster sizes, every pane a
+straddle contributes — is sized from that one read.
+
+`lcd.cpp` subscribes to the key and **restarts the device** on a change:
+`lcdSettingsRebootNotice()` covers the screen, then a one-shot `lv_timer` at
+400 ms does `storageSave()` + `esp_restart()` (the delay is what puts the notice
+on the panel before the chip goes). Reflowing in place instead would mean
+rebuilding, at the new scale, everything already laid out at the old one —
+including the settings pane the picker is being operated from — and every font
+and icon cache entry behind it. A boot does that correctly by construction, and
+the picker's caption says it will happen.
 
 ## 11. Pitfalls
 
@@ -384,9 +465,9 @@ valid old-size fonts until its next rebuild — nothing dangles, content
 - **Hold the shared-bus lock across the whole panel DMA**, not just the queue —
   see §3; dropping it early panics a co-resident SPI driver.
 - **Set the foreground before `onCreate`** so an app's chrome flips bind to
-  itself, not the previous foreground (mirrors the legacy `s_current`-first order).
+  itself, not the previous foreground.
 - **`Config::navBar` and `Config::fullscreen` are not consumed** — only
-  `statusBar`, `name`, `iconBasename`, and `launcherPage` are read at install.
+  `statusBar`, `name`, and `iconBasename` are read at install.
   Fullscreen is a runtime flag set via `setFullscreen()`; there is no on-screen
   nav bar renderer yet (navigation is gesture + ESC + board button).
 - **`setStatusIcon` / `setRecentsSubtitle` are stubs/unrendered** — don't present

@@ -1,13 +1,10 @@
 /**
- * stylesheet.h — the phone shell's theme/geometry as data (Brookesia's one bone
- * most worth keeping). One nested struct per (name, screen_size); at shellInit
- * the active sheet is selected by the real panel size and calibrated (percent ->
- * px). The shell reads geometry/colour/font from here instead of #define'd magic
- * numbers, so a second board is a data change (a new sheet), not a code change.
- *
- * Seeded from spangap-lcd's CURRENT pixel values so the new shell matches today.
- * Ship the 320x240 dark sheet only (stylesheet_320x240.cpp); other boards/themes
- * are later additions, as data.
+ * stylesheet.h — the phone shell's theme/geometry as data. One nested struct per
+ * (name, screen_size); at shellInit the active sheet is selected by the real
+ * panel size and calibrated (percent -> px). The shell reads geometry/colour/font
+ * from here instead of #define'd magic numbers, so a second board is a data
+ * change (a new sheet), not a code change. One sheet ships today: 320x240 dark,
+ * in stylesheet_320x240.cpp.
  */
 #pragma once
 
@@ -41,16 +38,14 @@ struct LcdStyle {
     } statusBar;
 
     struct Launcher {
-        int              cols, rows;
+        int              cols, rows;      /* rows = how many must fit without scrolling */
         int              tileW, tileH;
         int              iconPx;          /* native icon render size */
         int              padTop, padLeft, padRow, padCol;
-        int              dotSize, dotActive;   /* page-indicator dots */
         int              minTilePx;       /* smallest tile edge; cols = usableW/minTile */
         uint32_t         bg;
         FontSpec         labelSpec;
         const lv_font_t* labelFont;       /* resolved (calibrate) */
-        const char*      iconRes;         /* icon bucket, e.g. "36x36" (legacy; unused by nanosvg) */
     } launcher;
 
     struct NavBar {
@@ -93,11 +88,7 @@ const LcdStyle& lcdStyle(void);
  *  UI font, so labels inherit it). Call once from shellInit before any read. */
 void lcdStyleBegin(int w, int h);
 
-/** The current UI zoom as a fraction (s.lcd.scale%, clamped 50–200 → 0.5–2.0).
- *  calibrate() multiplies every token size and the launcher geometry by it. */
+/** The current UI zoom as a fraction (s.lcd.scale%, clamped 50–250 → 0.5–2.5).
+ *  calibrate() multiplies every token size and the launcher geometry by it.
+ *  Read once, at lcdStyleBegin: a change to the key restarts the device. */
 float lcdUiScale(void);
-
-/** Re-run calibration against the active panel and re-install the theme — after
- *  a zoom change (s.lcd.scale). The caller resets the font/icon caches first,
- *  then refreshes widgets (lv_obj_report_style_change). */
-void lcdStyleRecalibrate(void);

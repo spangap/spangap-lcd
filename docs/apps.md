@@ -66,7 +66,6 @@ ordinary straddle app never calls it directly.
 | `name` | `""` | Launcher label **and** lookup key for `lcdShowProgram()`. A string literal. |
 | `iconBasename` | `""` | Icon SVG under `/fixed/icons/<name>.svg`, by basename (no path/ext); rasterized on the device at the tile size. |
 | `statusBar` | `true` | Keep the status bar visible while this app is shown. |
-| `launcherPage` | `0` | Which launcher page the tile lands on. |
 
 (`navBar` and `fullscreen` also exist in `Config` but are not yet consumed —
 request fullscreen at runtime with `setFullscreen()` instead.)

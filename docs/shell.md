@@ -1,7 +1,7 @@
 # Shell — launcher, status bar, navigation, recents
 
 The shell is the phone-style chrome around the on-device apps: an opaque status
-bar at the top, a paged launcher of app tiles, a home-bar gesture strip at the
+bar at the top, a scrolling launcher of app tiles, a home-bar gesture strip at the
 bottom, and a recents switcher. It runs a single foreground/back/home state
 machine — one app in the foreground at a time, the launcher as the root.
 
@@ -14,15 +14,45 @@ the operator/author view of the chrome itself. Maintainer detail is in
 
 The shell shows exactly one of three screens at a time:
 
-- **Launcher** — the home screen: a horizontal pager of pages, each a grid of
-  app tiles, with a page-indicator dot row. Tapping a tile (or focusing it with
-  the keypad/trackball and clicking) opens that app. The grid derives from the
-  viewport: as many columns as minimum-size tiles fit the width, rows from the
-  tile height, so a different panel or zoom level reflows it with no
-  configuration. With a handful of apps one page suffices; a tile lands on the
-  page its app asked for (`Config::launcherPage`) — a *request*, not a hard
-  slot: a full page spills the tile to the next, and a new page is created on
-  demand.
+- **Launcher** — the home screen: one grid of app tiles, in the order
+  `s.lcd.launcher_order` gives, scrolling vertically when there are more than
+  fit. Tapping a tile (or focusing it with the keypad/trackball and clicking)
+  opens that app. The grid derives
+  from the viewport: as many columns as minimum-size tiles fit the width, and
+  tiles tall enough to divide the height into the sheet's row count, so the
+  first `cols × rows` tiles always sit on screen without scrolling and a
+  different panel or zoom level reflows with no configuration. Anything past
+  that scrolls, under a hairline scrollbar that rides inside the right-hand
+  padding rather than taking a column.
+
+  **Edit mode.** Hold an icon still for 700 ms and the grid enters edit mode,
+  with that icon already in your hand. Edit mode is the **wiggle**: every icon
+  tilts back and forth through five stops — 20° and 10° left, upright, 10° and
+  20° right — at 10 fps, with the one you are holding standing still.
+  Deliberately slow: each frame re-rasters every icon on an SPI panel.
+
+  In edit mode, dragging an icon picks it up immediately — no second hold —
+  while dragging anywhere else scrolls the grid as usual. **Any tap leaves edit
+  mode**, on an icon or on bare grid; icons do not open again until it has.
+
+  Out of edit mode a drag is never an app launch: it scrolls the grid if there is
+  anything below the fold, and otherwise does nothing at all. Only a tap that
+  stays put opens an app.
+
+  **Rearranging.** Drag an icon and the grid opens a space wherever it comes to
+  rest between two others: its own slot stays reserved and everything else flows
+  around it, so what you see is where it will land — including the space after
+  the last icon. Carrying one to the top or bottom edge scrolls the grid, which
+  is how it reaches a row that is off screen. Let go and it settles into the slot
+  and the order is saved.
+
+  **The order key.** `s.lcd.launcher_order` is a comma-separated list of app
+  names (`Config::name`) — writable by hand over the CLI or the browser, and the
+  grid re-sorts live. It is a preference, not the roster: an app the key doesn't
+  name keeps its install position after the named ones, so a straddle added since
+  the last rearrange lands at the end rather than jumping the queue, and a name
+  for an app that isn't installed is ignored. Empty (the default) is install
+  order.
 - **App** — one app's full-screen layer, below the status bar (or reclaiming it
   when the app is fullscreen). Opening another app hides this one; it keeps
   running in the background and re-opening resumes it exactly as left.
@@ -68,12 +98,13 @@ Three producers all funnel into one navigation action (Back / Home / Recents):
 - **ESC key** — the keyboard's Escape means **Back**, but only where it would
   otherwise do nothing useful: it is passed through to a terminal/arrow-mode app
   or a focused text field, so it never steals an editing key.
-- **Board Home button** — the board's `click_read` long-press calls `lcdGoHome()`.
+- **Board button** — the board owns its own button timing and calls `lcdGoHome()`
+  / `lcdShowRecents()` when it decides the press meant navigation (on the T-Deck:
+  two clicks Home, three the switcher).
 
 **Back vs Home.** Back asks the foreground app first (`onBack()`); if the app
 doesn't handle it, Back falls through to Home. Home always returns to the
-launcher. At the launcher both are no-ops. `lcdAtLauncher()` lets a board tell
-the two apart (e.g. to go straight to standby on a second Home press).
+launcher. At the launcher both are no-ops.
 
 ## The recents switcher
 
@@ -81,8 +112,7 @@ Recents is a modal overlay listing the **running set** — the apps whose screen
 currently exists (built and not yet evicted). Each app is a horizontal card
 showing a half-scale live snapshot of its screen (captured the moment it left
 the foreground) with its name below; an app with no snapshot yet falls back to
-its launcher icon. A memory readout (internal / external heap free/total) sits at
-the top as an on-device diagnostic.
+its launcher icon. The cards are the whole screen — nothing else sits on it.
 
 - **Tap a card** to switch to that app.
 - **Swipe a card up** to terminate it — the app's `onClose()` runs, its screen
@@ -98,19 +128,23 @@ no automatic memory-pressure eviction.
 
 ## UI zoom
 
-The whole interface scales at runtime: **Settings → System → Display → UI Zoom**
-picks one of seven steps over `s.lcd.scale` (percent, 25% apart, 50–200; default
-100). Writing the key from anywhere — the picker, the browser, the CLI — has
-the same effect. It is steps rather than a slider because every write reflows
-the whole shell, which is not a thing to do on each pixel of a drag. A change
-*reflows* rather than magnifies: fonts are
-re-rasterized from their vector faces at the new size, icons are re-rendered
-from their SVG sources, and the launcher grid recomputes its columns and tile
-size — so everything stays crisp at every factor, with bigger tiles and fewer
-per page as you zoom in. An app that is already open keeps its old-size fonts
-until it is next rebuilt; apps that resolve their fonts through
-`lcdFont(face, basePx × lcdUiScale())` pick the new scale up on their next
-build (see [apps.md](apps.md)).
+The whole interface scales: **Settings → System → Display → UI Zoom** picks a
+step over `s.lcd.scale` (percent, default 100) — 10% apart from 50 to 150, then
+25% apart to 250. Writing the key from anywhere — the picker, the browser, the
+CLI — has the same effect.
+
+**A change restarts the device**, and the picker says so. The scale sizes every
+font, icon, tile and pane the shell has already laid out, including the pane the
+picker itself is on, so the whole UI is rebuilt from it at boot rather than
+reflowed underneath itself. It is a fixed set of steps rather than a slider for
+the same reason.
+
+The scale *reflows* rather than magnifies: fonts are re-rasterized from their
+vector faces at the new size, icons are re-rendered from their SVG sources, and
+the launcher grid recomputes its columns and tile size — so everything stays
+crisp at every factor, with bigger tiles and fewer on screen as you zoom in. Apps
+resolve their fonts through `lcdFont(face, basePx × lcdUiScale())` and are built
+at the current scale like everything else (see [apps.md](apps.md)).
 
 ## Programmatic control
 
@@ -118,9 +152,9 @@ From on the lcd task (a registered callback, an `lcdRun()` block, an app
 method):
 
 - `lcdGoHome()` — return to the launcher (safe to call from any task; it hops on).
+- `lcdShowRecents()` — raise the switcher over whatever is on screen (same).
 - `lcdShowProgram(name)` — bring a registered app to the front by its
   `Config::name`, building it on first use; a no-op if no such app exists.
-- `lcdAtLauncher()` — true when the launcher is the current view.
 
 Apps generally use the `LcdApp` service methods (`goHome()`, `setFullscreen()`,
 …) instead of these free functions — see [apps.md](apps.md).

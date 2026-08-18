@@ -1,7 +1,7 @@
 /**
  * cli_app.cpp — the on-device CLI program as an LcdApp.
  *
- * Direct port of the legacy CLI program (lcd_apps.cpp): a real VT100/xterm
+ * The on-device CLI program: a real VT100/xterm
  * terminal (lcd_term/libvterm) wired to the device CLI session over the cli:1 DC
  * port (CLI_ANSI), so a shell / top / vim / ncurses lay out correctly. The
  * trackball drives arrow keys while the CLI is up (setScrollwheelArrows). The

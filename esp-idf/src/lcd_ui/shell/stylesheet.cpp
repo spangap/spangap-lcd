@@ -42,7 +42,7 @@ void calibrate(LcdStyle& s, int w, int h) {
     /* UI zoom: s.lcd.scale percent, clamped, as a fraction. */
     int pct = storageGetInt("s.lcd.scale", 100);
     if (pct < 50)  pct = 50;
-    if (pct > 200) pct = 200;
+    if (pct > 250) pct = 250;
     s_uiScale = (float)pct / 100.0f;
 
     /* Resolve font tokens → concrete fonts. */
@@ -86,9 +86,4 @@ void lcdStyleBegin(int w, int h) {
     installTheme(s_active);
     info("stylesheet '%s' for %dx%d (zoom %d%%, recents card %dpx)\n",
          s_active.name, w, h, (int)lroundf(s_uiScale * 100), s_active.recents.cardW);
-}
-
-void lcdStyleRecalibrate(void) {
-    calibrate(s_active, s_active.displayW, s_active.displayH);
-    installTheme(s_active);
 }

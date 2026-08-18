@@ -97,6 +97,7 @@ bool nodeLess(const Node* a, const Node* b) {
  * content out from under the live click event). */
 
 const int SETTINGS_HDR_H = 30;
+const int SETTINGS_ROW_H = 36;   /* one control row; the pane's vertical unit */
 
 lv_obj_t* s_titleLbl = nullptr;
 lv_obj_t* s_back     = nullptr;
@@ -152,7 +153,10 @@ lv_obj_t* makePage() {
     lv_obj_set_style_bg_opa(pg, LV_OPA_COVER, 0);
     lv_obj_set_flex_flow(pg, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(pg, 6, 0);
-    lv_obj_set_style_pad_row(pg, 6, 0);
+    lv_obj_set_style_pad_row(pg, 4, 0);
+    /* Half a row of run-off under the last one, so the bottom of a scrolled
+     * pane doesn't read as content cut off at the edge of the screen. */
+    lv_obj_set_style_pad_bottom(pg, SETTINGS_ROW_H / 2, 0);
     lv_obj_add_event_cb(pg, onAnyPageScroll, LV_EVENT_SCROLL, nullptr);
     return pg;
 }
@@ -292,11 +296,11 @@ void settingsOpen(void* arg) {
  * than pushed to the far edge). Helpers add the control after addRowLabel(); the
  * fillRowControl() helper stretches a control across the 2/3 where that reads
  * better (dropdown / value / slider group). */
-lv_obj_t* makeRow(lv_obj_t* parent) {
+lv_obj_t* makeRow(lv_obj_t* parent, bool compact = false) {
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, 36);
+    lv_obj_set_height(row, compact ? (SETTINGS_ROW_H * 3) / 4 : SETTINGS_ROW_H);
     lv_obj_set_style_pad_hor(row, 8, 0);
     lv_obj_set_style_pad_column(row, 10, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -318,6 +322,38 @@ void addRowLabel(lv_obj_t* row, const char* text) {
 
 /* Stretch a control across the remaining 2/3, left-aligned. */
 void fillRowControl(lv_obj_t* w) { lv_obj_set_flex_grow(w, 1); }
+
+/* Halve a control's vertical padding. Every button and every input field in
+ * Settings gets this: the theme sizes them for a finger on a tablet, and on a
+ * pane of stacked rows that verticality is what pushes content off the bottom.
+ * Read-then-halve rather than a number of our own, so the widget keeps whatever
+ * proportions the theme gave it. Horizontal padding is left alone — that is what
+ * keeps a label off the edge of its button. */
+void halfPadVer(lv_obj_t* w) {
+    lv_obj_set_style_pad_top(w,    lv_obj_get_style_pad_top(w,    LV_PART_MAIN) / 2, 0);
+    lv_obj_set_style_pad_bottom(w, lv_obj_get_style_pad_bottom(w, LV_PART_MAIN) / 2, 0);
+}
+
+/* Every slider readout gets the SAME column, whatever that slider's range is:
+ * six digits of the readout's mono face. Sizing each row to its own range put
+ * the sliders at a different x on every row, which is exactly what a column of
+ * controls must not do. Six covers every range in the tree (the widest is a
+ * week in seconds); a value longer than that ellipsizes rather than moving the
+ * slider. Measured in the label's own font at the current UI zoom, so the
+ * column tracks the zoom like everything else. */
+constexpr int NUM_COL_DIGITS = 6;
+
+int32_t numColWidth(lv_obj_t* label) {
+    char buf[NUM_COL_DIGITS + 1];
+    memset(buf, '0', NUM_COL_DIGITS);
+    buf[NUM_COL_DIGITS] = '\0';
+
+    lv_point_t sz;
+    lv_text_get_size(&sz, buf, lv_obj_get_style_text_font(label, LV_PART_MAIN),
+                     lv_obj_get_style_text_letter_space(label, LV_PART_MAIN),
+                     0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return sz.x;
+}
 
 /* ---- two-way storage binding ----
  * Every storage-bound control registers here: its change handler writes the key,
@@ -371,7 +407,11 @@ void bindDelete(lv_event_t* e) {
         if (it->w == w) { key = it->key; it = s_binds.erase(it); } else ++it;
     if (key.empty()) return;
     for (auto& b : s_binds) if (b.key == key) return;     /* others still need it */
-    storageUnsubscribe(key.c_str());
+    /* By callback, never by scope: the lcd task also watches keys of its own on
+     * this same task (the backlight, the inactivity timeout, a board's panel
+     * keys), and a plain storageUnsubscribe(key) would take those down with it —
+     * the setting would then write its key with nothing left to apply it. */
+    storageUnsubscribeCb(key.c_str(), bindDispatch);
 }
 
 void bindAttach(lv_obj_t* w, const char* key, BindKind kind, bool secret = false) {
@@ -412,7 +452,9 @@ void onTextRow(lv_event_t* e) {
     s_ed.secret = tr->secret;
     s_ed.valLbl = tr->valLbl;
 
+    lv_obj_t* opener = lcdInputGroup() ? lv_group_get_focused(lcdInputGroup()) : nullptr;
     lv_obj_t* ov = lv_obj_create(lv_layer_top());
+    lcdSettingsRefocusOnClose(ov, opener);
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
     lv_obj_set_style_bg_color(ov, lv_color_black(), 0);
@@ -420,6 +462,7 @@ void onTextRow(lv_event_t* e) {
     s_ed.overlay = ov;
 
     lv_obj_t* ta = lv_textarea_create(ov);
+    halfPadVer(ta);
     lv_obj_set_size(ta, lv_pct(96), 56);
     lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 6);
     lv_textarea_set_one_line(ta, true);
@@ -493,9 +536,69 @@ void onInlineCommit(lv_event_t* e) {
     storageSet(key, lv_textarea_get_text(ta));
 }
 
+/** Can the focus ring stand on this object right now? */
+bool focusable(lv_obj_t* obj, lv_group_t* g) {
+    return lv_obj_get_group(obj) == g && !lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN);
+}
+
+/** The first widget of `root`'s subtree the ring can stand on, in tree order. */
+lv_obj_t* firstFocusable(lv_obj_t* root, lv_group_t* g) {
+    if (!root) return nullptr;
+    uint32_t n = lv_obj_get_child_count(root);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t* ch = lv_obj_get_child(root, i);
+        if (focusable(ch, g)) return ch;
+        if (lv_obj_t* deeper = firstFocusable(ch, g)) return deeper;
+    }
+    return nullptr;
+}
+
+/* An overlay is going: put the focus ring back where the overlay took it from,
+ * before LVGL's own refocus can guess. See lcdSettingsRefocusOnClose. */
+void refocusOnClose(lv_event_t* e) {
+    lv_group_t* g = lcdInputGroup();
+    if (!g) return;
+
+    /* Only the overlay the ring is standing IN gets to hand it back. A page
+     * that closed itself to open something else (a detail page putting its
+     * confirmation on a clear screen) is deleted with the ring already in that
+     * something else, and must not pull it out from under a dialog that is
+     * still on screen. */
+    lv_obj_t* focused = lv_group_get_focused(g);
+    auto* overlay = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    if (!focused || !lv_obj_is_valid(focused)) return;
+    for (lv_obj_t* p = focused; ; p = lv_obj_get_parent(p)) {
+        if (p == overlay) break;
+        if (p == nullptr) return;           /* the ring is somewhere else */
+    }
+
+    auto* opener = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+    /* Both checks earn their keep: the opener may have been deleted while the
+     * overlay was up, and a freed pointer can be reused by an object that is
+     * not in this group. */
+    if (opener && lv_obj_is_valid(opener) && focusable(opener, g)) {
+        lv_group_focus_obj(opener);
+        return;
+    }
+    /* The opener did not survive — a detail page that closed itself to put its
+     * confirmation on a clear screen, a list row a rebuild replaced. Somewhere
+     * on the VISIBLE page, chosen here rather than left to LVGL: its walk is
+     * over group insertion order, which from this end wraps to the last widget
+     * ever added — the bottom row of the pane, scrolled into view, caret and
+     * all if it is a text row. The top of the page is where the thing that was
+     * being edited was reached from. */
+    if (s_pages.empty()) return;
+    if (lv_obj_t* home = firstFocusable(s_pages.back().obj, g)) lv_group_focus_obj(home);
+}
+
 }  // namespace
 
 /* ================= public registry ================= */
+
+void lcdSettingsRefocusOnClose(lv_obj_t* overlay, lv_obj_t* opener) {
+    if (!overlay) return;
+    lv_obj_add_event_cb(overlay, refocusOnClose, LV_EVENT_DELETE, opener);
+}
 
 void lcdSettingsContribute(const lcd_seg_t* segs, int nsegs, lcd_fn_t fn) {
     if (!segs || nsegs <= 0) return;
@@ -534,7 +637,11 @@ lv_obj_t* lcdSettingSection(lv_obj_t* parent, const char* title) {
     lv_obj_t* l = lv_label_create(parent);
     lv_label_set_text(l, title);
     lv_obj_set_style_text_color(l, lv_color_hex(0x6cc0ff), 0);
-    lv_obj_set_style_pad_top(l, 6, 0);
+    /* Half again the body size, in the bold face: a section heading is the only
+     * thing that divides a long pane, and at body size and body weight it reads
+     * as one more row. 14 px is the sheet's body size. */
+    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(21)), 0);
+    lv_obj_set_style_pad_top(l, 8, 0);
     return l;
 }
 
@@ -578,25 +685,46 @@ lv_obj_t* lcdSettingSlider(lv_obj_t* parent, const char* label, const char* key,
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
 
-    /* Control group: the slider + a live numeric readout, left-aligned in the
-     * 2/3 column (a slider alone hides the exact value). */
+    /* Control group filling the 2/3 column: the slider takes whatever the
+     * readout's column leaves, and the readout sits against the right edge (a
+     * slider alone hides the exact value). */
     lv_obj_t* grp = lv_obj_create(row);
     lv_obj_remove_style_all(grp);
     lv_obj_set_height(grp, LV_SIZE_CONTENT);
     fillRowControl(grp);
     lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(grp, 8, 0);
     lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Slider first, so every one of them starts at the same x down the pane. */
+    lv_obj_t* s = lv_slider_create(grp);
+    fillRowControl(s);
+    lv_slider_set_range(s, min, max);
+    lv_slider_set_value(s, storageGetInt(key, min), LV_ANIM_OFF);
+
+    /* LVGL draws the knob as a square the height of the track, grown by the knob
+     * part's padding, CENTRED on the end of the indicator — so at either bound
+     * half of it hangs outside the slider's own box. The theme grows it a further
+     * LV_DPX(3) while pressed, which is exactly when a knob is at a bound, hence
+     * the last term. Room for that half is the GROUP's padding and its column
+     * gap, never a margin on the slider: LVGL's flex adds a grow item's margins
+     * when it positions the next item but never counts them in the track it is
+     * dividing up, so a margin here silently pushes the readout off the row. */
+    int32_t knobHalf = lv_obj_get_style_height(s, LV_PART_MAIN) / 2
+                     + lv_obj_get_style_pad_left(s, LV_PART_KNOB) + lcdPx(3);
+    lv_obj_set_style_pad_left(grp, knobHalf, 0);
+    lv_obj_set_style_pad_column(grp, knobHalf, 0);
 
     lv_obj_t* num = lv_label_create(grp);
     lv_obj_set_style_text_color(num, lv_color_hex(0xb0b8c0), 0);
+    /* Mono, so the value's own digits don't shuffle inside the column as it
+     * counts — the readout is a number being watched, not prose. */
+    lv_obj_set_style_text_font(num, lcdFont(LcdFace::MONO, lcdPx(14)), 0);
+    lv_obj_set_width(num, numColWidth(num));
+    lv_obj_set_style_text_align(num, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(num, LV_LABEL_LONG_DOT);
     lv_label_set_text_fmt(num, "%d", storageGetInt(key, min));
 
-    lv_obj_t* s = lv_slider_create(grp);
-    lv_obj_set_width(s, 120);
-    lv_slider_set_range(s, min, max);
-    lv_slider_set_value(s, storageGetInt(key, min), LV_ANIM_OFF);
     lv_obj_add_event_cb(s, onSlider,    LV_EVENT_VALUE_CHANGED, (void*)key);
     lv_obj_add_event_cb(s, onSliderNum, LV_EVENT_VALUE_CHANGED, num);   /* immediate readout */
     bindAttach(s,   key, BK_SLIDER);
@@ -617,6 +745,7 @@ lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, b
         lv_textarea_set_password_mode(ta, secret);
         lv_textarea_set_text(ta, storageGetStr(key, "").c_str());
         fillRowControl(ta);                               /* 2/3 column */
+        halfPadVer(ta);
         if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
         lv_obj_add_event_cb(ta, onInlineCommit, LV_EVENT_READY,     (void*)key);
         lv_obj_add_event_cb(ta, onInlineCommit, LV_EVENT_DEFOCUSED, (void*)key);
@@ -648,6 +777,7 @@ lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* ke
     addRowLabel(row, label);
     lv_obj_t* d = lv_dropdown_create(row);
     fillRowControl(d);                                    /* 2/3 column */
+    halfPadVer(d);
     std::string opts(optionsCsv ? optionsCsv : "");
     for (auto& c : opts) if (c == ',') c = '\n';
     lv_dropdown_set_options(d, opts.c_str());
@@ -732,6 +862,7 @@ lv_obj_t* lcdSettingValue(lv_obj_t* parent, const char* label, const char* key) 
 lv_obj_t* lcdSettingButton(lv_obj_t* parent, const char* label, lcd_fn_t onClick) {
     lv_obj_t* b = lv_button_create(parent);
     lv_obj_set_width(b, lv_pct(100));
+    halfPadVer(b);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
     lv_obj_center(l);
@@ -841,7 +972,8 @@ lv_obj_t* lcdSettingWhenKey(lv_obj_t* row, const char* key) {
  * The descriptor runtime builds rows that look exactly like the ones above, so
  * it uses the same primitives rather than a second set that could drift. */
 
-lv_obj_t* lcdSettingsMakeRow(lv_obj_t* parent)                { return makeRow(parent); }
+lv_obj_t* lcdSettingsMakeRow(lv_obj_t* parent, bool compact)  { return makeRow(parent, compact); }
+void      lcdSettingsHalfPadVer(lv_obj_t* w)                  { halfPadVer(w); }
 void      lcdSettingsRowLabel(lv_obj_t* row, const char* txt) { addRowLabel(row, txt); }
 void      lcdSettingsFillControl(lv_obj_t* w)                 { fillRowControl(w); }
 void      lcdSettingsValueText(lv_obj_t* lbl, const char* v, bool secret) {
@@ -857,7 +989,7 @@ void      lcdSettingsValueText(lv_obj_t* lbl, const char* v, bool secret) {
 namespace {
 class SettingsApp : public LcdApp {
 public:
-    SettingsApp() : LcdApp({ .name = "Settings", .iconBasename = "gear", .launcherPage = 0 }) {}
+    SettingsApp() : LcdApp({ .name = "Settings", .iconBasename = "gear" }) {}
     void onCreate(lv_obj_t* root) override { settingsOpen(root); }
     void onClose() override {
         s_pages.clear();               /* drop dangling page pointers */
