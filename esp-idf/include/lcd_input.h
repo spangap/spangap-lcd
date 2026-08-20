@@ -3,10 +3,14 @@
  *
  * The display itself — SPI bus, panel controller, backlight, orientation — is
  * owned by the lcd component and configured through Kconfig (CONFIG_LCD_*), so a
- * board contributes no display code. What stays board-specific is input: touch,
- * a cursor device (trackball / mouse), and a centre/Home button. A board supplies
- * these through this contract and registers it with lcdSetInput() BEFORE
- * spangapInit() (which calls lcdInit()).
+ * board contributes no display code; a standard I2C touch controller is likewise
+ * the component's (CONFIG_LCD_TOUCH_*, lcd_touch.cpp). What stays board-specific
+ * is the rest of input: a cursor device (trackball / mouse), a centre/Home
+ * button, and any touch the component can't own (a controller sampled on a board
+ * task to share its I2C bus with other board peripherals — touch_read below is
+ * consulted only when no CONFIG_LCD_TOUCH_CONTROLLER is selected). A board
+ * supplies these through this contract and registers it with lcdSetInput()
+ * BEFORE spangapInit() (which calls lcdInit()).
  *
  * Every member is optional. A board may register nothing (or never call
  * lcdSetInput()) and the UI still comes up — navigable by a keyboard/keypad indev

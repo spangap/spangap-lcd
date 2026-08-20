@@ -16,9 +16,8 @@ dependencies:
   # launcher / settings shell built against the LVGL v9 API, so we own the
   # version. Consumers don't need to list lvgl in their manifest. The link
   # is still Kconfig-gated in CMakeLists.txt, so screen-less builds compile
-  # LVGL but don't link it into the final binary. esp_lcd_touch is brought
-  # in transitively by the consumer's specific touch driver (e.g.
-  # esp_lcd_touch_gt911 in hw-lilygo-tdeck).
+  # LVGL but don't link it into the final binary. esp_lcd_touch comes in
+  # transitively through the touch driver components below.
   lvgl/lvgl:
     version: "^9.2"
   # ILI9341 panel controller (the CONFIG_LCD_CONTROLLER choice). ST7789 is built
@@ -27,6 +26,15 @@ dependencies:
   # CONFIG_LCD_CONTROLLER_ILI9341 is selected (dead-stripped otherwise).
   espressif/esp_lcd_ili9341:
     version: "^1.2"
+  # Touch controllers (the CONFIG_LCD_TOUCH_CONTROLLER choice), same pattern:
+  # linked PRIVATE, compiled into lcd_touch.cpp only when selected,
+  # dead-stripped otherwise. They pull in espressif/esp_lcd_touch transitively.
+  # A board whose HAL reads its own controller through lcd_input.h (the T-Deck)
+  # uses these components directly rather than through this choice.
+  espressif/esp_lcd_touch_ft5x06:
+    version: "^1"
+  espressif/esp_lcd_touch_gt911:
+    version: "^1.1"
   # FreeType (wraps FreeType 2.14.2) backs the LCD_FONT_FREETYPE engine. Kept
   # UNCONDITIONAL: the component manager can't gate deps on Kconfig, and an
   # unreferenced static lib adds nothing to the image (dead-stripped when

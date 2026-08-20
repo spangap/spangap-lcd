@@ -54,7 +54,13 @@ foreach(_lcd_dep IN ITEMS lvgl__lvgl)
     idf_component_get_property(_lcd_lib ${_lcd_dep} COMPONENT_LIB)
     target_link_libraries(${COMPONENT_LIB} PUBLIC ${_lcd_lib})
 endforeach()
-foreach(_lcd_dep IN ITEMS esp_lcd espressif__esp_lcd_ili9341)
+# The touch drivers ride the same pattern as esp_lcd_ili9341: always staged
+# (pinned in our idf_component.yml), linked PRIVATE, and dead-stripped unless
+# the CONFIG_LCD_TOUCH_CONTROLLER choice selects them (lcd_touch.cpp).
+foreach(_lcd_dep IN ITEMS esp_lcd espressif__esp_lcd_ili9341
+                          espressif__esp_lcd_touch
+                          espressif__esp_lcd_touch_ft5x06
+                          espressif__esp_lcd_touch_gt911)
     idf_component_get_property(_lcd_lib ${_lcd_dep} COMPONENT_LIB)
     target_link_libraries(${COMPONENT_LIB} PRIVATE ${_lcd_lib})
 endforeach()

@@ -43,6 +43,20 @@ void        lcdPanelDisplayPower(bool on);
  *  + mirror (the same transform applied to the pixels); out params are clamped. */
 void        lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY);
 
+/* ---- lcd_touch.cpp: component-owned touch controller (CONFIG_LCD_TOUCH_*) ---- */
+/** Most fingers a touch read reports (multipoint mode). */
+#define LCD_TOUCH_MAXPTS 5
+/** Whether a CONFIG_LCD_TOUCH_CONTROLLER is selected (compile-time). Decides
+ *  the touch indev's existence alongside the board HAL's touch_read. */
+bool        lcdTouchCtlConfigured(void);
+/** Bring up the controller + the component-level touch keys (lcd.multi_touch,
+ *  sys.standby gating). lcd task, after the panel and the board input init. */
+void        lcdTouchCtlInit(void);
+/** touchReadCb's first source: true = this module owns touch (sample written;
+ *  count 0 when no finger / standby / controller absent), false = no controller
+ *  selected — consult the board HAL's touch_read instead. */
+bool        lcdTouchCtlRead(lcd_raw_pt_t* pts, int max, int* count);
+
 /* ---- lcd_lvgl.cpp: display + input bring-up ---- */
 /** lcdPanelInit + lv_init + display/flush/tick + (optional) touch/pointer/button
  *  indevs. Returns false on failure. */

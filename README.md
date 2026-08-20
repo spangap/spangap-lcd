@@ -112,11 +112,21 @@ the input HAL (below).
 | `LCD_ROTATION` | `90` | Hardware rotation (0/90/180/270); applied as swap_xy+mirror, same transform applied to raw touch. |
 | `LCD_MIRROR_X` / `LCD_MIRROR_Y` | `n` | Correct a mirrored image when the panel's scan direction differs. |
 | `LCD_INVERT_COLOR` | `y` | Most ST7789 IPS panels need inversion. |
+| `LCD_TOUCH_CONTROLLER_*` | NONE | Component-owned touch: `FT5X06` or `GT911`, driven through `esp_lcd_touch` (`lcd_touch.cpp`). NONE = no touch, or the board HAL's `touch_read` below. |
+| `LCD_TOUCH_I2C_PORT` / `LCD_TOUCH_I2C_SDA` / `LCD_TOUCH_I2C_SCL` / `LCD_TOUCH_I2C_KHZ` | `0` / `-1` / `-1` / `100` | The touch I2C bus. The component creates the port itself, so touch must be its only creator — a bus shared with other board chips needs the board-HAL fallback. |
+| `LCD_TOUCH_INT_PIN` / `LCD_TOUCH_RST_PIN` | `-1` | Touch INT (wired to `lcdInputISR`; required for touch to fire) and reset (`-1` if it rides the power rail). |
 | `LCD_SETTINGS_MARQUEE` | `y` | In Settings, a long read-only value scrolls horizontally on keypad focus instead of wrapping (see [docs/settings.md](docs/settings.md)). |
+
+When a touch controller is selected, the component publishes the probe result
+as the `lcd.touch` ephemeral (for a board's Hardware pane), gates its reads
+while `sys.standby` is truthy, and serves the `lcd.multi_touch` request key —
+an ephemeral a consumer (e.g. maps) sets truthy while it wants multi-finger
+reads + gestures, on any board (the subscription drives
+`lcdTouchSetMultipoint` whether touch comes from the component or a board HAL).
 
 ## The input HAL
 
-What stays board-specific is input. A board fills an `lcd_input_t`
+What stays board-specific is the rest of input. A board fills an `lcd_input_t`
 ([lcd_input.h](esp-idf/include/lcd_input.h)) and registers it with
 `lcdSetInput()` **before** `spangapInit()`. Every member is optional — a board
 may register nothing and the UI still comes up, navigable by a keypad/keyboard
@@ -125,6 +135,9 @@ indev the board joins to `lcdInputGroup()`.
 - `init` — one-time setup on the lcd task (wire INT lines, create touch handles).
 - `touch_read(pts, max, *count)` — raw native touch points (re-polled ~10 ms
   while a finger is down); the component applies the panel's rotation/mirror.
+  Consulted only when no `LCD_TOUCH_CONTROLLER` is selected — it is for touch
+  the component can't own, e.g. a controller sampled on a board task to share
+  its I2C bus with other board peripherals (the T-Deck).
 - `pointer_read(*x, *y)` — an absolute cursor device (trackball / mouse); the
   board owns the position (integrates motion, clamps to `lcdDisplaySize()`), the
   component draws an auto-hiding cursor.

@@ -48,8 +48,8 @@ static bool                   s_inputAgain = false;   /* a read cb wants an imme
 
 /* Multi-touch / gestures (off by default — single-touch is the cheapest path).
  * When on, touchReadCb reads all fingers and dispatches to gesture handlers;
- * >=2 fingers suppress the single pointer so the gesture owner has the gesture. */
-#define LCD_TOUCH_MAXPTS 5
+ * >=2 fingers suppress the single pointer so the gesture owner has the gesture.
+ * (LCD_TOUCH_MAXPTS lives in lcd_internal.h — lcd_touch.cpp sizes to it too.) */
 static volatile bool          s_multipoint = false;
 static lcd_gesture_cb_t       s_gestureCb[4] = {};
 
@@ -122,7 +122,10 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
     lcd_raw_pt_t raw[LCD_TOUCH_MAXPTS];
     int cnt = 0;
     int max = s_multipoint ? LCD_TOUCH_MAXPTS : 1;
-    if (!in || !in->touch_read || !in->touch_read(raw, max, &cnt) || cnt < 0) cnt = 0;
+    /* The component-owned controller first (CONFIG_LCD_TOUCH_*); the board
+     * HAL's touch_read only when no controller is selected. */
+    if (!lcdTouchCtlRead(raw, max, &cnt))
+        if (!in || !in->touch_read || !in->touch_read(raw, max, &cnt) || cnt < 0) cnt = 0;
 
     /* The board reports raw points in NATIVE panel coords; map each to display
      * coords with the same rotation/mirror the panel applies to the pixels. */
@@ -658,13 +661,17 @@ bool lcdLvglInit(void) {
      * task, with the panel and the shared GPIO ISR service already up. */
     const lcd_input_t* in = lcdInput();
     if (in && in->init) in->init();
+    /* The component-owned touch controller (CONFIG_LCD_TOUCH_*) and the
+     * component-level touch keys — after the board's init, so a board that
+     * creates the shared ISR wiring first still comes up in order. */
+    lcdTouchCtlInit();
 
     /* All indevs are EVENT-mode: LVGL never runs a read timer for them, so there
      * is no input polling. The board's INT lines (via lcdInputISR) wake the lcd
      * task, which calls lcdInputPoll() → lv_indev_read() only on a real edge. */
 
     /* Optional touch — pointer indev. Absent boards run without it. */
-    if (in && in->touch_read) {
+    if (lcdTouchCtlConfigured() || (in && in->touch_read)) {
         s_indev = lv_indev_create();
         lv_indev_set_type(s_indev, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(s_indev, touchReadCb);

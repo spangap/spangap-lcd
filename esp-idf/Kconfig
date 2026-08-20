@@ -6,8 +6,10 @@
 #
 # The display itself — SPI bus, panel controller, backlight, orientation — is
 # described entirely below and brought up by the lcd component (lcd_panel.cpp),
-# so a board with a standard SPI panel contributes no display C code. Bespoke
-# input (touch / trackball / buttons) stays behind lcd_input.h.
+# so a board with a standard SPI panel contributes no display C code. A standard
+# I2C touch controller is likewise described below and brought up by the
+# component (lcd_touch.cpp). Bespoke input (a trackball, buttons, a touch
+# controller a board samples on its own task) stays behind lcd_input.h.
 
 menu "spangap: spangap-lcd"
 
@@ -104,6 +106,64 @@ config LCD_CONTROLLER_ID
     default 0 if LCD_CONTROLLER_ST7789
     default 1 if LCD_CONTROLLER_ILI9341
     default 0
+
+# ─── touch (standard I2C controllers) ───────────────────────────────────────
+# Brought up by the component (lcd_touch.cpp) the same way the panel is: a
+# board with one of these parts contributes no touch C code, only pins. Raw
+# points are reported in NATIVE panel coordinates and oriented with the same
+# rotation/mirror as the pixels (lcdPanelOrientTouch). When NONE is selected,
+# the board HAL's lcd_input.h touch_read (if any) drives touch instead — that
+# fallback is for a controller the component can't own, e.g. one sampled on a
+# board task to share its I2C bus with other board peripherals (the T-Deck).
+choice
+    prompt "Touch controller"
+    default LCD_TOUCH_CONTROLLER_NONE
+    help
+        The panel's capacitive touch controller, driven through esp_lcd_touch.
+        NONE for a board without touch, or one whose board HAL reads its own
+        controller through lcd_input.h.
+    config LCD_TOUCH_CONTROLLER_NONE
+        bool "None / board HAL"
+    config LCD_TOUCH_CONTROLLER_FT5X06
+        bool "FT5x06 / FT6x36 family"
+    config LCD_TOUCH_CONTROLLER_GT911
+        bool "GT911"
+endchoice
+
+config LCD_TOUCH_I2C_PORT
+    int "Touch I2C port"
+    default 0
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+    help
+        The component creates this I2C master port itself, so on a board using
+        this block the touch controller must be the port's only creator — a bus
+        shared with other board-owned chips needs the board-HAL fallback
+        instead.
+config LCD_TOUCH_I2C_SDA
+    int "Touch I2C SDA pin"
+    default -1
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+config LCD_TOUCH_I2C_SCL
+    int "Touch I2C SCL pin"
+    default -1
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+config LCD_TOUCH_I2C_KHZ
+    int "Touch I2C clock (kHz)"
+    default 100
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+config LCD_TOUCH_INT_PIN
+    int "Touch interrupt pin"
+    default -1
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+    help
+        Wired to the shared input ISR: an edge wakes the lcd task, which reads
+        the controller and keeps re-reading at ~10 ms while a finger is down.
+        The indevs are event-mode (no polling), so without an INT line touch
+        never fires — -1 is only for a board with no touch routed.
+config LCD_TOUCH_RST_PIN
+    int "Touch reset pin (-1 if it resets with the power rail)"
+    default -1
+    depends on !LCD_TOUCH_CONTROLLER_NONE
 
 # ─── geometry / orientation ─────────────────────────────────────────────────
 # Native = the panel's physical pixels, before rotation. Resolution can't be
