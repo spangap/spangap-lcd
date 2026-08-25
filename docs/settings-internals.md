@@ -121,6 +121,26 @@ reads as an end rather than as content cut off at the edge of the glass.
   (`height/2 + knob pad + LV_DPX(3)` for the pressed grow) is the GROUP's
   `pad_left` and `pad_column`, never a margin on the slider — see the
   grow-item-margin gotcha in the straddle README.
+- **Integer** — the field between its optional steppers, sized to the same
+  six-digit column a slider's readout gets rather than stretched, so a pane of
+  them has its numbers in one place whatever each row's range is. Two paths on
+  `lcdHasKeyboard()`, exactly as Text has, and both go through the same editor —
+  `lv_textarea_set_accepted_chars` keeps it digits (plus a sign only where the
+  range goes below zero), and the number-mode `lv_keyboard` is the on-screen
+  half. The arithmetic (`lcdSettingsNumStep`, `lcdSettingsNumOk`,
+  `lcdSettingsNumRangeMsg`) lives in `lcd_settings.cpp` behind
+  `lcd_settings_priv.h`, so a pane row and the same row inside a form agree
+  about what a number means. A value outside the bounds is REFUSED, not clamped
+  — `lcdSettingsNotice` puts the range on screen and the field goes back to what
+  is stored, because clamping writes something nobody typed and does it
+  silently. This is the one place a pane row validates at all; a form's values
+  are still judged by the sentinel handler.
+- **Ipv4** — the Text row with `lv_textarea_set_accepted_chars` down to digits
+  and dots, and `lcdSettingsIpv4Ok` on commit. Empty passes: an address left
+  blank is unset, which is how a fixed IP is handed back to DHCP, so the check
+  is on the shape of a non-empty value and nothing else. A refusal is the same
+  `lcdSettingsNotice` an out-of-range number gets, and the field goes back to
+  what is stored.
 - **Text** — two paths on `lcdHasKeyboard()`: inline `lv_textarea` (joined to the
   focus group, committing on `LV_EVENT_READY`/`DEFOCUSED`) vs a full-screen
   `lv_keyboard` overlay over a value label. The overlay's `TextRef` is
@@ -259,18 +279,25 @@ components on the web side.
 - **Collections** never write the array. `<cmd>.add` / `.remove` / `.set` /
   `.order` are composed from the one `cmd` name, and a reorder sends the whole
   id order comma-joined for the firmware to apply as a preference permutation.
+  The drag is on the grip alone, which drops `LV_OBJ_FLAG_SCROLL_CHAIN_VER` so
+  LVGL finds no scrollable ancestor to hand the press to — otherwise a vertical
+  drag on a row would scroll the pane, which is what a drag on a list nearly
+  always means. Only the dragged row moves while it is held (translated and
+  moved to the foreground); the landing index is the distance travelled in whole
+  rows, and the re-published array is what redraws the list.
   The pane's teardown (`collDelete`) also clears a `candidates` refresh target
   key, which is the entire "stop scanning on leave" contract.
 - **An item's buttons are on its detail page, not its row.** `collRebuild` gives
-  a row the reorder arrows and nothing else; if `hasDetailPage()` (any `edit`
+  a row the drag grip and nothing else; if `hasDetailPage()` (any `edit`
   rows, any `actions`, or `remove`) the whole row is clickable and opens the
   editor form with `itemIdx` set, and `buildItemButtons` appends Delete and the
-  per-item actions to that form's button row. The editor's `title` is
-  deliberately null — the collection's name says nothing about *which* item, and
-  a `section:` row templated over the item does. `formLookup` falls back to
-  `fieldOf(sc, name)` when the form has no field of that name, which is what
-  makes `section: "{ssid}"` resolve on a page that does not offer the SSID as a
-  row. The collection's own buttons (a `candidates` scan, then each `add:`) share
+  per-item actions to that form's button row. The editor's `title` is filled in
+  per item as the page opens — `subst(d->item, sc)` into `CollCtx::editTitle`,
+  which backs `editForm.title` and outlives the click because it sits beside it.
+  The collection's own name says nothing about *which* item. `formLookup` falls
+  back to `fieldOf(sc, name)` when the form has no field of that name, which is
+  what lets a caption or heading inside `edit:` name a field the page does not
+  offer as a row. The collection's own buttons (a `candidates` scan, then each `add:`) share
   one right-gathered `buttonBar` under the list.
 - **The scan popup.** `candidates` render into `CollCtx::candBox`, which exists
   only while the popup does: `onRefreshButton` builds the modal, points `candBox`

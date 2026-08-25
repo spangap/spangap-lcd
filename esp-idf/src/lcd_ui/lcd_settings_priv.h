@@ -10,6 +10,9 @@
 #pragma once
 
 #include "lvgl.h"
+#include "lcd_settings_desc.h"
+
+#include <cstddef>
 
 /** Two-column row: a 1/3 right-aligned label column and a 2/3 control area.
  *  `compact` gives it three quarters of the pane's row height — for the rows
@@ -28,6 +31,35 @@ void      lcdSettingsRowLabel(lv_obj_t* row, const char* text);
 void      lcdSettingsFillControl(lv_obj_t* w);
 /** Set a read-only value label: an em-dash when empty, bullets when secret. */
 void      lcdSettingsValueText(lv_obj_t* lbl, const char* v, bool secret);
+
+/* ---- integer rows ----
+ *
+ * The arithmetic behind an `integer:` row, shared so a pane row and the same
+ * row inside a form agree about what a number means. A bound stated as a key
+ * (lcd_num_t::min_key / max_key) is resolved here, so callers read a bound
+ * rather than a description of one. */
+
+/** The effective lower/upper bound: the device-published one where the
+ *  descriptor names a key for it, otherwise the compiled number. Only
+ *  meaningful where the matching `has_min` / `has_max` is set. */
+int  lcdSettingsNumMin(const lcd_num_t* spec);
+int  lcdSettingsNumMax(const lcd_num_t* spec);
+/** `cur` stepped one press in `dir` (+1 / -1) and clamped to the bounds. The
+ *  step SNAPS to its own multiples: at step 5, down from 23 is 20 and then 15. */
+int  lcdSettingsNumStep(const lcd_num_t* spec, int cur, int dir);
+/** Is `v` inside the stated bounds? */
+bool lcdSettingsNumOk(const lcd_num_t* spec, int v);
+/** The sentence shown when it is not — "Enter a number between 0 and 300." */
+void lcdSettingsNumRangeMsg(const lcd_num_t* spec, char* buf, size_t n);
+/** Parse a typed number. False on empty or on anything that is not one, which
+ *  is what keeps a half-typed "-" out of storage. */
+bool lcdSettingsNumParse(const char* text, int* out);
+/** Modal with one line of text and an OK: how a refused number says so. */
+void lcdSettingsNotice(const char* text);
+
+/** Is this a dotted quad — four octets of 0-255? EMPTY IS TRUE: an address
+ *  field left blank is unset, which is how a fixed IP is handed back to DHCP. */
+bool lcdSettingsIpv4Ok(const char* text);
 
 /** Hand the keypad focus ring back to `opener` when `overlay` is deleted.
  *

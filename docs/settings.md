@@ -79,17 +79,21 @@ a settings `fn`. They mirror the browser's `Setting*` components.
 
 | Helper | Control | Bound to |
 |---|---|---|
-| `lcdSettingSection(parent, title)` | section divider: the bold face at half again the body size | — |
-| `lcdSettingCaption(parent, text)` | greyed, wrapped help text | — |
+| `lcdSettingTitle(parent, title)` | the pane's own name: white, the largest type on it, under a hairline rule. Deliberately NOT the accent colour — the accent marks a divider within a page, and a page's name is not one of its dividers | — |
+| `lcdSettingHeading(parent, title)` | a group heading: the accent colour, bold, half again the body size | — |
+| `lcdSettingSection(parent, title)` | a sub-group inside a group: the same accent a size smaller, since the display has no indentation to tell the levels apart with | — |
+| `lcdSettingCaption(parent, text, underHeading=false)` | greyed, wrapped help text. `underHeading` spans both columns at the heading's indent; otherwise it starts on the control column, where the control it describes starts. `[label](url)` keeps the label and drops the URL — a panel with no browser has nowhere to send you | — |
 | `lcdSettingSwitch(parent, label, key)` | toggle | int key (0/1) |
 | `lcdSettingSlider(parent, label, key, min, max)` | slider, with a live mono readout right-aligned in a fixed six-digit column at the row's right edge, clamped | int key |
-| `lcdSettingText(parent, label, key, secret=false)` | text field (inline edit or on-screen keyboard) | string key |
-| `lcdSettingDropdown(parent, label, key, optionsCsv)` | dropdown | string key |
+| `lcdSettingInteger(parent, label, key, spec)` | a number typed in: digits only, an optional `-`/`+` pair snapping to multiples of `spec->step`, and a warning modal on a value outside `spec`'s bounds (refused, not clamped) | int key |
+| `lcdSettingText(parent, label, key, secret=false, unit=null, narrow=false)` | text field (inline edit or on-screen keyboard). `unit` is a word printed after it — never part of the value; a field carrying one is narrow and right-aligned | string key |
+| `lcdSettingIpv4(parent, label, key)` | dotted quad: digits and dots only, four octets of 0-255 on commit, and a warning modal on anything else. Empty is accepted and means unset | string key |
+| `lcdSettingDropdown(parent, label, key, optionsCsv)` | dropdown, sized to its longest option rather than stretched across the column | string key |
 | `lcdSettingValue(parent, label, key)` | read-only, live | string key |
 | `lcdSettingButton(parent, label, onClick)` | action button | — (`onClick` on lcd task) |
 | `lcdSettingWhenKey(row, key)` | wraps any row above; shows it while the key is truthy | string key |
-| `lcdSettingAction(parent, label, act, color)` | button running a descriptor action | — |
-| `lcdSettingActionRow(parent, align, btns, n)` | several content-sized buttons on one row | — |
+| `lcdSettingAction(parent, label, act, color)` | button running a descriptor action, in the control column | — |
+| `lcdSettingActionRow(parent, align, btns, n)` | several content-sized buttons sharing the control column, gathered at `align` | — |
 | `lcdSettingInfo/InfoValue/InfoFit` | a block of read-only values, own label column | string keys |
 | `lcdSettingCollection(parent, desc)` | an array, as an editable list: alternating dark-grey bands, its text a step under the body size | the descriptor's array key |
 
@@ -115,9 +119,14 @@ For a custom focusable control outside the helpers, add it to `lcdInputGroup()`
 
 ## Buttons that share a row
 
-`lcdSettingAction` spans the pane, which is right for a single action and wrong
-for two that are one choice. `lcdSettingActionRow` puts several `lcd_btn_t` on
-one line, each sized to its label, gathered `LCD_ALIGN_LEFT` (the default in the
+Both button helpers start on the CONTROL column, where every field on the pane
+starts: a button is a control, and one beginning a third of the pane further
+left reads as belonging to none of the rows around it.
+
+`lcdSettingAction` fills that column, which is right for a single action and
+wrong for two that are one choice. `lcdSettingActionRow` puts several
+`lcd_btn_t` on one line inside it, each sized to its label, gathered
+`LCD_ALIGN_LEFT` (the default in the
 yaml), `_CENTER` or `_RIGHT`. A button may carry a `when_key` of its own, gating
 that button rather than the line — a hidden flex child leaves the layout and the
 rest close up around it. The row wraps rather than clipping, so a pair whose
@@ -204,26 +213,34 @@ puts a button in front of it:
 
   A `section:` or `caption:` inside a form templates over the field buffer and
   follows it as it is edited. In an **item editor** a name the form has no field
-  for falls back to the item's stored value, which is what lets a detail page put
-  `section: "{ssid}"` at the top and *not* also offer the SSID as a row — leaving
-  a field out of `edit:` is how a page says "not this", and the handler carries
-  it forward untouched. A text field's `placeholder_key` shows a hint the device
+  for falls back to the item's stored value, which is what lets a caption talk
+  about a field the page does not offer — leaving a field out of `edit:` is how
+  a page says "not this", and the handler carries it forward untouched. A text field's `placeholder_key` shows a hint the device
   publishes — the MAC it would use if the field is left blank.
 
 A **collection** (`lcd_collection_t`) renders the array at its `key` as banded
 rows — two alternating dark greys, so a block of the device's own data is
 visibly not more furniture — each carrying a title, an optional subtitle, a
-status pill, and, with `orderable`, up/down arrows.
+status pill, and, with `reorder`, a grip at the right edge.
+
+The grip is what a **drag** starts on, and only there: a vertical drag anywhere
+else on a list is the pane scrolling, which is what a finger on a long pane is
+nearly always doing. It refuses to chain its scroll to the page, so a press on
+it starts a drag instead. While dragging, only the dragged row moves — it is
+translated under the finger and drawn over its neighbours; the release writes
+the whole id order to `<cmd>.order` and the re-published array is what redraws
+the list.
 
 **That is all a row carries** — no chevron either: a banded block inside a pane
 of chevron-less rows already reads as a list of things, and the affordance would
 cost width the title needs. Everything that acts on the item — the `edit` rows,
 the per-item `actions`, removal — is on the item's **detail page**, which tapping
 anywhere on the row opens. It is the `edit` form with the item's buttons added to
-its foot: Delete (red) first, then each action, then Cancel and Save. The page
-carries no title of its own, because the collection's name over it says nothing
-about *which* item; a `section:` row at the top of `edit:`, templated over the
-item, is how a page names itself. An action or a removal closes the page before
+its foot: Delete (red) first, then each action, then Cancel and Save. The page is
+headed by the ITEM's own title — the collection's `item:` template substituted
+over the item being opened — because the collection's name over it ("Known
+networks") says nothing about *which* item. So an `edit:` block states no heading
+of its own: a collection names its detail page by having named its rows. An action or a removal closes the page before
 it runs, so a confirmation lands on a clear screen rather than on top of the page
 it is about to invalidate. Five buttons on a 320 px row is a row nobody can hit;
 reordering stays on the row because it is about the row's place, not the item,

@@ -32,6 +32,7 @@
 struct lcd_action_t;
 struct lcd_form_t;
 struct lcd_collection_t;
+struct lcd_num_t;
 
 /* ---- colour ----
  *
@@ -52,12 +53,36 @@ typedef struct lcd_btn_t {
     const struct lcd_action_t* act = nullptr;
 } lcd_btn_t;
 
+/* ---- numbers ----
+ *
+ * An `integer:` row's shape: a number TYPED IN rather than dragged to, for the
+ * quantity an operator already knows (a timeout, a port, a count) as against
+ * one that is felt (a brightness). A bound the description leaves out is a
+ * bound the quantity does not have — hence `has_min` / `has_max` rather than a
+ * sentinel number, since zero is a perfectly good limit.
+ *
+ * `step` SNAPS to its own multiples instead of adding to whatever is there:
+ * with step 5, down from 23 is 20 and then 15, up from 23 is 25. So a
+ * hand-typed number joins the grid on the first press rather than carrying its
+ * offset forever. */
+typedef struct lcd_num_t {
+    int         min      = 0;
+    int         max      = 0;
+    bool        has_min  = false;
+    bool        has_max  = false;
+    const char* min_key  = nullptr;   /* device-published bounds, overriding these */
+    const char* max_key  = nullptr;
+    int         step     = 1;         /* what the +/- buttons move by */
+    bool        buttons  = false;     /* show the +/- pair at all */
+} lcd_num_t;
+
 /* ---- rows ---- */
 
 typedef enum {
-    LCD_ROW_SECTION, LCD_ROW_CAPTION, LCD_ROW_SWITCH, LCD_ROW_SLIDER,
-    LCD_ROW_TEXT, LCD_ROW_DROPDOWN, LCD_ROW_TIMEZONE, LCD_ROW_VALUE,
-    LCD_ROW_BUTTON, LCD_ROW_LIST,
+    LCD_ROW_TITLE, LCD_ROW_HEADING, LCD_ROW_SECTION, LCD_ROW_CAPTION,
+    LCD_ROW_SWITCH, LCD_ROW_SLIDER,
+    LCD_ROW_INTEGER, LCD_ROW_IPV4, LCD_ROW_TEXT, LCD_ROW_DROPDOWN,
+    LCD_ROW_TIMEZONE, LCD_ROW_VALUE, LCD_ROW_BUTTON, LCD_ROW_LIST,
 } lcd_row_kind_t;
 
 /** One row, as data. A pane's own rows are emitted as lcdSetting* CALLS (that
@@ -92,9 +117,15 @@ typedef struct lcd_row_t {
      * seeds the initial selection. Form fields only. */
     const char* placeholder    = nullptr;
     const char* placeholder_key = nullptr;  /* placeholder text the device publishes */
+    /* A word printed after the field — a unit, or the fixed tail of what is
+     * being entered (".duckdns.org"). Never part of the value; a field that
+     * carries one right-aligns, so the entry and its word read as one thing. */
+    const char* unit           = nullptr;
+    bool        short_         = false;     /* a third of the usual field width */
     const char* dflt           = nullptr;   /* form prefill; may template. Never seeded */
     const struct lcd_action_t* act      = nullptr;   /* button */
     const struct lcd_collection_t* coll = nullptr;   /* list */
+    const struct lcd_num_t*        num  = nullptr;   /* integer */
 } lcd_row_t;
 
 /* ---- actions ---- */
@@ -169,18 +200,19 @@ typedef struct lcd_candidates_t {
  *  never writes the array, the owning task is its only writer.
  *
  *  A row shows the item and nothing else: its title, its subtitle, its status
- *  pill, and the reorder arrows when `orderable`. Everything that acts on the
+ *  pill, and the drag grip when `reorder`. Everything that acts on the
  *  item — `edit`, `actions`, `remove` — is on the item's DETAIL PAGE, which the
  *  row opens when tapped anywhere. */
 typedef struct lcd_collection_t {
     const char* label     = nullptr;
+    const char* caption   = nullptr;   /* what the list is, under its heading */
     const char* key       = nullptr;   /* the array */
     const char* id        = nullptr;   /* the field identifying an item */
     const char* item      = nullptr;   /* row title template */
     const char* subtitle  = nullptr;
     const char* status    = nullptr;   /* ephemeral key template, packed "text|color" */
     const char* empty     = nullptr;
-    bool        orderable = false;
+    bool        reorder   = false;     /* drag rows by their grip to reorder */
     const char* cmd       = nullptr;   /* <cmd>.add/.remove/.set/.order, answered on <cmd>.error/.done */
     const lcd_add_t* adds = nullptr;
     int         nadds     = 0;

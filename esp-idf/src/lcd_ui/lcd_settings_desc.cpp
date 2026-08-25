@@ -94,6 +94,39 @@ std::string subst(const char* tmpl, const ItemScope& sc) {
  * publishes gate keys as truthy/empty exactly so this stays a one-liner. */
 bool truthy(const std::string& v) { return !v.empty() && v != "0"; }
 
+void notice(const char* text);   /* fwd — the one-line modal, with the others */
+
+/** The characters an integer field will take at all: a sign only where the
+ *  range actually goes below zero. */
+const char* numAccepts(const lcd_num_t* n) {
+    return (n->has_min && lcdSettingsNumMin(n) >= 0) ? "0123456789" : "0123456789-";
+}
+
+/** The one sentence a refused address gets, wherever it is refused. */
+const char* const IPV4_REASON = "Enter an address like 192.168.1.10, or leave it empty.";
+
+/** Commit a typed address to a form field, or refuse it. Empty is accepted:
+ *  an address left blank is unset, which is how a fixed IP goes back to DHCP. */
+bool ipv4Commit(const std::string& text, std::string& out) {
+    if (!lcdSettingsIpv4Ok(text.c_str())) { notice(IPV4_REASON); return false; }
+    out = text;
+    return true;
+}
+
+/** Commit a typed number to a form field, or refuse it. False means refused —
+ *  the notice is already up and the caller leaves the editor as it was. */
+bool numCommit(const lcd_num_t* n, const std::string& text, std::string& out) {
+    int v = 0;
+    if (lcdSettingsNumParse(text.c_str(), &v) && lcdSettingsNumOk(n, v)) {
+        out = std::to_string(v);
+        return true;
+    }
+    char msg[96];
+    lcdSettingsNumRangeMsg(n, msg, sizeof(msg));
+    notice(msg);
+    return false;
+}
+
 /* ---- shared modal scaffolding ---- */
 
 /* Every open modal overlay, so lcdSettingsDescReset() can take them down when
@@ -488,6 +521,15 @@ void formApplyValue(FormField& f) {
             }
             break;
         }
+        case LCD_ROW_INTEGER:
+            /* Unlike a text field, this one IS refreshed while focused: the
+             * +/- buttons move it under the caret and the field has to follow
+             * them. Nothing else writes it — the operator's own typing already
+             * IS the value. */
+            if (f.valLbl) lv_label_set_text(f.valLbl, f.value.c_str());
+            else if (f.widget) lv_textarea_set_text(f.widget, f.value.c_str());
+            break;
+        case LCD_ROW_IPV4:
         case LCD_ROW_TEXT:
             if (f.valLbl) lcdSettingsValueText(f.valLbl, f.value.c_str(), f.row->secret);
             else if (f.widget && !(lv_obj_get_state(f.widget) & LV_STATE_FOCUSED))
@@ -530,7 +572,18 @@ KbCtx s_kb;
 
 void kbClose(bool commit) {
     if (commit && s_kb.f) {
-        s_kb.f->value = lv_textarea_get_text(s_kb.ta);
+        /* A number outside the field's range is refused rather than clamped:
+         * clamping stores something nobody typed. The editor stays up behind
+         * the notice with what was typed still in it. */
+        if (s_kb.f->row->kind == LCD_ROW_INTEGER && s_kb.f->row->num) {
+            if (!numCommit(s_kb.f->row->num, lv_textarea_get_text(s_kb.ta),
+                           s_kb.f->value))
+                return;
+        } else if (s_kb.f->row->kind == LCD_ROW_IPV4) {
+            if (!ipv4Commit(lv_textarea_get_text(s_kb.ta), s_kb.f->value)) return;
+        } else {
+            s_kb.f->value = lv_textarea_get_text(s_kb.ta);
+        }
         s_kb.f->dirty = true;
         formApplyValue(*s_kb.f);
         formRefresh();
@@ -562,6 +615,10 @@ void onFieldTap(lv_event_t* e) {
     lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 6);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_password_mode(ta, f->row->secret);
+    if (f->row->kind == LCD_ROW_INTEGER && f->row->num)
+        lv_textarea_set_accepted_chars(ta, numAccepts(f->row->num));
+    else if (f->row->kind == LCD_ROW_IPV4)
+        lv_textarea_set_accepted_chars(ta, "0123456789.");
     if (f->row->placeholder_key && *f->row->placeholder_key)
         lv_textarea_set_placeholder_text(
             ta, storageGetStr(f->row->placeholder_key, "").c_str());
@@ -571,6 +628,8 @@ void onFieldTap(lv_event_t* e) {
     s_kb.ta = ta;
 
     lv_obj_t* kb = lv_keyboard_create(ov);
+    if (f->row->kind == LCD_ROW_INTEGER || f->row->kind == LCD_ROW_IPV4)
+        lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
     lv_keyboard_set_textarea(kb, ta);
     lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_READY,  nullptr);
     lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_CANCEL, nullptr);
@@ -578,8 +637,42 @@ void onFieldTap(lv_event_t* e) {
 
 void onFieldInline(lv_event_t* e) {          /* physical keyboard: edit in place */
     auto* f = static_cast<FormField*>(lv_event_get_user_data(e));
-    f->value = lv_textarea_get_text(static_cast<lv_obj_t*>(lv_event_get_target(e)));
+    lv_obj_t* ta = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    if (f->row->kind == LCD_ROW_INTEGER && f->row->num) {
+        /* Refused: back to the value the field held, so it never sits showing
+         * a number that is not the one this form will submit. */
+        if (!numCommit(f->row->num, lv_textarea_get_text(ta), f->value)) {
+            lv_textarea_set_text(ta, f->value.c_str());
+            return;
+        }
+    } else if (f->row->kind == LCD_ROW_IPV4) {
+        if (!ipv4Commit(lv_textarea_get_text(ta), f->value)) {
+            lv_textarea_set_text(ta, f->value.c_str());
+            return;
+        }
+    } else {
+        f->value = lv_textarea_get_text(ta);
+    }
     f->dirty = true;
+    formRefresh();
+}
+
+/** One press of a form field's + or -, over the local buffer rather than
+ *  storage: nothing in a form reaches the device before submit. */
+struct FieldStep { FormField* f; int dir; };
+void fieldStepFree(lv_event_t* e) { delete static_cast<FieldStep*>(lv_event_get_user_data(e)); }
+
+void onFieldNumStep(lv_event_t* e) {
+    auto* s = static_cast<FieldStep*>(lv_event_get_user_data(e));
+    FormField* f = s->f;
+    const lcd_num_t* n = f->row->num;
+    if (!n) return;
+    int cur = 0;
+    if (!lcdSettingsNumParse(f->value.c_str(), &cur))
+        cur = n->has_min ? lcdSettingsNumMin(n) : 0;
+    f->value = std::to_string(lcdSettingsNumStep(n, cur, s->dir));
+    f->dirty = true;
+    formApplyValue(*f);
     formRefresh();
 }
 
@@ -635,15 +728,38 @@ void onFieldTzZone(lv_event_t* e) {
  *  field buffer: "SSID: {ssid}" over the item being edited. Kept live by
  *  formRefresh, so a heading naming a field the operator is editing follows it. */
 bool headingRow(const lcd_row_t* r) {
-    return r->kind == LCD_ROW_SECTION || r->kind == LCD_ROW_CAPTION;
+    return r->kind == LCD_ROW_TITLE || r->kind == LCD_ROW_HEADING
+        || r->kind == LCD_ROW_SECTION || r->kind == LCD_ROW_CAPTION;
 }
 
-void buildFormField(lv_obj_t* parent, FormField& f) {
+/** A word after the field — a unit, or the fixed tail of what is entered.
+ *  Furniture the operator reads, never part of the value. */
+bool hasUnit(const lcd_row_t* r) { return r->unit && *r->unit; }
+
+void fieldUnit(lv_obj_t* row, const lcd_row_t* r) {
+    if (!hasUnit(r)) return;
+    lv_obj_t* u = lv_label_create(row);
+    lv_label_set_text(u, r->unit);
+    lv_obj_set_style_text_color(u, lv_color_hex(0x8a93a0), 0);
+}
+
+/** A third of the usual width, where the row asks for it. A unit does NOT
+ *  imply it — a subdomain with ".duckdns.org" after it still needs room for a
+ *  subdomain. */
+bool fieldNarrow(const lcd_row_t* r) { return r->short_; }
+
+void narrowField(lv_obj_t* w) {
+    lv_obj_set_flex_grow(w, 0);
+    lv_obj_set_width(w, lv_pct(30));
+}
+
+void buildFormField(lv_obj_t* parent, FormField& f, bool underHeading) {
     const lcd_row_t* r = f.row;
     if (headingRow(r)) {
         std::string txt = substWith(r->label, formLookup);
-        f.rowObj = (r->kind == LCD_ROW_SECTION) ? lcdSettingSection(parent, txt.c_str())
-                                                : lcdSettingCaption(parent, txt.c_str());
+        f.rowObj = (r->kind == LCD_ROW_CAPTION)
+            ? lcdSettingCaption(parent, txt.c_str(), underHeading)
+            : lcdSettingSection(parent, txt.c_str());
         return;
     }
 
@@ -673,9 +789,63 @@ void buildFormField(lv_obj_t* parent, FormField& f) {
             lv_obj_add_event_cb(s, onFieldSlider, LV_EVENT_VALUE_CHANGED, &f);
             break;
         }
+        case LCD_ROW_INTEGER: {
+            static const lcd_num_t unbounded{};
+            const lcd_num_t* n = r->num ? r->num : &unbounded;
+
+            /* The field between its steppers, the same shape the pane's own
+             * integer row has — a form field and a pane row must be the same
+             * control or the operator is learning two of them. */
+            lv_obj_t* grp = lv_obj_create(row);
+            lv_obj_remove_style_all(grp);
+            lv_obj_set_height(grp, LV_SIZE_CONTENT);
+            lcdSettingsFillControl(grp);
+            lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                                  LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(grp, 6, 0);
+            lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+            auto stepper = [&](const char* glyph, int dir) {
+                lv_obj_t* b = lv_button_create(grp);
+                lv_obj_set_style_pad_hor(b, 8, 0);
+                lv_obj_set_style_pad_ver(b, 1, 0);
+                lv_obj_t* l = lv_label_create(b);
+                lv_label_set_text(l, glyph);
+                lv_obj_center(l);
+                auto* s = new FieldStep{ &f, dir };
+                lv_obj_add_event_cb(b, onFieldNumStep, LV_EVENT_CLICKED, s);
+                lv_obj_add_event_cb(b, fieldStepFree, LV_EVENT_DELETE, s);
+                if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
+            };
+            if (lcdHasKeyboard()) {
+                lv_obj_t* ta = lv_textarea_create(grp);
+                lv_textarea_set_one_line(ta, true);
+                lv_textarea_set_accepted_chars(ta, numAccepts(n));
+                lv_textarea_set_text(ta, f.value.c_str());
+                lv_obj_set_flex_grow(ta, 1);
+                lcdSettingsHalfPadVer(ta);
+                if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
+                f.widget = ta;
+                lv_obj_add_event_cb(ta, onFieldInline, LV_EVENT_READY,     &f);
+                lv_obj_add_event_cb(ta, onFieldInline, LV_EVENT_DEFOCUSED, &f);
+            } else {
+                lv_obj_t* val = lv_label_create(grp);
+                lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+                lv_obj_set_flex_grow(val, 1);
+                lv_label_set_text(val, f.value.c_str());
+                f.valLbl = val;
+                lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_add_event_cb(row, onFieldTap, LV_EVENT_CLICKED, &f);
+            }
+            fieldUnit(grp, r);
+            if (n->buttons) { stepper("-", -1); stepper("+", +1); }
+            break;
+        }
         case LCD_ROW_DROPDOWN: {
             lv_obj_t* d = lv_dropdown_create(row);
-            lcdSettingsFillControl(d);
+            lv_obj_set_width(d, LV_SIZE_CONTENT);      /* sized to its options */
+            lv_obj_set_style_max_width(d, lv_pct(66), 0);
             lcdSettingsHalfPadVer(d);
             /* Show the labels, store the values — the list is for a person. */
             lv_dropdown_set_options(d, (r->opt_labels && *r->opt_labels) ? r->opt_labels
@@ -724,11 +894,14 @@ void buildFormField(lv_obj_t* parent, FormField& f) {
             }
             break;
         }
+        case LCD_ROW_IPV4:
         case LCD_ROW_TEXT:
             if (lcdHasKeyboard()) {
                 lv_obj_t* ta = lv_textarea_create(row);
                 lv_textarea_set_one_line(ta, true);
                 lv_textarea_set_password_mode(ta, r->secret);
+                if (r->kind == LCD_ROW_IPV4)
+                    lv_textarea_set_accepted_chars(ta, "0123456789.");
                 /* A placeholder the device publishes outranks the compiled-in
                  * one: it is the value this field would take if left empty,
                  * which only the firmware knows (a MAC, a default port). */
@@ -737,7 +910,8 @@ void buildFormField(lv_obj_t* parent, FormField& f) {
                         ta, storageGetStr(r->placeholder_key, "").c_str());
                 else if (r->placeholder)
                     lv_textarea_set_placeholder_text(ta, r->placeholder);
-                lcdSettingsFillControl(ta);
+                if (fieldNarrow(r)) narrowField(ta); else lcdSettingsFillControl(ta);
+                if (hasUnit(r)) lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_RIGHT, 0);
                 lcdSettingsHalfPadVer(ta);
                 if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
                 f.widget = ta;
@@ -746,12 +920,14 @@ void buildFormField(lv_obj_t* parent, FormField& f) {
             } else {
                 lv_obj_t* val = lv_label_create(row);
                 lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
-                lcdSettingsFillControl(val);
-                lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_LEFT, 0);
+                if (fieldNarrow(r)) narrowField(val); else lcdSettingsFillControl(val);
+                lv_obj_set_style_text_align(
+                    val, hasUnit(r) ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
                 f.valLbl = val;
                 lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
                 lv_obj_add_event_cb(row, onFieldTap, LV_EVENT_CLICKED, &f);
             }
+            fieldUnit(row, r);
             break;
         default: {
             lv_obj_t* val = lv_label_create(row);
@@ -897,7 +1073,18 @@ void formOpen(const lcd_form_t* d, const ItemScope& sc,
      * rows are already compact ones. */
     lv_obj_set_style_text_font(body, lcdFont(LcdFace::UI, lcdPx(12)), 0);
 
-    for (auto& f : ctx->fields) buildFormField(body, f);
+    /* A caption directly under a heading is about the group and spans both
+     * columns; one under a field starts on the control column. Only the order
+     * of the rows knows which, so the walk carries it. */
+    bool afterHeading = false;
+    for (auto& f : ctx->fields) {
+        buildFormField(body, f, afterHeading);
+        lcd_row_kind_t k = f.row->kind;
+        if (k == LCD_ROW_TITLE || k == LCD_ROW_HEADING || k == LCD_ROW_SECTION)
+            afterHeading = true;
+        else if (k != LCD_ROW_CAPTION)
+            afterHeading = false;
+    }
 
     ctx->errLbl = lv_label_create(body);
     lv_label_set_long_mode(ctx->errLbl, LV_LABEL_LONG_WRAP);
@@ -971,6 +1158,24 @@ void rebootNotice() {
     lv_label_set_text(t, "Restarting the device.");
 }
 
+/** One line and an OK: how a refused number tells the operator why. Not a
+ *  dialog descriptor — there is no choice to make and nothing to run, so it
+ *  takes text rather than an lcd_dialog_t. */
+void notice(const char* text) {
+    lv_obj_t* ov = nullptr;
+    lv_obj_t* card = makeModal(&ov, nullptr);
+    lv_obj_t* t = lv_label_create(card);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(t, lv_pct(100));
+    lv_obj_set_style_text_color(t, lv_color_white(), 0);
+    lv_label_set_text(t, text);
+
+    lv_obj_t* btns = buttonBar(card);
+    barButton(btns, "OK", nullptr, [](lv_event_t* e) {
+        dismiss(static_cast<lv_obj_t*>(lv_event_get_user_data(e)));
+    }, ov);
+}
+
 /* ---- collections ---- */
 
 struct CollCtx {
@@ -985,6 +1190,10 @@ struct CollCtx {
      * outlive the click that opens it, and there is one per collection. */
     lcd_form_t  editForm{};
     std::string setCmd;
+    /* The detail page's heading, rebuilt for each item as it is opened. It
+     * backs editForm.title, so it has to outlive the click that opens the
+     * form — which it does, being a member alongside it. */
+    std::string editTitle;
 };
 std::vector<CollCtx*> s_colls;
 
@@ -1031,13 +1240,19 @@ ItemScope itemScope(const lcd_collection_t* d, int idx) {
     return sc;
 }
 
-/** The current id order of the array, comma-joined — what a reorder writes. */
+/** The current id order of the array with one item MOVED to a new position,
+ *  comma-joined — what a drag writes. A move, not a swap: dragging a row three
+ *  places up puts it there and closes the gap behind it, which is what the row
+ *  under the finger has been doing all the way. */
 std::string idOrder(const lcd_collection_t* d, int moveFrom, int moveTo) {
     int n = storageArrayCount(d->key);
     std::vector<std::string> ids;
     for (int i = 0; i < n; i++) ids.push_back(itemScope(d, i).idValue);
-    if (moveFrom >= 0 && moveFrom < n && moveTo >= 0 && moveTo < n)
-        std::swap(ids[moveFrom], ids[moveTo]);
+    if (moveFrom >= 0 && moveFrom < n && moveTo >= 0 && moveTo < n && moveFrom != moveTo) {
+        std::string moved = ids[moveFrom];
+        ids.erase(ids.begin() + moveFrom);
+        ids.insert(ids.begin() + moveTo, moved);
+    }
     std::string out;
     for (size_t i = 0; i < ids.size(); i++) {
         if (i) out += ",";
@@ -1051,7 +1266,6 @@ struct ItemBtnCtx {
     CollCtx* c;
     int idx;
     const lcd_action_t* act;    /* per-item action, or null */
-    int move;                   /* reorder delta, 0 when not a reorder button */
     bool remove;
     bool edit;
 };
@@ -1062,11 +1276,6 @@ void onItemButton(lv_event_t* e) {
     const lcd_collection_t* d = b->c->d;
     ItemScope sc = itemScope(d, b->idx);
 
-    if (b->move) {
-        storageSet((std::string(d->cmd) + ".order").c_str(),
-                   idOrder(d, b->idx, b->idx + b->move).c_str());
-        return;
-    }
     if (b->remove) {
         std::string key = std::string(d->cmd) + ".remove";
         if (!(d->remove_confirm && *d->remove_confirm)) {
@@ -1081,6 +1290,8 @@ void onItemButton(lv_event_t* e) {
          * `<cmd>.set` — the sentinel family stays derived from the one `cmd`
          * name, so the descriptor never spells the keys out — plus, from
          * buildItemButtons, everything else the item can be made to do. */
+        b->c->editTitle = subst(d->item, sc);
+        b->c->editForm.title = b->c->editTitle.c_str();
         formOpen(&b->c->editForm, sc, b->c->errKey, b->c->ackKey, {}, sc.idValue,
                  b->c, b->idx);
         return;
@@ -1141,19 +1352,86 @@ void buildItemButtons(lv_obj_t* row, FormCtx* ctx) {
     }
 }
 
-lv_obj_t* itemRowButton(lv_obj_t* parent, const char* txt, ItemBtnCtx* ctx, const char* color) {
-    lv_obj_t* b = lv_button_create(parent);
-    lv_obj_set_style_pad_hor(b, 6, 0);
-    lv_obj_set_style_pad_ver(b, 2, 0);
-    buttonColor(b, color);
-    lv_obj_t* l = lv_label_create(b);
-    lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI, listTextPx()), 0);
-    lv_obj_center(l);
-    lv_obj_add_event_cb(b, onItemButton, LV_EVENT_CLICKED, ctx);
-    lv_obj_add_event_cb(b, itemBtnFree, LV_EVENT_DELETE, ctx);
-    if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
-    return b;
+/* -- drag to reorder --
+ *
+ * The grip at the right of a row is what a drag starts on, and only there: a
+ * vertical drag anywhere else on a list is the pane scrolling, which is what a
+ * finger on a long pane is nearly always doing. The grip keeps that from
+ * happening by not chaining its scroll to the page (LVGL looks for the
+ * scrollable ancestor of whatever was pressed, and stops at a child that
+ * refuses to chain).
+ *
+ * While dragging, only the dragged row moves — it is translated under the
+ * finger and drawn over its neighbours, and the list itself does not shuffle.
+ * The landing index is the distance travelled in whole rows; the release
+ * writes the whole id order to `<cmd>.order` and the array comes back
+ * re-published, which is what redraws the list in its new order. */
+struct DragCtx {
+    CollCtx*  c;
+    int       idx;
+    lv_obj_t* row;
+    int32_t   startY = 0;
+    int32_t   rowH   = 0;
+};
+void dragCtxFree(lv_event_t* e) { delete static_cast<DragCtx*>(lv_event_get_user_data(e)); }
+
+/** Where the row would land, given how far it has been dragged. */
+int dragTarget(const DragCtx* g, int32_t dy) {
+    int n = storageArrayCount(g->c->d->key);
+    if (g->rowH <= 0 || n <= 0) return g->idx;
+    int moved = (int)((dy + (dy >= 0 ? g->rowH / 2 : -g->rowH / 2)) / g->rowH);
+    int to = g->idx + moved;
+    if (to < 0) to = 0;
+    if (to > n - 1) to = n - 1;
+    return to;
+}
+
+void onGripEvent(lv_event_t* e) {
+    auto* g = static_cast<DragCtx*>(lv_event_get_user_data(e));
+    lv_indev_t* indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    switch (lv_event_get_code(e)) {
+        case LV_EVENT_PRESSED:
+            g->startY = p.y;
+            g->rowH   = lv_obj_get_height(g->row);
+            lv_obj_move_foreground(g->row);      /* over its neighbours, not under */
+            lv_obj_set_style_opa(g->row, LV_OPA_90, 0);
+            break;
+        case LV_EVENT_PRESSING:
+            lv_obj_set_style_translate_y(g->row, p.y - g->startY, 0);
+            break;
+        case LV_EVENT_RELEASED:
+        case LV_EVENT_PRESS_LOST: {
+            int32_t dy = p.y - g->startY;
+            lv_obj_set_style_translate_y(g->row, 0, 0);
+            lv_obj_set_style_opa(g->row, LV_OPA_COVER, 0);
+            int to = dragTarget(g, dy);
+            if (to != g->idx)
+                storageSet((std::string(g->c->d->cmd) + ".order").c_str(),
+                           idOrder(g->c->d, g->idx, to).c_str());
+            break;
+        }
+        default: break;
+    }
+}
+
+void itemRowGrip(lv_obj_t* row, CollCtx* c, int idx) {
+    lv_obj_t* grip = lv_label_create(row);
+    lv_label_set_text(grip, LV_SYMBOL_LIST);
+    lv_obj_set_style_text_color(grip, lv_color_hex(0x8a93a0), 0);
+    lv_obj_set_style_text_font(grip, lcdFont(LcdFace::UI, listTextPx()), 0);
+    lv_obj_add_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(grip, LV_OBJ_FLAG_SCROLL_CHAIN_VER);   /* drag here ≠ scroll */
+    lv_obj_set_ext_click_area(grip, 8);
+
+    auto* g = new DragCtx{ c, idx, row };
+    for (lv_event_code_t code : { LV_EVENT_PRESSED, LV_EVENT_PRESSING,
+                                  LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST })
+        lv_obj_add_event_cb(grip, onGripEvent, code, g);
+    lv_obj_add_event_cb(grip, dragCtxFree, LV_EVENT_DELETE, g);
 }
 
 /* One entry of a collection. The rows of a list are the device's own data
@@ -1236,17 +1514,12 @@ void collRebuild(CollCtx* c) {
          * Everything that acts on the ITEM — the editor, the per-item actions,
          * removal — lives on its detail page, which the row opens. A row of
          * five buttons is a row nobody can hit. */
-        if (d->orderable) {
-            if (i > 0)     itemRowButton(row, LV_SYMBOL_UP,
-                                         new ItemBtnCtx{ c, i, nullptr, -1, false, false }, nullptr);
-            if (i < n - 1) itemRowButton(row, LV_SYMBOL_DOWN,
-                                         new ItemBtnCtx{ c, i, nullptr, +1, false, false }, nullptr);
-        }
+        if (d->reorder) itemRowGrip(row, c, i);
         /* No chevron: a banded block of rows in a pane of chevron-less rows is
          * already visibly a list of things, and the affordance would cost the
          * width the title needs. */
         if (hasDetailPage(d)) {
-            auto* ctx = new ItemBtnCtx{ c, i, nullptr, 0, false, true };
+            auto* ctx = new ItemBtnCtx{ c, i, nullptr, false, true };
             lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(row, onItemButton, LV_EVENT_CLICKED, ctx);
             lv_obj_add_event_cb(row, itemBtnFree, LV_EVENT_DELETE, ctx);
@@ -1448,6 +1721,8 @@ void collDelete(lv_event_t* e) {
 
 void lcdSettingsRebootNotice(void) { rebootNotice(); }
 
+void lcdSettingsNotice(const char* text) { notice(text); }
+
 void lcdSettingRunAction(const lcd_action_t* act, const char* itemPrefix,
                          const char* idValue) {
     if (!act) return;
@@ -1498,8 +1773,13 @@ void lcdSettingsDescReset(void) {
 
 lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action_t* act,
                            const char* color) {
-    lv_obj_t* b = lv_button_create(parent);
-    lv_obj_set_width(b, lv_pct(100));
+    /* In the CONTROL column, not across the pane: a button is a control, and a
+     * control that starts at the pane's left edge while every field on the
+     * pane starts a third of the way in reads as belonging to none of them. */
+    lv_obj_t* row = lcdSettingsMakeRow(parent);
+    lcdSettingsRowLabel(row, "");
+    lv_obj_t* b = lv_button_create(row);
+    lcdSettingsFillControl(b);
     lcdSettingsHalfPadVer(b);
     buttonColor(b, color);
     lv_obj_t* l = lv_label_create(b);
@@ -1509,30 +1789,41 @@ lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action
         lcdSettingRunAction(static_cast<const lcd_action_t*>(lv_event_get_user_data(e)));
     }, LV_EVENT_CLICKED, (void*)act);
     if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
-    return b;
+    return row;
 }
 
 lv_obj_t* lcdSettingActionRow(lv_obj_t* parent, lcd_align_t align,
                               const lcd_btn_t* btns, int nbtns) {
     if (!btns || nbtns <= 0) return nullptr;
     lv_obj_t* row = lcdSettingsMakeRow(parent);
-    /* No label column here: the buttons ARE the row, so the whole width is
-     * theirs and `align` says which edge they gather at. The row wraps and
-     * grows instead of keeping the fixed height an ordinary row has — a pair
-     * whose labels are too wide for the display stacks rather than running off
-     * the edge of it, which is the difference between a tight pane and a
-     * broken one. */
+    /* An empty label column, so a line of buttons begins where the controls
+     * above and below it begin. `align` then says which edge of THAT column
+     * they gather at. The row wraps and grows instead of keeping the fixed
+     * height an ordinary row has — a pair whose labels are too wide for the
+     * display stacks rather than running off the edge of it, which is the
+     * difference between a tight pane and a broken one. */
+    lcdSettingsRowLabel(row, "");
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_ver(row, 3, 0);
+
+    /* The buttons wrap inside the control column rather than inside the row:
+     * `align` has to mean "which edge of the column", and a row that wrapped as
+     * a whole would carry the empty label column along with them. */
     lv_flex_align_t main = align == LCD_ALIGN_RIGHT  ? LV_FLEX_ALIGN_END
                          : align == LCD_ALIGN_CENTER ? LV_FLEX_ALIGN_CENTER
                                                      : LV_FLEX_ALIGN_START;
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_ver(row, 3, 0);
-    lv_obj_set_style_pad_row(row, 4, 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(row, main, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t* grp = lv_obj_create(row);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_height(grp, LV_SIZE_CONTENT);
+    lcdSettingsFillControl(grp);
+    lv_obj_set_style_pad_column(grp, 6, 0);
+    lv_obj_set_style_pad_row(grp, 4, 0);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(grp, main, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
 
     for (int i = 0; i < nbtns; i++) {
-        lv_obj_t* b = lv_button_create(row);
+        lv_obj_t* b = lv_button_create(grp);
         lv_obj_set_size(b, LV_SIZE_CONTENT, LV_SIZE_CONTENT);   /* share the line */
         lv_obj_set_style_pad_hor(b, 12, 0);
         lv_obj_set_style_pad_ver(b, 2, 0);
@@ -1554,17 +1845,22 @@ lv_obj_t* lcdSettingActionRow(lv_obj_t* parent, lcd_align_t align,
 
 lv_obj_t* lcdSettingCollection(lv_obj_t* parent, const lcd_collection_t* d) {
     if (!d) return nullptr;
-    if (d->label && *d->label) lcdSettingSection(parent, d->label);
+    if (d->label && *d->label)     lcdSettingSection(parent, d->label);
+    /* Above the rows, under the heading: what the list is, and what its order
+     * means where the order is the operator's to set. The rows themselves are
+     * the device's data and have no room to say it. */
+    if (d->caption && *d->caption) lcdSettingCaption(parent, d->caption);
 
     CollCtx* c = new CollCtx();
     c->d      = d;
     c->setCmd = std::string(d->cmd) + ".set";
     c->errKey = std::string(d->cmd) + ".error";
     c->ackKey = std::string(d->cmd) + ".done";
-    /* No title: the page belongs to the ITEM, and the collection's name over it
-     * ("Known networks") says nothing about which one. A pane that wants the
-     * item named puts a `section:` row at the top of `edit:` — templated over
-     * the item, so it can be the item. */
+    /* The title is the ITEM's, filled in when the page is opened: the
+     * collection's own name over it ("Known networks") says nothing about
+     * which one of them this is. It comes from `item:` — the template that
+     * already says how an item is titled — so a collection names its detail
+     * page by having named its rows. */
     c->editForm = lcd_form_t{ .fields = d->edit, .nfields = d->nedit,
                               .cmd = c->setCmd.c_str(), .submit = "Save",
                               .title = nullptr };

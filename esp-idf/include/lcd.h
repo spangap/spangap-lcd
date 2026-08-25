@@ -388,10 +388,26 @@ void lcdSettingsContribute(const lcd_seg_t* segs, int nsegs, lcd_fn_t fn);
  * storage key, mirroring the browser's Setting* components. Run on the lcd
  * task (inside a settings fn). Each returns the row object. */
 
-/** Bold section divider (no control). */
+/* The three heading levels, told apart the way the browser tells them apart —
+ * a page has one name, and everything under it is a group or a sub-group of
+ * that page. */
+
+/** The pane's own name (level 1): white, the largest type on the page, and the
+ *  only heading with a rule under it. Deliberately not the accent colour — the
+ *  accent marks a divider WITHIN a page, and the page's name is not one. */
+lv_obj_t* lcdSettingTitle   (lv_obj_t* parent, const char* title);
+/** A group heading (level 2). */
+lv_obj_t* lcdSettingHeading (lv_obj_t* parent, const char* title);
+/** A sub-group heading (level 3) inside a group. */
 lv_obj_t* lcdSettingSection (lv_obj_t* parent, const char* title);
 /** Greyed, wrapped help text under a control (mirrors the browser's captions). */
-lv_obj_t* lcdSettingCaption (lv_obj_t* parent, const char* text);
+/** Greyed, wrapped help text. `underHeading` spans BOTH columns, at the
+ *  heading's own indent — a caption directly under one is about the group, and
+ *  set into the control column it would read as belonging to a field that is
+ *  not there. Otherwise it starts on the control column, where the control it
+ *  describes starts. `[label](url)` keeps the label and drops the URL. */
+lv_obj_t* lcdSettingCaption (lv_obj_t* parent, const char* text,
+                             bool underHeading = false);
 /** Toggle bound to an int key (0/1). */
 lv_obj_t* lcdSettingSwitch  (lv_obj_t* parent, const char* label, const char* key);
 /** Slider bound to an int key, clamped to [min,max]. `minKey`/`maxKey` name
@@ -400,9 +416,25 @@ lv_obj_t* lcdSettingSwitch  (lv_obj_t* parent, const char* label, const char* ke
  *  to hardware the build could not know about. */
 lv_obj_t* lcdSettingSlider  (lv_obj_t* parent, const char* label, const char* key, int min, int max,
                              const char* minKey = nullptr, const char* maxKey = nullptr);
+/** Number typed into an int key: digits only, an optional +/- pair stepping by
+ *  `spec->step`, and a warning modal on a value outside the stated bounds — a
+ *  refused number never reaches storage. See lcd_num_t. */
+lv_obj_t* lcdSettingInteger (lv_obj_t* parent, const char* label, const char* key,
+                             const lcd_num_t* spec, const char* unit = nullptr);
 /** Text field bound to a string key; tap opens an on-screen keyboard. When
- *  `secret`, the value is masked. */
-lv_obj_t* lcdSettingText    (lv_obj_t* parent, const char* label, const char* key, bool secret = false);
+ *  `secret`, the value is masked. `unit` is a word printed after the field (a
+ *  unit, or a fixed tail like ".duckdns.org") — never part of the value, and a
+ *  field carrying one right-aligns. `narrow` gives it a third of the usual
+ *  width, for an entry that is a handful of characters. */
+lv_obj_t* lcdSettingText    (lv_obj_t* parent, const char* label, const char* key,
+                             bool secret = false, const char* unit = nullptr,
+                             bool narrow = false);
+/** Dotted quad bound to a string key: digits and dots only, and a non-empty
+ *  value that is not four octets of 0-255 is refused with a warning modal.
+ *  Empty is always accepted — that is how a fixed address is handed back to
+ *  DHCP, and a mask or gateway left blank is left blank. */
+lv_obj_t* lcdSettingIpv4    (lv_obj_t* parent, const char* label, const char* key,
+                             const char* unit = nullptr);
 /** Dropdown bound to a string key; `optionsCsv` is a comma-separated list. */
 lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* key, const char* optionsCsv);
 /** Read-only row showing whatever string the key holds — the firmware publishes

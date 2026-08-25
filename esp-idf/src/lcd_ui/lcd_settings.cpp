@@ -190,7 +190,10 @@ void pushNode(Node* node) {
         lv_obj_t* row = lv_button_create(pg);
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, lv_pct(100));
-        lv_obj_set_height(row, 38);
+        /* A pixel off the top and bottom of the label's breathing room. The
+         * main menu is four of these, and at 38 they came to more than the
+         * viewport — a whole page that scrolled to show nothing. */
+        lv_obj_set_height(row, 36);
         lv_obj_set_style_bg_color(row, lv_color_hex(0x20262e), 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 6, 0);
@@ -323,6 +326,25 @@ void addRowLabel(lv_obj_t* row, const char* text) {
 /* Stretch a control across the remaining 2/3, left-aligned. */
 void fillRowControl(lv_obj_t* w) { lv_obj_set_flex_grow(w, 1); }
 
+/* The word after a field — a unit, or the fixed tail of what is being entered.
+ * Never part of the value: it is furniture the operator reads, not something
+ * stored, which is why it is a label of its own and not a placeholder or a
+ * suffix on the text. */
+void addRowUnit(lv_obj_t* row, const char* unit) {
+    if (!unit || !*unit) return;
+    lv_obj_t* u = lv_label_create(row);
+    lv_label_set_text(u, unit);
+    lv_obj_set_style_text_color(u, lv_color_hex(0x8a93a0), 0);
+}
+
+/* A third of the usual field width, for an entry that is a handful of
+ * characters. A field the pane has to guess the length of is better guessed
+ * short: a wide box invites a long answer that will not fit anywhere else. */
+void narrowRowControl(lv_obj_t* w) {
+    lv_obj_set_flex_grow(w, 0);
+    lv_obj_set_width(w, lv_pct(30));
+}
+
 /* Halve a control's vertical padding. Every button and every input field in
  * Settings gets this: the theme sizes them for a finger on a tablet, and on a
  * pane of stacked rows that verticality is what pushes content off the bottom.
@@ -422,10 +444,23 @@ void bindAttach(lv_obj_t* w, const char* key, BindKind kind, bool secret = false
     lv_obj_add_event_cb(w, bindDelete, LV_EVENT_DELETE, nullptr);
 }
 
-/* ---- text editor (on-screen keyboard) ---- */
+/* What a refused address is told. One sentence, in one place, because the
+ * inline field and the on-screen-keyboard editor must not explain the same
+ * rule two different ways. */
+const char* const IPV4_REASON = "Enter an address like 192.168.1.10, or leave it empty.";
 
-struct TextRef { char key[64]; bool secret; lv_obj_t* valLbl; };
-struct { char key[64]; bool secret; lv_obj_t* valLbl; lv_obj_t* overlay; lv_obj_t* ta; } s_ed;
+/* ---- text editor (on-screen keyboard) ----
+ *
+ * The same editor serves a `text:` row and an `integer:` one: a number is a
+ * short string with a numeric keyboard over it and a range to answer to. `num`
+ * non-null is what makes it the latter — the keyboard comes up in number mode
+ * and the commit refuses anything outside the bounds, which is the ONE place a
+ * pane row checks a value at all (a form leaves that to its sentinel handler). */
+
+struct TextRef { char key[64]; bool secret; lv_obj_t* valLbl;
+                 const lcd_num_t* num; bool ipv4; };
+struct { char key[64]; bool secret; lv_obj_t* valLbl; const lcd_num_t* num; bool ipv4;
+         lv_obj_t* overlay; lv_obj_t* ta; } s_ed;
 
 void setValueText(lv_obj_t* lbl, const std::string& v, bool secret) {
     if (v.empty())     lv_label_set_text(lbl, "\xE2\x80\x94");
@@ -436,8 +471,27 @@ void setValueText(lv_obj_t* lbl, const std::string& v, bool secret) {
 void editorClose(bool commit) {
     if (commit) {
         std::string v = lv_textarea_get_text(s_ed.ta);
-        storageSet(s_ed.key, v.c_str());
-        if (s_ed.valLbl) setValueText(s_ed.valLbl, v, s_ed.secret);
+        if (s_ed.num) {
+            /* A number out of range is refused rather than clamped: clamping
+             * stores something nobody typed, and silently. The editor stays
+             * open behind the notice with the typed value still in it. */
+            int n = 0;
+            if (!lcdSettingsNumParse(v.c_str(), &n) || !lcdSettingsNumOk(s_ed.num, n)) {
+                char msg[96];
+                lcdSettingsNumRangeMsg(s_ed.num, msg, sizeof(msg));
+                lcdSettingsNotice(msg);
+                return;
+            }
+            storageSet(s_ed.key, n);
+            if (s_ed.valLbl) lv_label_set_text_fmt(s_ed.valLbl, "%d", n);
+        } else {
+            if (s_ed.ipv4 && !lcdSettingsIpv4Ok(v.c_str())) {
+                lcdSettingsNotice(IPV4_REASON);
+                return;
+            }
+            storageSet(s_ed.key, v.c_str());
+            if (s_ed.valLbl) setValueText(s_ed.valLbl, v, s_ed.secret);
+        }
     }
     if (s_ed.overlay) { lv_obj_delete(s_ed.overlay); s_ed.overlay = nullptr; }
 }
@@ -451,6 +505,8 @@ void onTextRow(lv_event_t* e) {
     safeStrncpy(s_ed.key, tr->key, sizeof(s_ed.key));
     s_ed.secret = tr->secret;
     s_ed.valLbl = tr->valLbl;
+    s_ed.num    = tr->num;
+    s_ed.ipv4   = tr->ipv4;
 
     lv_obj_t* opener = lcdInputGroup() ? lv_group_get_focused(lcdInputGroup()) : nullptr;
     lv_obj_t* ov = lv_obj_create(lv_layer_top());
@@ -467,6 +523,15 @@ void onTextRow(lv_event_t* e) {
     lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 6);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_password_mode(ta, tr->secret);
+    /* Digits only (and a sign where the range goes below zero): the field
+     * cannot be made to hold something that is not a number in the first
+     * place, so the range check on commit is the only thing left to fail. */
+    if (tr->num)
+        lv_textarea_set_accepted_chars(
+            ta, (tr->num->has_min && lcdSettingsNumMin(tr->num) >= 0) ? "0123456789"
+                                                                      : "0123456789-");
+    else if (tr->ipv4)
+        lv_textarea_set_accepted_chars(ta, "0123456789.");
     lv_textarea_set_text(ta, storageGetStr(tr->key, "").c_str());
     s_ed.ta = ta;
 
@@ -479,6 +544,7 @@ void onTextRow(lv_event_t* e) {
         lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_READY, nullptr);
     } else {
         lv_obj_t* kb = lv_keyboard_create(ov);
+        if (tr->num || tr->ipv4) lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
         lv_keyboard_set_textarea(kb, ta);
         lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_READY,  nullptr);
         lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_CANCEL, nullptr);
@@ -535,6 +601,54 @@ void onInlineCommit(lv_event_t* e) {
     lv_obj_t* ta = static_cast<lv_obj_t*>(lv_event_get_target(e));
     storageSet(key, lv_textarea_get_text(ta));
 }
+
+/* The same, for an integer row: a number outside the range is refused and the
+ * field goes back to what is stored, so nothing out of range is ever written
+ * and the field never sits showing a value the device does not hold. */
+void onInlineNumCommit(lv_event_t* e) {
+    auto* tr = static_cast<TextRef*>(lv_event_get_user_data(e));
+    lv_obj_t* ta = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    const char* text = lv_textarea_get_text(ta);
+    /* Nothing typed here: DEFOCUSED also fires as a pane is left, and an
+     * untouched field must not answer that with a modal. */
+    if (storageGetStr(tr->key, "") == text) return;
+    int n = 0;
+    if (lcdSettingsNumParse(text, &n) && lcdSettingsNumOk(tr->num, n)) {
+        storageSet(tr->key, n);
+        return;
+    }
+    char msg[96];
+    lcdSettingsNumRangeMsg(tr->num, msg, sizeof(msg));
+    lcdSettingsNotice(msg);
+    lv_textarea_set_text(ta, storageGetStr(tr->key, "").c_str());
+}
+
+/* The inline commit for an address row. A refused value goes back to what is
+ * stored rather than being corrected into something nobody typed. */
+void onInlineIpv4Commit(lv_event_t* e) {
+    auto* tr = static_cast<TextRef*>(lv_event_get_user_data(e));
+    lv_obj_t* ta = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    const char* text = lv_textarea_get_text(ta);
+    if (storageGetStr(tr->key, "") == text) return;   /* untouched; see above */
+    if (!lcdSettingsIpv4Ok(text)) {
+        lcdSettingsNotice(IPV4_REASON);
+        lv_textarea_set_text(ta, storageGetStr(tr->key, "").c_str());
+        return;
+    }
+    storageSet(tr->key, text);
+}
+
+/* One press of an integer row's + or -. The value is read from storage rather
+ * than from the widget: the row's binding is what the widget shows, and
+ * storage is what it shows. */
+struct NumStep { char key[64]; const lcd_num_t* spec; int dir; };
+
+void onNumStep(lv_event_t* e) {
+    auto* s = static_cast<NumStep*>(lv_event_get_user_data(e));
+    int base = s->spec->has_min ? lcdSettingsNumMin(s->spec) : 0;
+    storageSet(s->key, lcdSettingsNumStep(s->spec, storageGetInt(s->key, base), s->dir));
+}
+void numStepFree(lv_event_t* e) { free(lv_event_get_user_data(e)); }
 
 /** Can the focus ring stand on this object right now? */
 bool focusable(lv_obj_t* obj, lv_group_t* g) {
@@ -631,27 +745,175 @@ void lcdSettingsContribute(const lcd_seg_t* segs, int nsegs, lcd_fn_t fn) {
     if (fn) cur->builders.push_back(fn);
 }
 
+/* ================= integer arithmetic ================= */
+
+int lcdSettingsNumMin(const lcd_num_t* spec) {
+    /* A bound the device publishes outranks the compiled one, exactly as a
+     * slider's does: the firmware can measure what the hardware in front of it
+     * will actually take. Read when the row is built. */
+    return spec->min_key ? storageGetInt(spec->min_key, spec->min) : spec->min;
+}
+
+int lcdSettingsNumMax(const lcd_num_t* spec) {
+    return spec->max_key ? storageGetInt(spec->max_key, spec->max) : spec->max;
+}
+
+int lcdSettingsNumStep(const lcd_num_t* spec, int cur, int dir) {
+    int step = spec->step > 0 ? spec->step : 1;
+    /* Floor division, so the grid is the same grid below zero as above it —
+     * C's own division truncates towards zero, which would make -3 and +3 step
+     * to different distances from the origin. */
+    auto floorDiv = [](int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
+    /* SNAP, don't add: the next multiple of the step past `cur`, which is what
+     * puts a hand-typed 23 onto 20 and then 15 rather than onto 18 and 13. */
+    int next = dir > 0 ? (floorDiv(cur, step) + 1) * step
+                       : floorDiv(cur - 1, step) * step;
+    if (spec->has_min && next < lcdSettingsNumMin(spec)) next = lcdSettingsNumMin(spec);
+    if (spec->has_max && next > lcdSettingsNumMax(spec)) next = lcdSettingsNumMax(spec);
+    return next;
+}
+
+bool lcdSettingsNumOk(const lcd_num_t* spec, int v) {
+    if (spec->has_min && v < lcdSettingsNumMin(spec)) return false;
+    if (spec->has_max && v > lcdSettingsNumMax(spec)) return false;
+    return true;
+}
+
+void lcdSettingsNumRangeMsg(const lcd_num_t* spec, char* buf, size_t n) {
+    if (spec->has_min && spec->has_max)
+        snprintf(buf, n, "Enter a number between %d and %d.",
+                 lcdSettingsNumMin(spec), lcdSettingsNumMax(spec));
+    else if (spec->has_min)
+        snprintf(buf, n, "Enter a number of at least %d.", lcdSettingsNumMin(spec));
+    else if (spec->has_max)
+        snprintf(buf, n, "Enter a number no greater than %d.", lcdSettingsNumMax(spec));
+    else
+        snprintf(buf, n, "Enter a number.");
+}
+
+bool lcdSettingsIpv4Ok(const char* text) {
+    if (!text || !*text) return true;      /* unset, which is a legal answer */
+    int octets = 0;
+    for (const char* p = text; ; ) {
+        if (*p < '0' || *p > '9') return false;      /* every octet has a digit */
+        int v = 0, digits = 0;
+        while (*p >= '0' && *p <= '9') { v = v * 10 + (*p++ - '0'); if (++digits > 3) return false; }
+        if (v > 255) return false;
+        octets++;
+        if (!*p) break;
+        if (*p != '.') return false;
+        p++;
+    }
+    return octets == 4;
+}
+
+bool lcdSettingsNumParse(const char* text, int* out) {
+    if (!text) return false;
+    const char* p = text;
+    while (*p == ' ') p++;
+    const char* digits = (*p == '-' || *p == '+') ? p + 1 : p;
+    if (!*digits) return false;
+    for (const char* d = digits; *d; d++)
+        if (*d < '0' || *d > '9') return false;
+    *out = atoi(p);
+    return true;
+}
+
 /* ================= helpers ================= */
 
+/* The pane's own name. White and ruled rather than accented: the accent marks
+ * a divider WITHIN a page, and the thing a page is called is not one of its
+ * dividers — colouring it the same as its groups makes it read as the first
+ * of them. The rule is what separates it instead, and it is the only heading
+ * on the pane that carries one. */
+lv_obj_t* lcdSettingTitle(lv_obj_t* parent, const char* title) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, title);
+    lv_obj_set_width(l, lv_pct(100));
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(24)), 0);
+    lv_obj_set_style_border_side(l, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(l, 1, 0);
+    lv_obj_set_style_border_color(l, lv_color_hex(0x3a4658), 0);
+    lv_obj_set_style_pad_bottom(l, 5, 0);
+    return l;
+}
+
+/* A group. Half again the body size, in the bold face and the accent colour:
+ * this is what divides a long pane, and at body size and body weight it reads
+ * as one more row. 14 px is the sheet's body size. */
+lv_obj_t* lcdSettingHeading(lv_obj_t* parent, const char* title) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, title);
+    lv_obj_set_style_text_color(l, lv_color_hex(0x6cc0ff), 0);
+    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(21)), 0);
+    lv_obj_set_style_pad_top(l, 14, 0);
+    return l;
+}
+
+/* A sub-group inside a group: the same accent, a step smaller, so the two
+ * levels are told apart by size where the display has no indentation to tell
+ * them apart with. */
 lv_obj_t* lcdSettingSection(lv_obj_t* parent, const char* title) {
     lv_obj_t* l = lv_label_create(parent);
     lv_label_set_text(l, title);
     lv_obj_set_style_text_color(l, lv_color_hex(0x6cc0ff), 0);
-    /* Half again the body size, in the bold face: a section heading is the only
-     * thing that divides a long pane, and at body size and body weight it reads
-     * as one more row. 14 px is the sheet's body size. */
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(21)), 0);
-    lv_obj_set_style_pad_top(l, 8, 0);
+    lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(17)), 0);
+    lv_obj_set_style_pad_top(l, 12, 0);
     return l;
 }
 
-lv_obj_t* lcdSettingCaption(lv_obj_t* parent, const char* text) {
-    lv_obj_t* l = lv_label_create(parent);
-    lv_label_set_text(l, text);
-    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);    /* wrap within the pane width */
-    lv_obj_set_width(l, lv_pct(100));
+/* `[label](url)` — a link, written the one way it is written everywhere. The
+ * browser makes it clickable; a panel with no browser and nowhere to send you
+ * keeps the label and drops the URL, which is the part that was only ever
+ * addressed to a machine. Anything that does not close both brackets is left
+ * exactly as it stands: this is a link syntax, not a markdown parser. */
+std::string stripLinks(const char* text) {
+    std::string out;
+    for (const char* p = text; *p; ) {
+        if (*p != '[') { out += *p++; continue; }
+        const char* close = strchr(p, ']');
+        if (!close || close[1] != '(') { out += *p++; continue; }
+        const char* end = strchr(close + 2, ')');
+        if (!end) { out += *p++; continue; }
+        out.append(p + 1, close);
+        p = end + 1;
+    }
+    return out;
+}
+
+lv_obj_t* lcdSettingCaption(lv_obj_t* parent, const char* text, bool underHeading) {
+    /* A caption belongs to the control above it, so it starts where that
+     * control starts — on the boundary the label column ends at, not at the
+     * pane's left edge. Set against the labels instead, it reads as another
+     * label with no control beside it.
+     *
+     * Directly under a HEADING there is no such control: the caption is about
+     * the group, so it spans both columns exactly as the heading does. The row
+     * is content-height either way, so a long caption grows rather than being
+     * cut off. */
+    lv_obj_t* row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(row, 8, 0);
+    lv_obj_set_style_pad_column(row, 10, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    if (!underHeading) {
+        lv_obj_t* spacer = lv_obj_create(row);
+        lv_obj_remove_style_all(spacer);
+        lv_obj_set_width(spacer, lv_pct(33));        /* the label column */
+        lv_obj_set_height(spacer, 1);
+    }
+
+    lv_obj_t* l = lv_label_create(row);
+    lv_label_set_text(l, stripLinks(text).c_str());
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_flex_grow(l, 1);
     lv_obj_set_style_text_color(l, lv_color_hex(0x8a93a0), 0);
-    return l;
+    return row;
 }
 
 lv_obj_t* lcdSettingSwitch(lv_obj_t* parent, const char* label, const char* key) {
@@ -732,9 +994,94 @@ lv_obj_t* lcdSettingSlider(lv_obj_t* parent, const char* label, const char* key,
     return row;
 }
 
-lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, bool secret) {
+lv_obj_t* lcdSettingInteger(lv_obj_t* parent, const char* label, const char* key,
+                            const lcd_num_t* spec, const char* unit) {
+    static const lcd_num_t unbounded{};      /* a spec-less row is just a number */
+    if (!spec) spec = &unbounded;
+
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
+
+    /* The field between its two steppers, and the field sized to the same six
+     * digits a slider's readout gets rather than stretched across the column:
+     * a pane of integer rows then has its numbers in one place whatever each
+     * row's range is. */
+    lv_obj_t* grp = lv_obj_create(row);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_height(grp, LV_SIZE_CONTENT);
+    fillRowControl(grp);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(grp, 6, 0);
+    lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* tr = static_cast<TextRef*>(gp_alloc(sizeof(TextRef)));
+    safeStrncpy(tr->key, key, sizeof(tr->key));
+    tr->secret = false;
+    tr->valLbl = nullptr;
+    tr->num    = spec;
+    tr->ipv4   = false;
+    lv_obj_add_event_cb(row, textRefDelete, LV_EVENT_DELETE, tr);
+
+    auto stepper = [&](const char* glyph, int dir) {
+        lv_obj_t* b = lv_button_create(grp);
+        lv_obj_set_style_pad_hor(b, 8, 0);
+        lv_obj_set_style_pad_ver(b, 1, 0);
+        lv_obj_t* l = lv_label_create(b);
+        lv_label_set_text(l, glyph);
+        lv_obj_center(l);
+        auto* s = static_cast<NumStep*>(gp_alloc(sizeof(NumStep)));
+        safeStrncpy(s->key, key, sizeof(s->key));
+        s->spec = spec;
+        s->dir  = dir;
+        lv_obj_add_event_cb(b, onNumStep, LV_EVENT_CLICKED, s);
+        lv_obj_add_event_cb(b, numStepFree, LV_EVENT_DELETE, s);
+        if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), b);
+    };
+    if (lcdHasKeyboard()) {
+        /* Physical keyboard: type straight into the field, as a text row does.
+         * The accepted set keeps it a number; the range answers on commit. */
+        lv_obj_t* ta = lv_textarea_create(grp);
+        lv_textarea_set_one_line(ta, true);
+        lv_textarea_set_accepted_chars(
+            ta, (spec->has_min && lcdSettingsNumMin(spec) >= 0) ? "0123456789"
+                                                                : "0123456789-");
+        lv_textarea_set_text(ta, storageGetStr(key, "").c_str());
+        lv_obj_set_width(ta, numColWidth(ta) + lcdPx(24));
+        halfPadVer(ta);
+        if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
+        lv_obj_add_event_cb(ta, onInlineNumCommit, LV_EVENT_READY,     tr);
+        lv_obj_add_event_cb(ta, onInlineNumCommit, LV_EVENT_DEFOCUSED, tr);
+        bindAttach(ta, key, BK_TEXTAREA);
+        addRowUnit(grp, unit);
+        if (spec->buttons) { stepper("-", -1); stepper("+", +1); }
+        return row;
+    }
+
+    /* No hardware keyboard: the number is a label, and tapping the row opens
+     * the numeric keyboard over it. */
+    lv_obj_t* val = lv_label_create(grp);
+    lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+    lv_obj_set_style_text_font(val, lcdFont(LcdFace::MONO, lcdPx(14)), 0);
+    lv_obj_set_width(val, numColWidth(val));
+    lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
+    lv_label_set_text(val, storageGetStr(key, "").c_str());
+    tr->valLbl = val;
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(row, onTextRow, LV_EVENT_CLICKED, tr);
+    bindAttach(val, key, BK_VALUE);
+    addRowUnit(grp, unit);
+    if (spec->buttons) { stepper("-", -1); stepper("+", +1); }
+    return row;
+}
+
+lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key,
+                         bool secret, const char* unit, bool narrow) {
+    lv_obj_t* row = makeRow(parent);
+    addRowLabel(row, label);
+    /* A field with a word after it right-aligns, so the entry and the word read
+     * as one thing instead of drifting apart across the column. */
+    bool hasUnit = unit && *unit;
 
     if (lcdHasKeyboard()) {
         /* Physical keyboard: edit in place. The value is an inline one-line
@@ -744,30 +1091,78 @@ lv_obj_t* lcdSettingText(lv_obj_t* parent, const char* label, const char* key, b
         lv_textarea_set_one_line(ta, true);
         lv_textarea_set_password_mode(ta, secret);
         lv_textarea_set_text(ta, storageGetStr(key, "").c_str());
-        fillRowControl(ta);                               /* 2/3 column */
+        if (narrow) narrowRowControl(ta);
+        else        fillRowControl(ta);                   /* 2/3 column */
+        if (hasUnit) lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_RIGHT, 0);
         halfPadVer(ta);
         if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
         lv_obj_add_event_cb(ta, onInlineCommit, LV_EVENT_READY,     (void*)key);
         lv_obj_add_event_cb(ta, onInlineCommit, LV_EVENT_DEFOCUSED, (void*)key);
         bindAttach(ta, key, BK_TEXTAREA, secret);
+        addRowUnit(row, unit);
         return row;
     }
 
     /* No hardware keyboard: value label + full-screen on-screen-keyboard editor. */
     lv_obj_t* val = lv_label_create(row);
     lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
-    fillRowControl(val);
-    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_LEFT, 0);
+    if (narrow) narrowRowControl(val);
+    else        fillRowControl(val);
+    lv_obj_set_style_text_align(val, hasUnit ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
     setValueText(val, storageGetStr(key, ""), secret);
 
     auto* tr = static_cast<TextRef*>(gp_alloc(sizeof(TextRef)));
     safeStrncpy(tr->key, key, sizeof(tr->key));
     tr->secret = secret;
     tr->valLbl = val;
+    tr->num    = nullptr;
+    tr->ipv4   = false;
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, onTextRow, LV_EVENT_CLICKED, tr);
     lv_obj_add_event_cb(row, textRefDelete, LV_EVENT_DELETE, tr);
     bindAttach(val, key, BK_TEXTLBL, secret);
+    addRowUnit(row, unit);
+    return row;
+}
+
+lv_obj_t* lcdSettingIpv4(lv_obj_t* parent, const char* label, const char* key,
+                         const char* unit) {
+    lv_obj_t* row = makeRow(parent);
+    addRowLabel(row, label);
+
+    auto* tr = static_cast<TextRef*>(gp_alloc(sizeof(TextRef)));
+    safeStrncpy(tr->key, key, sizeof(tr->key));
+    tr->secret = false;
+    tr->valLbl = nullptr;
+    tr->num    = nullptr;
+    tr->ipv4   = true;
+    lv_obj_add_event_cb(row, textRefDelete, LV_EVENT_DELETE, tr);
+
+    if (lcdHasKeyboard()) {
+        lv_obj_t* ta = lv_textarea_create(row);
+        lv_textarea_set_one_line(ta, true);
+        lv_textarea_set_accepted_chars(ta, "0123456789.");
+        lv_textarea_set_text(ta, storageGetStr(key, "").c_str());
+        fillRowControl(ta);
+        halfPadVer(ta);
+        if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), ta);
+        lv_obj_add_event_cb(ta, onInlineIpv4Commit, LV_EVENT_READY,     tr);
+        lv_obj_add_event_cb(ta, onInlineIpv4Commit, LV_EVENT_DEFOCUSED, tr);
+        bindAttach(ta, key, BK_TEXTAREA);
+        addRowUnit(row, unit);
+        return row;
+    }
+
+    lv_obj_t* val = lv_label_create(row);
+    lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);
+    fillRowControl(val);
+    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_LEFT, 0);
+    setValueText(val, storageGetStr(key, ""), false);
+    tr->valLbl = val;
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(row, onTextRow, LV_EVENT_CLICKED, tr);
+    bindAttach(val, key, BK_TEXTLBL);
+    addRowUnit(row, unit);
     return row;
 }
 
@@ -776,7 +1171,11 @@ lv_obj_t* lcdSettingDropdown(lv_obj_t* parent, const char* label, const char* ke
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
     lv_obj_t* d = lv_dropdown_create(row);
-    fillRowControl(d);                                    /* 2/3 column */
+    /* Sized to the longest option, not stretched across the column: a picker
+     * as wide as the pane looks like a text field, and a column of them of
+     * differing widths says at a glance which choices are small ones. */
+    lv_obj_set_width(d, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(d, lv_pct(66), 0);
     halfPadVer(d);
     std::string opts(optionsCsv ? optionsCsv : "");
     for (auto& c : opts) if (c == ',') c = '\n';
