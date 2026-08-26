@@ -37,6 +37,7 @@
 #include <new>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <sys/stat.h>
 
 #define LCD_ICON_QUEUE_DEPTH 16
@@ -53,6 +54,10 @@ struct Icon {
 };
 
 std::unordered_map<std::string, Icon*> s_cache;   /* lcd task only; key "base@px" */
+/* Keys queued but not yet cached, so a caller that polls lcdIconReady() in a
+ * refresh loop enqueues each raster ONCE. Without it a widget that re-requests
+ * on every miss can fill the queue with duplicates of one key. lcd task only. */
+std::unordered_set<std::string> s_pending;
 QueueHandle_t s_loadQ = nullptr;
 
 std::string keyOf(const char* base, int px) { return std::string(base) + "@" + std::to_string(px); }
@@ -143,14 +148,22 @@ Icon* buildIcon(const char* base, int px) {
 /* runs on the lcd task via lcdRun() */
 void onLoaded(void* arg) {
     auto* m = static_cast<LoadedMsg*>(arg);
+    std::string k = keyOf(m->base, m->px);
+    s_pending.erase(k);                            /* also on failure, so it can be retried */
     if (m->icon) {
-        std::string k = keyOf(m->base, m->px);
-        auto it = s_cache.find(k);
-        if (it != s_cache.end()) {                 /* replace (rare) */
-            free(it->second->pixels);
-            delete it->second;
+        /* An entry is never replaced: every lv_image sourced from it holds &dsc,
+         * and the raster for a (base, px) is the same picture whoever asked. A
+         * duplicate load is dropped rather than swapped in, so those pointers
+         * stay valid for the cache's lifetime as lcdIconDsc() promises. Swapping
+         * would free a buffer under live widgets, which survives on screen until
+         * something repaints that region — a cursor crossing it, say — and then
+         * draws from freed memory. */
+        if (s_cache.count(k)) {
+            free(m->icon->pixels);
+            delete m->icon;
+        } else {
+            s_cache[k] = m->icon;
         }
-        s_cache[k] = m->icon;
         lcdLauncherIconLoaded(m->base, m->px);
     }
     delete m;
@@ -193,8 +206,11 @@ const lv_image_dsc_t* lcdIconDsc(const char* basename, int px) {
 void lcdIconRequest(const char* basename, int px) {
     if (!basename || !*basename || px < 1) return;
     if (lcdIconReady(basename, px)) { lcdLauncherIconLoaded(basename, px); return; }
+    std::string k = keyOf(basename, px);
+    if (s_pending.count(k)) return;                /* already queued */
     LoadReq req{};
     safeStrncpy(req.base, basename, sizeof(req.base));
     req.px = px;
-    if (s_loadQ && xQueueSend(s_loadQ, &req, 0) != pdTRUE) warn("icon load queue full\n");
+    if (s_loadQ && xQueueSend(s_loadQ, &req, 0) == pdTRUE) s_pending.insert(k);
+    else                                                   warn("icon load queue full\n");
 }

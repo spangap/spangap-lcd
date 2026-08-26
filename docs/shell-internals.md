@@ -233,7 +233,12 @@ hand-off, no locks, solving "the lcd task can't do flash I/O or heavy CPU":
    so the fs proxy's pickup-wait can't desync anything.
 2. **`onLoaded`** (lcd task) drops the icon into the in-RAM cache
    (`unordered_map`, key `"<basename>@<px>"`) and calls
-   `lcdLauncherIconLoaded(basename, px)`.
+   `lcdLauncherIconLoaded(basename, px)`. A cache entry is **never replaced**:
+   the raster for a `(base, px)` is the same picture whoever asked, so a
+   duplicate load frees itself rather than swapping in. That is what makes the
+   descriptor pointers below safe to hold — swapping would free a buffer under
+   live `lv_image`s, which stays on screen until something repaints that region
+   (a cursor crossing it) and then draws from freed memory.
 3. The launcher (and recents' no-snapshot fallback) sets the cached descriptor
    directly with `lv_image_set_src(img, lcdIconDsc(base, px))` — no `lv_fs`
    indirection, no decoder, zero flash on the lcd task.
@@ -244,7 +249,12 @@ so a boot at a different UI zoom rasterizes everything at the size it will be
 drawn — crisp at every factor by construction. The internal API is
 `lcdIconRequest(base, px)` / `lcdIconReady(base, px)` / `lcdIconDsc(base, px)`
 (`lcd_internal.h`); descriptor pointers are stable for the cache's lifetime, and
-the cache lives as long as the boot does.
+the cache lives as long as the boot does. `lcdIconRequest` keeps a set of keys
+already queued and drops a repeat, because the natural way to use this API is to
+re-request on every cache miss from a refresh loop — without the guard, one
+widget polling for one icon fills the 16-deep queue with duplicates of it. The
+key is cleared when the load lands, failures included, so a raster that could not
+be built can be asked for again.
 
 ## 8. Inactivity, standby, boot reveal
 
