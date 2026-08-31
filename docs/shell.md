@@ -106,6 +106,28 @@ Three producers all funnel into one navigation action (Back / Home / Recents):
 doesn't handle it, Back falls through to Home. Home always returns to the
 launcher. At the launcher both are no-ops.
 
+## Getting out of a dialog
+
+**Two rapid taps in the same spot close every open dialog** — a double tap, and
+a triple tap for anyone who keeps going. A modal that swallows input is the one
+widget that can stand between the operator and the whole device, and its
+dismiss can go missing for reasons its author never sees: a button below the
+bottom of a short screen, a focus ring the trackball can't reach, a builder that
+returned early. So the escape belongs to the panel, not to the dialog: the
+gesture is read at the input device (`pointerPressEdge` in `lcd_lvgl.cpp`),
+ahead of any widget that might be eating events, and the trackball's centre
+button carries it too. The taps must land within ~450 ms and ~36 px of each
+other, so two deliberate taps on two different controls are not a dismissal.
+
+Every dialog registers with `lcdModalTrack(overlay[, closeCb, ud])` — settings
+forms, dialogs, the on-screen keyboard and the text editor already do, as does
+any app dialog (nomad's identity chooser). The default close deletes the
+overlay; a dialog that owns more than its widgets (storage subscriptions, a
+field pointer) passes its own `closeCb`, and the escape never commits a
+half-typed value. The close is deferred to the next LVGL pass, so calling
+`lcdModalCloseAll()` from an event handler is safe. **A dialog that does not
+register can still strand the screen.**
+
 ## The recents switcher
 
 Recents is a modal overlay listing the **running set** — the apps whose screen

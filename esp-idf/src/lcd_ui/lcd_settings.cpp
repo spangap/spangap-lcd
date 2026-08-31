@@ -516,6 +516,9 @@ void onTextRow(lv_event_t* e) {
     lv_obj_set_style_bg_color(ov, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
     s_ed.overlay = ov;
+    /* Its own closer, and never a committing one: the escape gets you out of
+     * a field, it does not store what was half-typed. */
+    lcdModalTrack(ov, [](void*) { editorClose(false); });
 
     lv_obj_t* ta = lv_textarea_create(ov);
     halfPadVer(ta);

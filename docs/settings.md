@@ -190,6 +190,12 @@ puts a button in front of it:
 - **dialog** — a confirmation or choice, with no input fields ever. Every button
   closes it; a button with no action is a cancel. Buttons nest actions, so a
   choice tree is dialogs of buttons of writes.
+
+  Every one of these — dialogs, forms, the on-screen keyboard, the long-value
+  editor — registers with `lcdModalTrack()`, so **a double tap anywhere closes
+  it** whatever its own buttons are doing (see [shell](shell.md#getting-out-of-a-dialog)).
+  The form and the two editors pass their own closer, because the escape has to
+  drop their subscriptions and must never commit a half-typed value.
 - **form** — the one dialog with inputs, because it fronts a sentinel. Fields
   are ordinary rows carrying `field` instead of `key`; values live in a local
   buffer and reach the device as one JSON object on submit. On a board with a

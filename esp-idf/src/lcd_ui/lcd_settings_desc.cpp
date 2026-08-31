@@ -129,19 +129,10 @@ bool numCommit(const lcd_num_t* n, const std::string& text, std::string& out) {
 
 /* ---- shared modal scaffolding ---- */
 
-/* Every open modal overlay, so lcdSettingsDescReset() can take them down when
- * the Settings app itself goes away — they live on lv_layer_top, outside the
- * app's widget tree, so nothing else would. */
-std::vector<lv_obj_t*> s_modals;
-
-void modalUntrack(lv_obj_t* ov) {
-    for (auto it = s_modals.begin(); it != s_modals.end(); ++it)
-        if (*it == ov) { s_modals.erase(it); return; }
-}
-
-void modalDelete(lv_event_t* e) {
-    modalUntrack(static_cast<lv_obj_t*>(lv_event_get_target(e)));
-}
+/* Open overlays are tracked by the panel (lcdModalTrack), which unwinds them on
+ * the double-tap escape and hands lcdSettingsDescReset() its own teardown —
+ * they live on lv_layer_top, outside the app's widget tree, so nothing else
+ * would take them down when Settings goes away. */
 
 /** Full-screen dim overlay carrying a centred card. Returns the card (build the
  *  content into it); `*overlayOut` is what to delete to dismiss.
@@ -156,8 +147,7 @@ lv_obj_t* makeModal(lv_obj_t** overlayOut, const char* title,
      * group, and hand it back when the modal goes. */
     lv_obj_t* opener = lcdInputGroup() ? lv_group_get_focused(lcdInputGroup()) : nullptr;
     lv_obj_t* ov = lv_obj_create(lv_layer_top());
-    s_modals.push_back(ov);
-    lv_obj_add_event_cb(ov, modalDelete, LV_EVENT_DELETE, nullptr);
+    lcdModalTrack(ov);
     lcdSettingsRefocusOnClose(ov, opener);
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
@@ -263,7 +253,7 @@ lv_obj_t* barButton(lv_obj_t* row, const char* label, const char* color,
  * delete the object a second time. */
 void dismiss(lv_obj_t* overlay) {
     if (!overlay) return;
-    modalUntrack(overlay);
+    lcdModalUntrack(overlay);
     lv_obj_delete_async(overlay);
 }
 
@@ -608,6 +598,9 @@ void onFieldTap(lv_event_t* e) {
     lv_obj_set_style_bg_color(ov, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
     s_kb.overlay = ov;
+    /* Its own closer: a bare delete would leave s_kb pointing at freed
+     * widgets, and the escape must not commit what was half-typed. */
+    lcdModalTrack(ov, [](void*) { kbClose(false); });
 
     lv_obj_t* ta = lv_textarea_create(ov);
     lcdSettingsHalfPadVer(ta);
@@ -993,7 +986,7 @@ void formClose() {
 void formForceClose() {
     FormCtx* f = formDetach();
     if (!f) return;
-    if (f->overlay) { modalUntrack(f->overlay); lv_obj_delete(f->overlay); }
+    if (f->overlay) lv_obj_delete(f->overlay);   /* untracks itself on delete */
     else            delete f;
 }
 
@@ -1059,6 +1052,10 @@ void formOpen(const lcd_form_t* d, const ItemScope& sc,
     lv_obj_t* card = makeModal(&ctx->overlay,
                                (d->title && *d->title) ? d->title : nullptr);
     lv_obj_add_event_cb(ctx->overlay, formCtxFree, LV_EVENT_DELETE, ctx);
+    /* The form is the one dialog whose overlay is not the whole of it: the
+     * escape must drop its storage subscriptions and the s_form pointer, not
+     * just the widgets. */
+    lcdModalTrack(ctx->overlay, [](void*) { formForceClose(); });
     /* One scroll container holding everything below the title — fields, the
      * rejection line, and the buttons. Nothing is pinned: on a panel this size
      * a fixed footer costs more than scrolling past it does. */
@@ -1764,11 +1761,7 @@ void lcdSettingsDescReset(void) {
      * delete callbacks. The on-screen-keyboard editor rides its own overlay. */
     formForceClose();
     kbClose(false);
-    while (!s_modals.empty()) {
-        lv_obj_t* ov = s_modals.back();
-        s_modals.pop_back();
-        lv_obj_delete(ov);
-    }
+    lcdModalCloseAllNow();
 }
 
 lv_obj_t* lcdSettingAction(lv_obj_t* parent, const char* label, const lcd_action_t* act,

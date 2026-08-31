@@ -112,6 +112,12 @@ void        lcdScrollwheelArrowsApply(bool on);
  *  pointer off screen at once instead of on its dwell timer. */
 void        lcdPointerHide(void);
 
+/** lcdModalCloseAll() without the deferral — for a teardown that must leave no
+ *  dialog standing when it returns (an app closing takes the state its dialogs
+ *  were built over with it). Never call it from an input or event callback:
+ *  that is what the public, deferred one is for. */
+void        lcdModalCloseAllNow(void);
+
 /* ---- lcd_icons.cpp: runtime SVG rasterizer + RAM cache + loader ----
  * The consumer-facing loader/query trio (lcdIconRequest / lcdIconReady /
  * lcdIconDsc) is declared in the public lcd.h; on completion the lcd task also

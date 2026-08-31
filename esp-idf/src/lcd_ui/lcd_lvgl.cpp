@@ -23,6 +23,7 @@
 #include "freertos/queue.h"
 
 #include <algorithm>          /* std::clamp */
+#include <vector>             /* the tracked-dialog list */
 #include <cstdint>
 
 /* Draw-strip byte budget. Each flush is one SPI transfer, so a strip must fit
@@ -112,6 +113,80 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     lv_display_flush_ready(disp);
 }
 
+/* ---- dialogs, and the double-tap that closes them (see lcd.h) ---- */
+
+struct lcd_modal_t {
+    lv_obj_t*            overlay;
+    lcd_modal_close_cb_t closeCb;   /* null = plain delete */
+    void*                ud;
+};
+static std::vector<lcd_modal_t> s_modals;
+
+/* Two taps in the same place inside this window are the escape. Wide enough to
+ * survive a finger that lands twice on a 320-px panel, tight enough that two
+ * deliberate taps on different controls are not one gesture. */
+#define LCD_MULTICLICK_MS  450
+#define LCD_MULTICLICK_PX  36
+
+void lcdModalUntrack(lv_obj_t* overlay) {
+    for (auto it = s_modals.begin(); it != s_modals.end(); ++it)
+        if (it->overlay == overlay) { s_modals.erase(it); return; }
+}
+
+static void modalUntrackCb(lv_event_t* e) {
+    lcdModalUntrack(static_cast<lv_obj_t*>(lv_event_get_target(e)));
+}
+
+void lcdModalTrack(lv_obj_t* overlay, lcd_modal_close_cb_t closeCb, void* ud) {
+    if (!overlay) return;
+    for (auto& m : s_modals)
+        if (m.overlay == overlay) { m.closeCb = closeCb; m.ud = ud; return; }
+    s_modals.push_back({ overlay, closeCb, ud });
+    lv_obj_add_event_cb(overlay, modalUntrackCb, LV_EVENT_DELETE, nullptr);
+}
+
+/* The close itself runs from lv_async_call, never from the input read that
+ * asked for it: LVGL is mid-way through delivering to the very objects being
+ * deleted. Each owner's callback is expected to take its overlay down (and its
+ * untrack fires from the delete); a modal that somehow survives its own
+ * callback is dropped from the list regardless, so a broken closer cannot make
+ * the escape stop working. */
+static void modalCloseAllCb(void*) {
+    while (!s_modals.empty()) {
+        lcd_modal_t m = s_modals.back();
+        s_modals.pop_back();
+        if (m.closeCb)                        m.closeCb(m.ud);
+        else if (lv_obj_is_valid(m.overlay))  lv_obj_delete(m.overlay);
+    }
+}
+
+void lcdModalCloseAll(void) {
+    if (s_modals.empty()) return;
+    lv_async_call(modalCloseAllCb, nullptr);
+}
+
+void lcdModalCloseAllNow(void) { modalCloseAllCb(nullptr); }
+
+/* One press edge from any pointer. A second landing near the first inside the
+ * window is the dismiss gesture — a third and fourth simply repeat it on an
+ * empty list, which is why triple tapping works as readily as double. */
+static void pointerPressEdge(int x, int y) {
+    static uint32_t lastMs = 0;
+    static int      lastX = 0, lastY = 0;
+    uint32_t now = lv_tick_get();
+    int dx = x - lastX, dy = y - lastY;
+    bool near_ = dx > -LCD_MULTICLICK_PX && dx < LCD_MULTICLICK_PX &&
+                 dy > -LCD_MULTICLICK_PX && dy < LCD_MULTICLICK_PX;
+    if (lastMs && lv_tick_elaps(lastMs) <= LCD_MULTICLICK_MS && near_) {
+        lastMs = 0;                       /* consumed: the next tap starts over */
+        lcdModalCloseAll();
+        return;
+    }
+    lastMs = now ? now : 1;
+    lastX  = x;
+    lastY  = y;
+}
+
 /* Re-read the touch while a finger is down — the GT911 INT only guarantees the
  * first edge, so this 10ms one keeps tracking smooth, then deletes itself on
  * release (see touchReadCb). Runs on the lcd task inside lv_timer_handler. */
@@ -157,7 +232,10 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
         data->point.x = gp[0].x;
         data->point.y = gp[0].y;
         data->state   = LV_INDEV_STATE_PRESSED;
-        if (!wasDown) dbg("touch -> (%d,%d)\n", gp[0].x, gp[0].y);
+        if (!wasDown) {
+            dbg("touch -> (%d,%d)\n", gp[0].x, gp[0].y);
+            pointerPressEdge(gp[0].x, gp[0].y);
+        }
         /* Touch is activity. Re-arm every pressed read (not just the down edge):
          * a board that drives us off-task (lcdTouchPoll) bypasses the lcd loop's
          * s_inputPending activity poke, and re-arming per read also keeps a long
@@ -263,8 +341,18 @@ static void pointerReadCb(lv_indev_t*, lv_indev_data_t* data) {
     /* The centre button is the cursor's click — same board-owned click_read() as
      * the keypad path, pressed at the current cursor position. */
     bool click = in && in->click_read && in->click_read();
-    if (click) { cursorPoke(); data->state = LV_INDEV_STATE_PRESSED; s_inputAgain = true; }
-    else        data->state = LV_INDEV_STATE_RELEASED;
+    static bool wasClick = false;
+    if (click) {
+        cursorPoke();
+        data->state = LV_INDEV_STATE_PRESSED;
+        s_inputAgain = true;
+        /* The trackball's centre button is this panel's other tap, so it
+         * carries the dismiss gesture too — double-click the ball. */
+        if (!wasClick) pointerPressEdge(x, y);
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+    wasClick = click;
 }
 
 /* Drain one queued remote sample per read; hold its level between events (a

@@ -74,6 +74,39 @@ void lcdGoHome(void);
  *  on the lcd task; safe to call from any task (it hops on). */
 void lcdShowRecents(void);
 
+/* ── dialogs and the way out of one ──
+ *
+ * A modal that swallows input is the one widget on a touch panel that can stand
+ * between the operator and the whole device, and a dismiss can go missing for
+ * reasons the dialog's author never sees: a button off the bottom of a short
+ * screen, a hidden keypad focus ring, a builder that returned early. So the
+ * PANEL owns an escape: TWO RAPID TAPS IN THE SAME SPOT CLOSE EVERY TRACKED
+ * DIALOG, wherever they land — the gesture is read at the input device, ahead
+ * of any widget that might be eating events. Every dialog is expected to
+ * register; one that does not can still strand the screen. */
+
+/** How a dialog closes itself when deleting the overlay is not the whole job —
+ *  a form with storage subscriptions, an editor holding a field pointer. */
+typedef void (*lcd_modal_close_cb_t)(void* ud);
+
+/** Track `overlay` as a dialog for the double-tap escape. Untracked
+ *  automatically when the object is deleted, so there is nothing to unwind on
+ *  the ordinary path. `closeCb` replaces the default `lv_obj_delete`; tracking
+ *  the same overlay again just updates it. Lcd task only. */
+void lcdModalTrack(lv_obj_t* overlay, lcd_modal_close_cb_t closeCb = nullptr,
+                   void* ud = nullptr);
+
+/** Forget `overlay` without closing it — for a dialog dismissing itself with
+ *  lv_obj_delete_async() from its own button: between the schedule and the
+ *  deletion the object is still valid, and an escape landing in that gap would
+ *  delete it a second time. Deleting it outright needs no untrack. */
+void lcdModalUntrack(lv_obj_t* overlay);
+
+/** Close every tracked dialog. What the double tap calls; also worth calling
+ *  before anything that must not happen behind a modal. Deferred to the next
+ *  LVGL pass, so it is safe from an event or input callback. */
+void lcdModalCloseAll(void);
+
 /** Put the display into / out of standby: backlight off + panel display off (GRAM
  *  retained, so wake is instant) / panel back on with a 300 ms backlight fade-in.
  *  The board owns the standby *policy* — the lcd component's inactivity timeout and
