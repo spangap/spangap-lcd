@@ -27,11 +27,24 @@
 #include <cstdint>
 
 /* Draw-strip byte budget. Each flush is one SPI transfer, so a strip must fit
- * the shared-bus max_transfer_sz — the SD driver brings the bus up at 4096
- * (fs.cpp) before us, and spiHelperInitBus is first-caller-wins. Strip line
- * count is derived from this and the panel width so it holds for any size.
- * Two strips are double-buffered in internal DMA-capable RAM. */
-#define LCD_DRAW_BUDGET 4000
+ * the shared bus's max_transfer_sz — every driver that might bring that bus up
+ * states SPANGAP_SPI_MAX_TRANSFER (spi_helper.h), so the ceiling is the same
+ * whoever got there first. Strip line count is derived from this and the panel
+ * width, so it holds for any panel size.
+ *
+ * THE STRIP SIZE IS THE REDRAW YOU CAN SEE. A repaint is (area / strip)
+ * transfers, each with a bus lock, a DMA setup and a completion wait; at a few
+ * hundred bytes of strip a keypress repainting its keyboard becomes twenty
+ * transfers and you watch the colour travel down the glass. One buffer, not
+ * two: the flush waits for its own DMA before returning (the shared bus demands
+ * it, see flushCb), so LVGL can never be rendering one strip while another
+ * flies — a second buffer would only halve the strip for nothing. */
+#define LCD_DRAW_BUDGET (CONFIG_LCD_DRAW_STRIP_KB * 1024)
+static_assert(LCD_DRAW_BUDGET <= SPANGAP_SPI_MAX_TRANSFER,
+              "a draw strip must fit one SPI transfer on the shared bus");
+/* Internal DMA-capable RAM the strip must leave behind it, for the drivers that
+ * allocate out of it later and at a worse moment (see the bring-up). */
+#define LCD_DRAW_RESERVE_B (48 * 1024)
 #define LCD_TICK_MS     2
 
 static esp_lcd_panel_handle_t s_panel = nullptr;
@@ -167,12 +180,21 @@ void lcdModalCloseAll(void) {
 
 void lcdModalCloseAllNow(void) { modalCloseAllCb(nullptr); }
 
+bool lcdModalAny(void) { return !s_modals.empty(); }
+
 /* One press edge from any pointer. A second landing near the first inside the
  * window is the dismiss gesture — a third and fourth simply repeat it on an
- * empty list, which is why triple tapping works as readily as double. */
+ * empty list, which is why triple tapping works as readily as double.
+ *
+ * Not while the on-screen keyboard stands. LCD_MULTICLICK_PX is wider than one
+ * of its keys, so touch-typing lands tap after tap "in the same spot" by this
+ * measure and the gesture would tear the keyboard away mid-word. The keyboard
+ * needs no rescuing anyway: it carries its own key for putting itself away,
+ * which is the thing the escape exists to substitute for. */
 static void pointerPressEdge(int x, int y) {
     static uint32_t lastMs = 0;
     static int      lastX = 0, lastY = 0;
+    if (lcdKeyboardIsOpen()) { lastMs = 0; return; }
     uint32_t now = lv_tick_get();
     int dx = x - lastX, dy = y - lastY;
     bool near_ = dx > -LCD_MULTICLICK_PX && dx < LCD_MULTICLICK_PX &&
@@ -201,6 +223,10 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
      * HAL's touch_read only when no controller is selected. */
     if (!lcdTouchCtlRead(raw, max, &cnt))
         if (!in || !in->touch_read || !in->touch_read(raw, max, &cnt) || cnt < 0) cnt = 0;
+    /* An edge still queued behind this one (a burst of taps that landed while
+     * the last render ran): come straight back for it rather than waiting for
+     * the next INT, so the whole burst lands as clicks in this one pass. */
+    if (lcdTouchCtlPending()) s_inputAgain = true;
 
     /* The board reports raw points in NATIVE panel coords; map each to display
      * coords with the same rotation/mirror the panel applies to the pixels. */
@@ -713,13 +739,31 @@ bool lcdLvglInit(void) {
     lv_display_set_user_data(s_disp, s_panel);
     lv_display_set_flush_cb(s_disp, flushCb);
 
+    /* Take the biggest strip that fits AND LEAVES THE REST OF THE DEVICE ROOM.
+     *
+     * Internal DMA-capable RAM is the scarcest thing on this chip and the
+     * display is not its only claimant: the SPI driver quietly allocates a
+     * private DMA buffer, out of this same heap, for any transaction whose
+     * buffer is not DMA-capable or not aligned — which is every SD read into a
+     * PSRAM page cache. Those allocations happen long after us, under WiFi,
+     * and when one fails the driver returns an error its caller does not check
+     * and the device dies inside memcpy. So the strip takes what is spare, not
+     * what is free: it halves until LCD_DRAW_RESERVE_B of internal DMA heap
+     * would still be left standing behind it. A stripier screen is a screen. */
     int lines = LCD_DRAW_BUDGET / (s_w * (int)sizeof(lv_color16_t));
-    if (lines < 1) lines = 1;
-    size_t bufSz = (size_t)s_w * lines * sizeof(lv_color16_t);
-    void* buf1 = heap_caps_malloc(bufSz, MALLOC_CAP_DMA);
-    void* buf2 = heap_caps_malloc(bufSz, MALLOC_CAP_DMA);
-    if (!buf1 || !buf2) { err("draw-buffer alloc failed (%u B)\n", (unsigned)bufSz); return false; }
-    lv_display_set_buffers(s_disp, buf1, buf2, bufSz, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    void* buf = nullptr;
+    size_t bufSz = 0;
+    for (; lines >= 1; lines /= 2) {
+        bufSz = (size_t)s_w * lines * sizeof(lv_color16_t);
+        size_t spare = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (spare < bufSz + LCD_DRAW_RESERVE_B) continue;
+        buf = heap_caps_malloc(bufSz, MALLOC_CAP_DMA);
+        if (buf) break;
+    }
+    if (!buf) { err("draw-buffer alloc failed\n"); return false; }
+    info("draw strip %d lines (%u B), %u B internal DMA left\n", lines, (unsigned)bufSz,
+         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    lv_display_set_buffers(s_disp, buf, nullptr, bufSz, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     /* Per-strip DMA-done signal (consumed synchronously by flushCb). */
     s_dmaDone = xSemaphoreCreateBinary();
@@ -870,7 +914,11 @@ static volatile bool s_touchPollPending = false;
 
 static void touchPollDrain(void*) {
     s_touchPollPending = false;
-    if (s_indev) lv_indev_read(s_indev);
+    if (!s_indev) return;
+    /* Keep reading while edges remain: one read is one edge, and a burst of
+     * taps that arrived during the last render is only a burst of clicks if all
+     * of it is handed to LVGL before this pass renders again. */
+    do { lv_indev_read(s_indev); } while (lcdTouchCtlPending());
 }
 
 void lcdTouchPoll(void) {

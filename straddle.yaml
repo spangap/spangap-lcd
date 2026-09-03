@@ -49,6 +49,13 @@ additional_installs:
 # where one step is a smaller proportional jump anyway. The default lives in
 # lcd.cpp, which owns the key and clamps it, so no `default:` here; lcd.cpp is
 # also what restarts on a change.
+#
+# Touch sensitivity is offered only where this component drives the glass and
+# the part has a threshold register to move: the FT5x06's. A GT911 keeps its
+# thresholds in a checksummed config table, and a board that reads its own
+# controller through the input HAL (the T-Deck) owns its feel itself — neither
+# is this row. Defaultless for the same reason as the zoom: lcd_touch.cpp seeds
+# and clamps it.
 settings:
   - at: [ { id: system } ]
     order: 20
@@ -74,6 +81,10 @@ settings:
             - { v: 225, l: "225%" }
             - { v: 250, l: "250%" }
       - caption: "Scale the entire UI. Content reflows. Any change causes reboot."
+      - slider: { label: "Touch sensitivity", key: "s.lcd.touch_sens", min: 0, max: 100 }
+        when_kconfig: "CONFIG_LCD_TOUCH_CONTROLLER_FT5X06"
+      - caption: "Higher registers a lighter touch. 50 is the panel's stock threshold."
+        when_kconfig: "CONFIG_LCD_TOUCH_CONTROLLER_FT5X06"
 # Board-agnostic LVGL features this shell needs (collected into the buildable's
 # sdkconfig fragments like any other straddle's kconfig:). LV_USE_SNAPSHOT lets
 # the recents switcher paint each running app's screen to a PSRAM buffer for its

@@ -113,6 +113,14 @@ Valid from `onCreate` onward (the root exists). They operate on **this** app, no
   (e.g. a `lv_textarea`) with `lv_group_add_obj(inputGroup(), w)` so the hardware
   keyboard / button can reach them. The shell saves and restores your app's
   focus automatically across hide/show.
+
+  A text field needs one more line: `lcdKeyboardAttach(ta)`, so a tap raises the
+  on-screen keyboard where the device has no keys — without it the field is
+  unanswerable on a touch-only board. (`lcdInputBoxCreate()` does it for you.)
+  And rest focus on a field only when `!lcdKeyboardOnScreen()`: focus means
+  "start typing", which is worth nothing where the answer is a tap, and popping
+  the keyboard on open instead would cover the screen the operator just asked
+  for.
 - `goHome()` — return to the launcher (e.g. wire it to a Back button).
 - `setFullscreen(on)` — hide the status bar and grow the layer to full height for
   an immersive screen; toggle it as your own view changes. The shell remembers

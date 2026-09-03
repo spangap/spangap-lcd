@@ -105,10 +105,19 @@ write (browser, CLI, another task) flows back into the control: flip a switch in
 the browser and the on-device switch follows, and vice versa. `lcdSettingValue`
 is purely event-driven off this subscription (no polling).
 
-**Text entry** adapts to the hardware. When a consumer has reported a keyboard
-(`lcdSetHasKeyboard(true)`), `lcdSettingText` edits in place — the value is an
-inline one-line textarea; focus it, type, Enter or moving away commits.
-Otherwise it opens a full-screen on-screen keyboard. `secret` masks the value.
+**Text entry** opens an editor of its own — a full-screen layer holding a
+one-line textarea — and adapts to the hardware inside it. Where a consumer has
+reported a keyboard (`lcdSetHasKeyboard(true)`), that field is focused and typed
+into directly; Enter commits and closes. Where none is reported, the rest of the
+layer is a stock `lv_keyboard`, in NUMBER mode for a `num` or `ipv4` row. Its
+escape never commits: leaving a field does not store what was half-typed.
+`secret` masks the value.
+
+> This is the one text surface on LVGL's own keyboard rather than the
+> component's (`lcdKeyboardOpen`, [README](../README.md#the-input-hal)): a `num`
+> or `ipv4` row needs a numeric layout, and `lcd_keys` has one layout. Every
+> other field on the device is inline and raises the component's keyboard on a
+> tap.
 
 > **Key lifetime.** Storage keys passed to the helpers are stored **by pointer**,
 > not copied — panes are rebuilt on every navigation. Pass string literals /

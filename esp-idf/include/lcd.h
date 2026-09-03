@@ -107,6 +107,11 @@ void lcdModalUntrack(lv_obj_t* overlay);
  *  LVGL pass, so it is safe from an event or input callback. */
 void lcdModalCloseAll(void);
 
+/** Whether any dialog is up. The shell asks before it navigates: nothing may
+ *  happen out of sight behind a modal, and Back is answered BY the modal rather
+ *  than through it. Lcd task. */
+bool lcdModalAny(void);
+
 /** Put the display into / out of standby: backlight off + panel display off (GRAM
  *  retained, so wake is instant) / panel back on with a 300 ms backlight fade-in.
  *  The board owns the standby *policy* — the lcd component's inactivity timeout and
@@ -201,6 +206,50 @@ void lcdSetHasKeyboard(bool present);
  *  lcdSetHasKeyboard). Lets a program pick a keyboard-friendly layout (edit in
  *  place) over a touch-only one (tap → on-screen keyboard). Any task. */
 bool lcdHasKeyboard(void);
+
+/* ---- the on-screen keyboard (lcd_keyboard.cpp) ----
+ * The panel's own keyboard, for a device with no other. A field a program
+ * builds is typable on a touch-only board only because of this. */
+
+/** Whether typing has to come off the panel — no physical keyboard attached.
+ *  THE PREDICATE TO ASK: every "does this device have keys" decision is phrased
+ *  as this negative one, so a keyboard that arrives at runtime (a board's own,
+ *  a BLE one) turns it off and no call site changes. Two decisions read it:
+ *  whether to pop the keyboard for a field, and whether to REST FOCUS on one —
+ *  focus is worth having where it means "start typing" and is worth nothing
+ *  where the answer is a tap. Any task. */
+bool lcdKeyboardOnScreen(void);
+
+/** Put the keyboard up over `ta` and TYPE STRAIGHT INTO IT — every key lands in
+ *  the field as it is pressed, exactly as a keyboard with keys would deliver it,
+ *  so nothing is copied, committed or written back and a program needs to know
+ *  nothing about where the typing came from. The screen lifts so the field sits
+ *  just above the keys and drops back when they go. Enter in a one-line field
+ *  fires its LV_EVENT_READY and puts the keyboard away — the Enter that sends
+ *  the message / navigates / answers the step; in a multi-line field it is a
+ *  newline. No-op where a keyboard is attached. Lcd task. */
+void lcdKeyboardOpen(lv_obj_t* ta);
+
+/** Put it up as a plain KEY SOURCE: every key reaches `sink` as LV_EVENT_KEY,
+ *  which is what a keypad input device sends the object it has focused — for a
+ *  terminal, or anything else that takes keys rather than holding text. Enter
+ *  goes through as LV_KEY_ENTER and then puts the keyboard away. `anchor` is
+ *  what the keys must stay clear of (a terminal's cursor block, say); pass NULL
+ *  for the sink itself. Lcd task. */
+void lcdKeyboardOpenKeys(lv_obj_t* sink, lv_obj_t* anchor);
+
+/** Wire `ta` so a tap on it opens the keyboard — what a bare lv_textarea needs
+ *  to be answerable on a touch-only board. lcdInputBoxCreate does it for its
+ *  own field; a program building a plain textarea calls this. Lcd task. */
+void lcdKeyboardAttach(lv_obj_t* ta);
+
+/** Whether the on-screen keyboard is up. Lcd task. */
+bool lcdKeyboardIsOpen(void);
+
+/** Take it down — for a screen tearing itself down while it stands (the
+ *  keyboard is on its own layer and would outlive it). What was typed is
+ *  already in the field and stays there. No-op when none is up. Lcd task. */
+void lcdKeyboardClose(void);
 
 /** How long the cursor (driven by a board pointer device) stays visible after
  *  activity, in milliseconds; <0 = always visible. lcd owns the cursor but not

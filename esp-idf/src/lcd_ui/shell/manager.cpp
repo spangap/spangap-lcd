@@ -42,7 +42,10 @@ void setHidden(lv_obj_t* o, bool hidden) {
     if (hidden) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
     else        lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
-void showHomebar(bool on) { setHidden(s_homebar, !on); }
+/* The keyboard's keys stand exactly where the drag strip is, so it can take the
+ * bar off the screen for as long as it is up (lcdShellHomebarSuppress). */
+bool s_homebarSuppressed = false;
+void showHomebar(bool on) { setHidden(s_homebar, !on || s_homebarSuppressed); }
 void showLine(bool on)    { setHidden(s_bottomLine, !on); }
 
 /* The home-bar + hairline ride the bottom of the foreground layer as it's
@@ -283,6 +286,14 @@ lv_obj_t* findScrollable(lv_obj_t* root, lcd_scroll_dir_t dir) {
 
 /* ---- shell-internal API ---- */
 
+void lcdShellHomebarSuppress(bool on) {
+    s_homebarSuppressed = on;
+    /* Back to what the shell wanted anyway: the bar belongs to a foreground app
+     * and to nothing else. */
+    showHomebar(s_screen == ShellScreen::APP && s_foreground != nullptr);
+    if (!on) placeChrome();
+}
+
 void shellInit(lv_obj_t* screen) {
     s_screenObj = screen;
     lcdStyleBegin(lcdScreenW(), lcdScreenH());
@@ -339,6 +350,18 @@ void shellOpenApp(LcdApp* app) {
 }
 
 void shellNavigate(NavIntent intent) {
+    /* Nothing navigates behind a dialog. A dialog — the on-screen keyboard
+     * above all, which fills the panel — hides whatever the button just did,
+     * and the operator finds a screen they never saw arrive when they finally
+     * close it. So HOME and RECENTS take every tracked dialog with them, and
+     * BACK is ANSWERED by the dialog: it closes, the screen underneath stays
+     * where it was. Deferred (not …Now) because this runs inside the input
+     * callback that read the button; the async fires ahead of the next render,
+     * so nothing is drawn with the dialog still up. */
+    if (lcdModalAny()) {
+        lcdModalCloseAll();
+        if (intent == NavIntent::BACK) return;
+    }
     /* Recents is a modal overlay over the foreground app: BACK/HOME dismiss it
      * back to that app (or the launcher if none) without disturbing it. */
     if (shellRecentsVisible() && intent != NavIntent::RECENTS) {

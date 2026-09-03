@@ -97,7 +97,7 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
     bus.miso_io_num     = CONFIG_LCD_MISO_PIN;
     bus.quadwp_io_num   = -1;
     bus.quadhd_io_num   = -1;
-    bus.max_transfer_sz = 4096;
+    bus.max_transfer_sz = SPANGAP_SPI_MAX_TRANSFER;   /* a strip must fit it */
     spiHelperInitBus(host, &bus);
 
     esp_lcd_panel_io_handle_t io = nullptr;

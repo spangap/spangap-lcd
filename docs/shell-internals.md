@@ -103,9 +103,25 @@ LEDC backlight (`lcdPanelBacklight`) and panel display on/off for standby
 
 `lcd_lvgl.cpp` is LVGL v9 over `esp_lcd`:
 
-- **Draw buffers** — two strips, double-buffered, in internal DMA-capable RAM
-  (`MALLOC_CAP_DMA`), `RENDER_MODE_PARTIAL`; the strip line count fits the
-  shared-bus `max_transfer_sz`.
+- **Draw buffer** — ONE strip in internal DMA-capable RAM (`MALLOC_CAP_DMA`),
+  `RENDER_MODE_PARTIAL`, sized by `CONFIG_LCD_DRAW_STRIP_KB` (default 8 KB = 12
+  lines of a 320-wide panel) and halved at bring-up until it leaves
+  `LCD_DRAW_RESERVE_B` of that heap standing. That reserve is load-bearing: the
+  SPI driver allocates a private DMA buffer from the same heap for any
+  transaction whose buffer is not DMA-capable — every SD read into a PSRAM
+  cache — later than us and under WiFi, and its failure path is unchecked in
+  the caller, so it lands as a `LoadProhibited` inside `memcpy` rather than an
+  error. A greedy strip does not fail here; it fails there. Not
+  two: the flush waits for its own DMA before returning (it must, see below), so
+  LVGL can never render into one buffer while the other flies — a second buffer
+  would only halve the strip for nothing. **The strip size is the redraw you can
+  see**: a repaint costs (area / strip) transfers, each with a bus lock, a DMA
+  setup and a completion wait, so at the old 4 KB a keypress repainting its
+  keyboard was twenty transfers and the colour visibly travelled down the glass.
+  A strip must fit the shared bus's `max_transfer_sz`, which is why every driver
+  that may bring that bus up states the same `SPANGAP_SPI_MAX_TRANSFER`
+  (spangap-core's `spi_helper.h`) rather than its own modest need —
+  first-caller-wins, and what it wins for everyone is the transfer ceiling.
 - **Flush** — swaps RGB565 to big-endian (ST7789 wants BE) and **holds the
   shared-bus lock across the whole transfer including the async DMA drain**. This
   is load-bearing: `esp_lcd` releases the SPI driver's own lock the moment the

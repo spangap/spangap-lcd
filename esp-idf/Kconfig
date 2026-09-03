@@ -165,6 +165,36 @@ config LCD_TOUCH_RST_PIN
     default -1
     depends on !LCD_TOUCH_CONTROLLER_NONE
 
+# How the touch glass is mounted relative to the panel — a lamination fact, not
+# a display one, so it is corrected on the raw point BEFORE the panel's rotation
+# is applied. LCD_MIRROR_X/Y below move the pixels with the points and so can
+# never fix touch alone. Swap first (it brings the glass's axes onto the panel's
+# native ones), then the mirrors, which are taken against the native maxes.
+config LCD_TOUCH_SWAP_XY
+    bool "Touch swap X/Y (glass mounted across the panel's axes)"
+    default n
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+config LCD_TOUCH_MIRROR_X
+    bool "Touch mirror X (a touch left of centre reads right of it)"
+    default n
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+config LCD_TOUCH_MIRROR_Y
+    bool "Touch mirror Y (a touch above centre reads below it)"
+    default n
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+
+config LCD_WAKE_ON_TOUCH_DEFAULT
+    bool "Touch wakes the device from standby, by default"
+    default n
+    help
+        The shipped value of s.lcd.wake_on_touch, which the operator can flip
+        on the Display page. It is the CASE that decides which way round it
+        belongs: a deck carried in a pocket wants its button to be the only way
+        back (n — a bag full of touches would keep lighting the screen), while a
+        handheld whose button is round the back is expected to wake where it is
+        touched (y). Seeded on any board with touch, this controller's or a
+        board HAL's; the wake source itself is armed only while in standby.
+
 # ─── geometry / orientation ─────────────────────────────────────────────────
 # Native = the panel's physical pixels, before rotation. Resolution can't be
 # probed from an SPI panel (the controller's GRAM doesn't report the attached
@@ -212,6 +242,28 @@ config LCD_MIRROR_Y
 config LCD_INVERT_COLOR
     bool "Invert colour (most ST7789 IPS panels need this)"
     default y
+
+config LCD_DRAW_STRIP_KB
+    int "Draw strip size (KB of internal DMA RAM)"
+    default 8
+    range 2 32
+    help
+        How much of the panel is rendered and sent per SPI transfer. This is
+        the redraw you can SEE: a repaint costs (area / strip) transfers, each
+        with a bus lock, a DMA setup and a completion wait, so a small strip
+        makes a keypress repaint crawl down its keyboard.
+
+        The ceiling on this is not the panel, it is INTERNAL DMA-CAPABLE RAM,
+        which the display does not own: the SPI driver allocates a private DMA
+        buffer from the same heap for any transaction whose buffer is not
+        DMA-capable (every SD read into a PSRAM cache), later than us and under
+        WiFi, and a failure there takes the device down inside the driver. 8 KB
+        is 12 lines of a 320-wide panel and costs exactly what the two 4 KB
+        double buffers used to; going higher is real, and wants measuring
+        against `free` on the device rather than hoping. Bring-up halves this
+        until the allocation leaves a reserve standing, so an over-ambitious
+        value degrades to a stripier screen instead of a panic. Never above the
+        bus ceiling, SPANGAP_SPI_MAX_TRANSFER.
 
 # ─── settings UI ────────────────────────────────────────────────────────────
 config LCD_SETTINGS_MARQUEE

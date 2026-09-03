@@ -56,6 +56,10 @@ void        lcdTouchCtlInit(void);
  *  count 0 when no finger / standby / controller absent), false = no controller
  *  selected — consult the board HAL's touch_read instead. */
 bool        lcdTouchCtlRead(lcd_raw_pt_t* pts, int max, int* count);
+/** Whether the controller has a press/release edge still queued. touchReadCb
+ *  forces another read while it is true, so a burst of taps that landed during
+ *  one render is delivered as a burst of clicks. */
+bool        lcdTouchCtlPending(void);
 
 /* ---- lcd_lvgl.cpp: display + input bring-up ---- */
 /** lcdPanelInit + lv_init + display/flush/tick + (optional) touch/pointer/button
@@ -141,6 +145,11 @@ void        lcdStatusbarInit(void);
  *  The shell coordinates this with the foreground app's geometry — programs
  *  should call lcdProgramFullscreen(), not this, to reclaim the bar's space. */
 void        lcdStatusbarSetVisible(bool visible);
+
+/** Hold the home bar off the screen while something else owns the bottom of it
+ *  — the on-screen keyboard, whose keys stand exactly where the drag strip is.
+ *  Releasing it puts the bar back if the shell wanted it there anyway. */
+void        lcdShellHomebarSuppress(bool on);
 
 /* ---- safe_screen.cpp ---- */
 /** Cover the shell with what this boot is doing, when it is a safe-mode boot

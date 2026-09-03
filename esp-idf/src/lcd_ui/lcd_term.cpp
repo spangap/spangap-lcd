@@ -482,6 +482,8 @@ void lcdTermSize(lcd_term_t* t, int* rows, int* cols) {
 
 lv_obj_t* lcdTermObj(lcd_term_t* t) { return t ? t->cont : nullptr; }
 
+lv_obj_t* lcdTermCursorObj(lcd_term_t* t) { return t ? t->cursor : nullptr; }
+
 void lcdTermDestroy(lcd_term_t* t) {
     if (!t) return;
     if (t->vt) vterm_free(t->vt);

@@ -42,5 +42,10 @@ void        lcdTermSize(lcd_term_t* t, int* rows, int* cols);
 /** The LVGL object to join to the input group / hang click handlers on. */
 lv_obj_t*   lcdTermObj(lcd_term_t* t);
 
+/** The cursor block itself — the row being typed on. What the on-screen
+ *  keyboard is given to stay clear of, so the line under the caret is the one
+ *  left visible above the keys. */
+lv_obj_t*   lcdTermCursorObj(lcd_term_t* t);
+
 /** Free the VTerm. The LVGL objects are freed with their parent layer. */
 void        lcdTermDestroy(lcd_term_t* t);

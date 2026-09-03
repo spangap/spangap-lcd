@@ -2,6 +2,11 @@
  * lcd_input_box.cpp — the generic text entry (see lcd_input_box.h) and the
  * caret-active state a pointing HAL reads (lcdCaretActive / lcdCaretRelease).
  *
+ * Two devices are served by one widget: where there are keys, the box is typed
+ * into where it stands and the caret is the whole interface; where there are
+ * none, a tap opens the on-screen keyboard over it (lcd_keyboard.cpp) and the
+ * text arrives back in one piece.
+ *
  * The caret state is a single-box global: only one text field edits at a time, so
  * there's no need to track more. The board polls lcdCaretActive() every pointer
  * read; the widget flips it on a click/keystroke and the board flips it off (via
@@ -158,8 +163,14 @@ void boxEvent(lv_event_t* e) {
 
     case LV_EVENT_FOCUSED:
     case LV_EVENT_PRESSED:
-    case LV_EVENT_CLICKED:
         caretActivate(ta);                            /* a click grabs edit mode */
+        break;
+
+    case LV_EVENT_CLICKED:
+        caretActivate(ta);
+        /* On a device with no keys, the caret is not an answer — the tap has to
+         * bring the keyboard with it, or the field cannot be filled at all. */
+        lcdKeyboardOpen(ta);
         break;
 
     case LV_EVENT_DELETE:
@@ -195,6 +206,9 @@ void lcdInputBoxActivate(lv_obj_t* box) {
     lv_group_t* g = lv_obj_get_group(box);
     if (g && lv_group_get_focused(g) != box) lv_group_focus_obj(box);   /* only if needed — avoids a scroll */
     caretActivate(box);
+    /* Same as a tap on the field itself: the surrounding area is a focus target
+     * precisely so the operator can start writing from it. */
+    lcdKeyboardOpen(box);
 }
 
 void lcdInputBoxSetLines(lv_obj_t* box, int minLines, int maxLines) {

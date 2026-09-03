@@ -9,6 +9,9 @@
  *     scrolls internally past maxLines.
  *   • Double-space within 300 ms collapses to ". " (fast sentence breaks).
  *   • lcdInputBoxText() returns the body with trailing whitespace stripped.
+ *   • On a device with no keys (`lcdKeyboardOnScreen()`), a tap on the box — or
+ *     on the area around it, via lcdInputBoxActivate — puts the on-screen
+ *     keyboard up over it; ✓ writes what was typed back into the box.
  *   • "Caret-active" edit state: a click or keystroke lights the caret; while lit,
  *     a relative-pointing HAL (trackball) drives the caret instead of the pointer
  *     (see lcdCaretActive / lcdCaretRelease in lcd.h). Keyboard focus is meant to

@@ -229,6 +229,13 @@ static void lcdTaskFn(void*) {
     }
 }
 
+/* An unset Kconfig bool is simply absent, and the seeding below wants a value. */
+#ifdef CONFIG_LCD_WAKE_ON_TOUCH_DEFAULT
+#define LCD_WAKE_ON_TOUCH_DEF 1
+#else
+#define LCD_WAKE_ON_TOUCH_DEF 0
+#endif
+
 void lcdInit(void) {
     if (lcdTaskHandle) return;
 
@@ -238,6 +245,15 @@ void lcdInit(void) {
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
     storageDefault("s.lcd.launcher_order", "");   /* empty = install order */
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */
+    /* Whether the glass wakes the device as the board's button does. The
+     * default is a property of the CASE, not a taste, so the board states it
+     * (CONFIG_LCD_WAKE_ON_TOUCH_DEFAULT): a deck that rides in a pocket wants a
+     * real button to be the only way back; a handheld whose button is round the
+     * back is expected to wake where you touch it. Seeded only where there is
+     * touch to wake with — the component's own controller, or a board HAL that
+     * reads one (registered in its onStart, so it is already known here). */
+    if (lcdTouchCtlConfigured() || (lcdInput() && lcdInput()->touch_read))
+        storageDefault("s.lcd.wake_on_touch", LCD_WAKE_ON_TOUCH_DEF);
     storageEnd();
 
     /* PSRAM stack is fine: the lcd task never does flash I/O (the loader does).

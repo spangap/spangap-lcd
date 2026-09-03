@@ -118,6 +118,18 @@ gesture is read at the input device (`pointerPressEdge` in `lcd_lvgl.cpp`),
 ahead of any widget that might be eating events, and the trackball's centre
 button carries it too. The taps must land within ~450 ms and ~36 px of each
 other, so two deliberate taps on two different controls are not a dismissal.
+The gesture stands down while the **on-screen keyboard** is up: 36 px is wider
+than one of its keys, so touch-typing would read as tap after tap in the same
+spot and tear the keyboard away mid-word. Nothing is lost by that — the
+keyboard carries its own key for putting itself away, which is the thing the
+escape stands in for.
+
+**Navigation closes dialogs too.** HOME and RECENTS (the board's button, the
+gesture bar) take every tracked dialog with them, and BACK is *answered* by the
+dialog — it closes and the screen underneath stays where it was. Without that,
+pressing Home behind a full-panel dialog moves the device somewhere the
+operator cannot see, and they meet a screen they never saw arrive when the
+dialog finally goes. One place enforces it, `shellNavigate()`.
 
 Every dialog registers with `lcdModalTrack(overlay[, closeCb, ud])` — settings
 forms, dialogs, the on-screen keyboard and the text editor already do, as does

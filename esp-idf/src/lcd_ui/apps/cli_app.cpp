@@ -64,7 +64,16 @@ void cliFocus(void) {
     if (c && lv_obj_is_valid(c)) lv_group_focus_obj(c);
 }
 void cliFocusTimerCb(lv_timer_t*) { cliFocus(); }
-void cliFocusClickCb(lv_event_t*) { cliFocus(); }
+
+/* A touch focuses the terminal and, on a board with no keys, raises the
+ * on-screen keyboard onto it: not into a field — there isn't one — but as the
+ * plain key source a terminal wants, with the cursor's own row lifted clear of
+ * the keys. Enter puts it away again. */
+void cliFocusClickCb(lv_event_t*) {
+    cliFocus();
+    if (lcdKeyboardOnScreen())
+        lcdKeyboardOpenKeys(lcdTermObj(s_cliTerm), lcdTermCursorObj(s_cliTerm));
+}
 void cliKeyCb(lv_event_t* e)      { lcdTermKey(s_cliTerm, lv_event_get_key(e)); }
 
 class CliApp : public LcdApp {

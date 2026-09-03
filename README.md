@@ -29,6 +29,14 @@ under [`esp-idf/third_party/nanosvg/`](esp-idf/third_party/nanosvg). LVGL is
 pinned by this straddle's own `idf_component.yml`, so consumers don't choose its
 version.
 
+The **on-screen keyboard is a fork of LVGL's** (`lcd_keygrid.c` from
+`lv_buttonmatrix`, `lcd_keys.c` from `lv_keyboard`, both MIT), taken in rather
+than wrapped because what it needs next — the alternate a long press produces,
+printed small on the key; a chooser to pick it; hit margins that suit a 320x240
+panel — is not reachable from the outside. It starts as the upstream widgets
+renamed, so the first build after the fork should feel identical; each file
+lists how it has diverged since.
+
 ## The functions, and where they're documented
 
 | Function | Operator guide | Maintainer reference |
@@ -112,16 +120,35 @@ the input HAL (below).
 | `LCD_ROTATION` | `90` | Hardware rotation (0/90/180/270); applied as swap_xy+mirror, same transform applied to raw touch. |
 | `LCD_MIRROR_X` / `LCD_MIRROR_Y` | `n` | Correct a mirrored image when the panel's scan direction differs. |
 | `LCD_INVERT_COLOR` | `y` | Most ST7789 IPS panels need inversion. |
-| `LCD_TOUCH_CONTROLLER_*` | NONE | Component-owned touch: `FT5X06` or `GT911`, driven through `esp_lcd_touch` (`lcd_touch.cpp`). NONE = no touch, or the board HAL's `touch_read` below. |
+| `LCD_TOUCH_CONTROLLER_*` | NONE | Component-owned touch: `FT5X06` or `GT911`, driven through `esp_lcd_touch` (`lcd_touch.cpp`), sampled on its own task above the lcd task — a tap that lands mid-render still lands (see below). NONE = no touch, or the board HAL's `touch_read` below. |
 | `LCD_TOUCH_I2C_PORT` / `LCD_TOUCH_I2C_SDA` / `LCD_TOUCH_I2C_SCL` / `LCD_TOUCH_I2C_KHZ` | `0` / `-1` / `-1` / `100` | The touch I2C bus. The component creates the port itself, so touch must be its only creator — a bus shared with other board chips needs the board-HAL fallback. |
 | `LCD_TOUCH_INT_PIN` / `LCD_TOUCH_RST_PIN` | `-1` | Touch INT (wired to `lcdInputISR`; required for touch to fire) and reset (`-1` if it rides the power rail). |
+| `LCD_TOUCH_SWAP_XY` / `LCD_TOUCH_MIRROR_X` / `LCD_TOUCH_MIRROR_Y` | `n` | How the glass is laminated onto the panel, corrected on the raw point before the panel's rotation (swap first, then the mirrors). `LCD_MIRROR_X/Y` move pixels and points together and so can't straighten touch alone. |
+| `LCD_DRAW_STRIP_KB` | `8` | KB of internal DMA RAM rendered and sent per SPI transfer — the size of a repaint step, and so how visible a repaint is. Bounded by internal DMA RAM, which the SPI driver also allocates from at awkward moments; bring-up halves this until a reserve is still left standing. Never above the bus ceiling `SPANGAP_SPI_MAX_TRANSFER`. |
+| `LCD_WAKE_ON_TOUCH_DEFAULT` | `n` | The shipped value of `s.lcd.wake_on_touch` (below). A property of the case, so the board states it: `n` for a deck carried in a pocket, `y` for a handheld whose button is round the back. |
 | `LCD_SETTINGS_MARQUEE` | `y` | In Settings, a long read-only value scrolls horizontally on keypad focus instead of wrapping (see [docs/settings.md](docs/settings.md)). |
+
+**Taps are events, not a state that gets sampled.** The controller is read by a
+small task of the component's own (priority above the lcd task, woken by the
+INT, re-reading every 10 ms while a finger is down), and every press and release
+it sees goes onto a queue that the lcd task drains one edge per read — each one
+becoming a real LVGL press or release however far behind it got. That is what
+makes a keyboard typable: every key after the first lands while the lcd task is
+still drawing the one before it, and a reader that asked "is a finger down?"
+from the lcd task could only answer between renders, so a tap that began and
+ended inside one render never happened at all. The live points are latched
+alongside and reported whenever the queue is empty, which is what carries a drag
+(and the second finger of a pinch). A board HAL doing its own sampling wants the
+same shape — see the T-Deck's poll task and its replayed tap.
 
 When a touch controller is selected, the component publishes the probe result
 as the `lcd.touch` ephemeral (for a board's Hardware pane), gates its reads
-while `sys.standby` is truthy, and serves the `lcd.multi_touch` request key —
-an ephemeral a consumer (e.g. maps) sets truthy while it wants multi-finger
-reads + gestures, on any board (the subscription drives
+while `sys.standby` is truthy (or wakes the device on one, where
+`s.lcd.wake_on_touch` says so), offers the FT5x06's detect threshold as a
+Display slider (`s.lcd.touch_sens`, below — the GT911 keeps its thresholds in a
+checksummed config table and gets no row), and serves the `lcd.multi_touch`
+request key — an ephemeral a consumer (e.g. maps) sets truthy while it wants
+multi-finger reads + gestures, on any board (the subscription drives
 `lcdTouchSetMultipoint` whether touch comes from the component or a board HAL).
 
 ## The input HAL
@@ -151,6 +178,34 @@ part of the HAL: a board with one creates its own keypad indev on
 `lcdInputGroup()` and calls `lcdSetHasKeyboard(true)`. For the LilyGo T-Deck
 Plus, [hw-lilygo-tdeck](../hw-lilygo-tdeck) provides the input HAL (GT911 touch, trackball,
 centre button) and sets the panel pins.
+
+**Where there are no keys.** A board that never calls `lcdSetHasKeyboard(true)`
+types off the panel, and every decision that follows from that asks the same
+negative predicate, `lcdKeyboardOnScreen()` — so a keyboard that arrives later
+(a board's own, a BLE one) turns it off and no call site changes. Two decisions
+read it:
+
+- **Whether to pop the keyboard.** `lcdKeyboardOpen(ta)` raises the keys across
+  the bottom of the screen and types **straight into** any `lv_textarea`, one
+  character per press, exactly as a keyboard with keys would — nothing is copied
+  and nothing is written back. The screen lifts so the field stays just above the
+  keys and drops when they go. Enter in a **one-line** field fires its
+  `LV_EVENT_READY` and puts the keyboard away, because a one-line field is the
+  kind answered with Enter (a URL bar navigates, a search runs); in a multi-line
+  field it is a newline. `lcdKeyboardOpenKeys(sink, anchor)` raises the same keys
+  as a plain key source — every press arrives as `LV_EVENT_KEY`, which is what a
+  terminal takes. `lcdKeyboardAttach(ta)` wires a tap to it, which is what a bare
+  textarea needs to be answerable at all; `lcdInputBoxCreate()` does it for its
+  own field.
+- **Whether to rest focus on a field.** Focus on a text field means "start
+  typing", which is worth having where there are keys and worth nothing where
+  the answer is a tap — so a program opening a screen focuses its field only
+  when `!lcdKeyboardOnScreen()`. Opening with the keyboard already up is not the
+  alternative: it would cover the content the operator just opened, question and
+  all. The one thing that does travel is a CHAIN the operator is already typing:
+  Enter on the first of two password fields hands the keyboard to the second
+  (`lcdKeyboardOpen` on the next field), because they are mid-answer and being
+  made to tap again is the surprise there.
 
 A board that reads its own keys (the built-in touch/button/trackball indevs
 report their own activity) tells the inactivity tracker about them with
@@ -241,6 +296,8 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | `s.lcd.scale` | `100` | UI zoom in percent, clamped 50–250; read when the shell is built, so a change restarts the device (see [docs/shell.md](docs/shell.md#ui-zoom)). |
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before the backlight drops right down; `sys.standby` follows 10 s later. `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
+| `s.lcd.wake_on_touch` | board (`LCD_WAKE_ON_TOUCH_DEFAULT`) | Whether the glass wakes the device from standby, as the board's button does. Seeded only where there is touch to wake with (this controller's or a board HAL's); read fresh at each standby, which is when the INT is armed as a light-sleep wake source. The waking finger is swallowed — it wakes and does nothing else. |
+| `s.lcd.touch_sens` | `50` | How light a touch registers, 0..100 (higher = lighter), applied live. FT5x06 only — it is that part's `ID_G_THGROUP` threshold, mapped `120 - sens`, so 50 is the value its driver writes at init. Seeded and offered only where that controller is selected. |
 | `sys.standby` | — | Ephemeral. Set by the component on inactivity, set/cleared by the board's button; the board acts on it. |
 
 The status bar also *reads* keys owned by other straddles to render its glyphs:
