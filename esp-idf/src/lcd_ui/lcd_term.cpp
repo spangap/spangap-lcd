@@ -470,7 +470,13 @@ void lcdTermKey(lcd_term_t* t, uint32_t k) {
         case LV_KEY_LEFT:      vterm_keyboard_key(t->vt, VTERM_KEY_LEFT,      VTERM_MOD_NONE); break;
         case LV_KEY_RIGHT:     vterm_keyboard_key(t->vt, VTERM_KEY_RIGHT,     VTERM_MOD_NONE); break;
         default:
-            if (k >= 0x20 && k < 0x7F) vterm_keyboard_unichar(t->vt, k, VTERM_MOD_NONE);
+            /* Any printable character, not just ASCII: the on-screen keyboard's
+             * long-press chooser reaches the accented letters, and libvterm
+             * takes a codepoint and encodes the UTF-8 itself. Everything LVGL
+             * uses for a named key sits below 0x20 and is out by the same
+             * test. */
+            if (k >= 0x20 && k != 0x7F && k < 0x110000)
+                vterm_keyboard_unichar(t->vt, k, VTERM_MOD_NONE);
             break;
     }
 }

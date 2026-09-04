@@ -3,8 +3,9 @@
  * (name, screen_size); at shellInit the active sheet is selected by the real
  * panel size and calibrated (percent -> px). The shell reads geometry/colour/font
  * from here instead of #define'd magic numbers, so a second board is a data
- * change (a new sheet), not a code change. One sheet ships today: 320x240 dark,
- * in stylesheet_320x240.cpp.
+ * change (a new sheet), not a code change. Two ship: the 320x240 dark default
+ * (stylesheet_320x240.cpp), used by any panel without a sheet of its own, and
+ * the portrait 480x640 (stylesheet_480x640.cpp).
  */
 #pragma once
 
@@ -12,11 +13,12 @@
 #include "lcd_fonts.h"   /* LcdFace */
 #include <cstdint>
 
-/* A font as a token: a face + a base pixel size at the 240px-tall reference
- * panel. calibrate() resolves it to a concrete lv_font_t* via lcdFont(), scaling
- * the size by the runtime UI zoom and the panel-height ratio — so the resolved
- * pointer fields below are OUTPUTS (filled at lcdStyleBegin), and the sheets set
- * only the specs. On BITMAP builds lcdFont() maps the spec to a bitmap. */
+/* A font as a token: a face + a base pixel size at 100% zoom. calibrate()
+ * resolves it to a concrete lv_font_t* via lcdFont(), scaling the size by the
+ * runtime UI zoom — the same factor lcdPx() applies to every length, so type
+ * and the space around it move together — so the resolved pointer fields below
+ * are OUTPUTS (filled at lcdStyleBegin), and the sheets set only the specs. On
+ * BITMAP builds lcdFont() maps the spec to a bitmap. */
 struct FontSpec { LcdFace face; int basePx; };
 
 struct LcdStyle {

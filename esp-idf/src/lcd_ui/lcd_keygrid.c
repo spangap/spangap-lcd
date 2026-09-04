@@ -857,6 +857,40 @@ static void draw_main(lv_event_t * e)
             line_dsc.p2.y = txt_area.y1 - over;
             if(line_dsc.width > 0) lv_draw_line(layer, &line_dsc);
         }
+
+        /*PAD: three columns by four rows of dots, centred in the key and in the
+         *legend's own colour — what the key that leads to the numeric pad wears
+         *instead of a word. Four rows are the dimension the key is short of, so
+         *the pitch comes off its height; the dot keeps a one-pixel gap at every
+         *size, which is what stops the grid closing up into a block.*/
+        if(btnm->ctrl_bits[btn_i] & LCD_KEYGRID_CTRL_PAD) {
+            const int32_t bw = lv_area_get_width(&btn_area);
+            const int32_t bh = lv_area_get_height(&btn_area);
+            int32_t pitch = LV_MIN(bw / 5, bh / 6);
+            if(pitch < 3) pitch = 3;
+            const int32_t dot = pitch - 1;
+
+            lv_draw_rect_dsc_t dot_dsc;
+            lv_draw_rect_dsc_init(&dot_dsc);
+            dot_dsc.base.layer = layer;
+            dot_dsc.base.id1   = btn_i;
+            dot_dsc.bg_color   = draw_label_dsc_act.color;
+            dot_dsc.bg_opa     = draw_label_dsc_act.opa;
+            dot_dsc.radius     = 1;
+
+            const int32_t x0 = btn_area.x1 + (bw - (pitch * 2 + dot)) / 2;
+            const int32_t y0 = btn_area.y1 + (bh - (pitch * 3 + dot)) / 2;
+            for(int32_t row = 0; row < 4; row++) {
+                for(int32_t col = 0; col < 3; col++) {
+                    lv_area_t d;
+                    d.x1 = x0 + col * pitch;
+                    d.y1 = y0 + row * pitch;
+                    d.x2 = d.x1 + dot - 1;
+                    d.y2 = d.y1 + dot - 1;
+                    lv_draw_rect(layer, &dot_dsc, &d);
+                }
+            }
+        }
     }
 
     obj->skip_trans = 0;

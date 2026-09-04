@@ -24,9 +24,11 @@
  *     make room. This is the keyboard's shift/fn alternates, printed where a
  *     physical keycap prints them.
  *
- *   • two control bits upstream left reserved now mean something: ACCENT draws
- *     a button in LV_STATE_USER_1 (a latch — caps lock), STRUCK rules a
- *     diagonal line across its legend (a keyboard glyph crossed out)
+ *   • three control bits upstream left reserved or free now mean something:
+ *     ACCENT draws a button in LV_STATE_USER_1 (a latch — caps lock), STRUCK
+ *     rules a diagonal line across its legend (a keyboard glyph crossed out),
+ *     PAD draws a three-by-four grid of dots in place of one (the key that
+ *     leads to the numeric pad, wearing a picture of it)
  *
  *   • a press marks OUR `pressed` bit instead of the object's LV_STATE_PRESSED,
  *     because that state change invalidates the whole widget — half a panel of
@@ -96,8 +98,8 @@ typedef enum {
     LCD_KEYGRID_CTRL_RECOLOR      = 0x0800, /**< Enable text recoloring with `#color` */
     LCD_KEYGRID_CTRL_ACCENT       = 0x1000, /**< Draw the button in :cpp:enumerator:`LV_STATE_USER_1` — a latch that is neither pressed nor merely checked. */
     LCD_KEYGRID_CTRL_STRUCK       = 0x2000, /**< Rule a diagonal line across the button's legend, in the LV_PART_ITEMS line style. */
-    LCD_KEYGRID_CTRL_CUSTOM_1     = 0x4000, /**< Custom free-to-use flag */
-    LCD_KEYGRID_CTRL_CUSTOM_2     = 0x8000, /**< Custom free-to-use flag */
+    LCD_KEYGRID_CTRL_PAD          = 0x4000, /**< Draw a 3x4 grid of dots centred in the button, in the legend's colour — a key that leads to a numeric pad, wearing a picture of one. The cell's own text still draws, so give such a key a blank legend. */
+    LCD_KEYGRID_CTRL_CUSTOM_1     = 0x8000, /**< Custom free-to-use flag */
 } lcd_keygrid_ctrl_t;
 
 typedef bool (*lcd_keygrid_button_draw_cb_t)(lv_obj_t * btnm, uint32_t btn_id, const lv_area_t * draw_area,

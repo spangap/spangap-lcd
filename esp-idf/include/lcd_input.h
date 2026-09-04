@@ -29,6 +29,15 @@
 extern "C" {
 #endif
 
+/** Modifier bit a keyboard driver OR's into an lv key to mean "Ctrl + this
+ *  (lowercase) letter". Sits above every LVGL key code and ASCII, so it never
+ *  collides; the on-device terminal decodes it to a control byte.
+ *
+ *  It lives here rather than in lcd.h because a key code is input HAL currency
+ *  and this header is plain C — lcd.h is not, and the on-screen keyboard that
+ *  also raises this bit is a C file. */
+#define LCD_KEY_CTRL 0x40000000u
+
 /** One raw touch point in NATIVE panel coordinates (pre-orientation, the touch
  *  chip's own frame). The component applies the same CONFIG_LCD_ROTATION / mirror
  *  transform it applies to the pixels, so the board never deals with orientation. */

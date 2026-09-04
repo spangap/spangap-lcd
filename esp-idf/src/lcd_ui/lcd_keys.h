@@ -4,19 +4,20 @@
  * Copied from LVGL v9 (MIT) alongside lcd_keygrid (its lv_buttonmatrix), which
  * it is built on. Upstream's keyboard is a key grid plus four fixed layouts and
  * a handler that types into a textarea; ours is where the layouts we actually
- * want live — the number row and the modifier alternates are in, and still to
- * come are the per-field layouts (hex for an address, a URL row) and the
- * long-press chooser for accented letters.
+ * want live — the number row, the modifier alternates and the long-press
+ * chooser for accented letters are in, and still to come are the per-field
+ * layouts (hex for an address, a URL row).
  *
  * THE TEXT LAYOUT, five rows staggered like a typewriter's. The Q row fills the
  * panel and sets the key; the rows under it are that same key stepped right —
- * A three tenths of one past Q, Z half a one past A:
+ * A half a key past Q, Z four tenths of one past A, with fn standing in the
+ * offset the Z row has to spend anyway:
  *
  *     |1|2|3|4|5|6|7|8|9|0|⌫|
  *     |Q |W |E |R |T |Y |U |I |O |P |
- *      ␣|A |S |D |F |G |H |J |K |L |  ␣
- *        ␣|Z |X |C |V |B |N |M |, |. |␣
- *     |shift| ⌨̸ | fn |  space  |  ⏎  |
+ *       ␣|A |S |D |F |G |H |J |K |L | ␣
+ *     |fn|Z |X |C |V |B |N |M |, |. |␣
+ *     |⌨̸|shift|ctl|   space   |∷| ⏎ |
  *
  * ONE MAP, AND THE CAPS NEVER CHANGE. They are printed the way a physical
  * keyboard prints them — upper case, with what shift makes small in the
@@ -32,11 +33,60 @@
  * which is the whole of a US keyboard — every printable character it has, at or
  * near where it puts them — and the capitals, which are the caps themselves.
  *
- * BOTH MODIFIERS ARE STICKY FOR ONE KEY, spent by whatever is pressed next, and
- * go blue the moment they are up. Shift alone can latch: a DOUBLE tap locks
+ * ALL THREE MODIFIERS ARE STICKY FOR ONE KEY, spent by whatever is pressed next,
+ * and go blue the moment they are up. Shift alone can latch: a DOUBLE tap locks
  * caps, where the key reads "caps" instead of "shift" and stays blue, and any
  * single tap lets go. fn never latches, and is lettered in its own blue at rest
- * so that it reads with the marks it reaches.
+ * so that it reads with the marks it reaches. ctrl never latches either, and
+ * carries no marks of its own — a control combination is the letter with a bit
+ * set (LCD_KEY_CTRL, lcd_input.h), which a terminal decodes and a text field
+ * ignores.
+ *
+ * SHIFT AND BACKSPACE IS DELETE — rubbing out forwards instead of back. The cap
+ * says nothing about it; there is no room, and it is where a keyboard with keys
+ * puts it anyway.
+ *
+ * A KEY CAN ALSO BE THROWN INSTEAD OF PRESSED. Flick a cap UPWARDS — anywhere in
+ * the quadrant either side of straight up — and it gives its top-right mark, the
+ * one shift would have made. Flick it any other way and it gives its top-left
+ * mark, the one fn would have made. So every character on the keyboard is one
+ * gesture away without arming anything, and the marks that were already printed
+ * on the keys are the documentation. Only caps throw: the modifiers, space,
+ * enter and the corner keys have no marks and ignore it.
+ *
+ * OR HELD, WHICH OPENS EVERYTHING ELSE IT CAN MAKE. A panel appears well above
+ * the keys, centred on the screen and over whatever the keyboard is covering:
+ * what a tap gives first, then the shift and fn alternates, then the accented
+ * forms — one row of them, or two of about equal length past five. They are
+ * drawn at twice the legend size, because telling ä from å from ā is the entire
+ * point and at key size they are one smudge under a finger. The clearance above
+ * the keys is a whole character, which keeps the panel off the entry field the
+ * keyboard was raised under.
+ *
+ * The finger, still down, slides up onto the one it wants and lifts there.
+ * NOTHING IS CHOSEN UNTIL IT IS ON A CHARACTER: lift anywhere else and nothing
+ * is typed at all, the panel simply goes. So a hold nobody meant costs nothing,
+ * and the panel is free to stand where it can be read rather than where a
+ * default cell would have to be.
+ *
+ * A LETTER SHOWS NEITHER OF ITS CASES, only its fn alternate where it has one
+ * and then its accents: the small letter and the capital are a tap and a
+ * shifted tap, and cells for them would stand in front of the characters that
+ * have no other way in. Every other key does show all three, because for a digit
+ * the shifted and fn forms are not otherwise obvious.
+ *
+ * The accents are a set chosen to cover the European Latin alphabets rather than
+ * to spell any one of them (the table is in lcd_keys.c), and two symbols are in
+ * there because the letter is how a hand looks for them: µ under m, Ω under o.
+ * With shift on the panel shows and types capitals. A key with nothing to offer
+ * that a tap does not already give never opens one, so backspace and the cursor
+ * keys keep repeating under a held finger.
+ *
+ * THE OTHER LAYOUT is numbers and controls — a numeric pad, the keys a terminal
+ * needs, and the four cursor keys set around an empty square — reached by the
+ * key drawn as a little pad beside enter and left by the keyboard glyph in that
+ * same place. The bottom row holds still across both: away in one corner, enter
+ * in the other, and the key that changes the layout just inside enter.
  *
  * SPACE TWICE, QUICKLY, ENDS THE SENTENCE — ". " and shift armed for the letter
  * that starts the next one, as a phone keyboard does. Only where a word
@@ -54,14 +104,22 @@
  *     comparing class pointers, so nothing off its list gets so much as a key
  *     background — the appearance is ours now, which was half the point
  *   • the text layout above: a number row, constant caps with the modifiers'
- *     alternates printed in their corners, sticky shift and fn in place of
+ *     alternates printed in their corners, sticky shift/ctrl/fn in place of
  *     upstream's abc/ABC/1# mode keys, and no cursor arrows
+ *   • a second layout of numbers and terminal keys (escape, tab, the cursor
+ *     keys) in place of upstream's symbol map, which shift and fn made redundant
+ *   • the flick: a cap throws to its corner marks without a modifier
+ *   • every key commits on RELEASE, so sliding off one cancels it — upstream
+ *     gave that only to keys wearing a popover
  *   • the keyboard is as tall as the map it is showing, one row being a fixed
  *     slice of the panel, instead of upstream's flat half of the screen
  *   • a key sink (lcd_keys_set_key_sink): keys as LV_EVENT_KEY, for a terminal
  *     and anything else that takes keys rather than holding text
+ *   • the long-press chooser: a panel of everything else the held key can make —
+ *     its modifier alternates and its accented forms, drawn large well clear of
+ *     the keys — picked by sliding the finger that opened it onto one
  *
- * Still to come: the long-press chooser, for the accented forms of a letter.
+ * Still to come: the per-field layouts (hex for an address, a URL row).
  */
 
 #ifndef LCD_KEYS_H
@@ -142,6 +200,34 @@ void lcd_keys_set_textarea(lv_obj_t * kb, lv_obj_t * ta);
  * @param sink      the object to send keys to, or NULL to go back to a text area
  */
 void lcd_keys_set_key_sink(lv_obj_t * kb, lv_obj_t * sink);
+
+/**
+ * Arm shift for one key, as pressing it once would. For whoever knows that a
+ * capital belongs next — a field being opened empty, a sentence just ended.
+ *
+ * The point of saying it HERE rather than capitalising the letter as it lands is
+ * that the keyboard shows the state: shift goes blue, and one tap on it refuses
+ * the capital. A field that quietly upper-cases its first letter can only be
+ * argued with after the fact. Ignored while caps is locked, which is a state the
+ * operator chose over a guess about a sentence.
+ *
+ * @param kb        pointer to a keyboard object
+ */
+void lcd_keys_arm_shift(lv_obj_t * kb);
+
+/**
+ * The face the long-press chooser draws its characters in, which also sets how
+ * big its cells are and how far it stands off the keys. It wants to be a
+ * multiple of the legend's size — the chooser exists so that ä, å and ā can be
+ * told apart, and at legend size under a fingertip they cannot be. Set it per
+ * open, beside the legend fonts: a face can be freed and rebuilt under a parked
+ * widget. Unset (NULL), the chooser falls back to the legend font and is merely
+ * usable.
+ *
+ * @param kb        pointer to a keyboard object
+ * @param font      the face, owned by the caller and outliving the next open
+ */
+void lcd_keys_set_alt_font(lv_obj_t * kb, const lv_font_t * font);
 
 /**
  * Set a new mode (e.g., text, number, special characters). Shift is settled

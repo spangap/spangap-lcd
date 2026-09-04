@@ -1,8 +1,8 @@
 /**
  * shell_internal.h — cross-file glue for the phone shell (src/lcd_ui/shell + apps).
  *
- * Only compiled when CONFIG_LCD_PHONE=y. Public app API is lcd_app.h; the
- * display/input glue is lcd_internal.h. Everything here runs on the lcd task.
+ * Public app API is lcd_app.h; the display/input glue is lcd_internal.h.
+ * Everything here runs on the lcd task.
  * The shell also defines the lcd.h free functions (lcdShowProgram, lcdGoHome,
  * lcdShowRecents, lcdProgram*, lcdScroll, the statusbar entry points): the C API
  * a straddle's lcd/ slice calls from outside an LcdApp method.

@@ -7,7 +7,13 @@
  * its sdkconfig.defaults and contributes no display code. The same rotation
  * applied to the pixels here is exported (lcdPanelOrientTouch) so a board's raw
  * touch coordinates land on the right pixel.
+ *
+ * The SPI half of the CONFIG_LCD_BUS choice; lcd_panel_rgb.cpp is the other,
+ * and exactly one of the two compiles to anything.
  */
+#include "sdkconfig.h"
+#if CONFIG_LCD_BUS_SPI
+
 #include "lcd_internal.h"
 
 #include "log.h"
@@ -195,3 +201,5 @@ void lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY) {
     if (outX) *outX = x;
     if (outY) *outY = y;
 }
+
+#endif  /* CONFIG_LCD_BUS_SPI */

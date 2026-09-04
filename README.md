@@ -3,7 +3,8 @@
 **spangap-lcd** is the on-device user interface for the [spangap](../spangap)
 platform: a phone-style shell (status bar, scrolling launcher, navigation, recents
 switcher) on top of a per-app object model, with built-in Settings, Log and CLI
-apps, drawn with [LVGL](https://lvgl.io) v9 on an SPI display. It is the screen
+apps, drawn with [LVGL](https://lvgl.io) v9 on the panel — SPI or RGB parallel —
+the board wired. It is the screen
 counterpart to the browser SPA in [spangap-web](../spangap-web) — a separate UI
 surface for devices that ship with a panel, not built on top of the web side.
 
@@ -31,11 +32,12 @@ version.
 
 The **on-screen keyboard is a fork of LVGL's** (`lcd_keygrid.c` from
 `lv_buttonmatrix`, `lcd_keys.c` from `lv_keyboard`, both MIT), taken in rather
-than wrapped because what it needs next — the alternate a long press produces,
-printed small on the key; a chooser to pick it; hit margins that suit a 320x240
-panel — is not reachable from the outside. It starts as the upstream widgets
-renamed, so the first build after the fork should feel identical; each file
-lists how it has diverged since.
+than wrapped because what it needs — the alternates printed small in a key's
+corners, the flick and the long-press chooser that reach them, hit margins that
+suit a 320x240 panel — is not reachable from the outside. It starts as the
+upstream widgets renamed, so the first build after the fork should feel
+identical; each file lists how it has diverged since. What it is like to type on
+is [docs/keyboard.md](docs/keyboard.md).
 
 ## The functions, and where they're documented
 
@@ -45,6 +47,7 @@ lists how it has diverged since.
 | **Apps** — the `LcdApp` lifecycle, `lcdInstall`, input groups, per-app keypad focus | [docs/apps.md](docs/apps.md) | [docs/apps-internals.md](docs/apps-internals.md) |
 | **Settings** — the one settings tree: `lcdSettingsContribute`, the `lcdSetting*` row builders, and the descriptor runtime behind actions/forms/collections | [docs/settings.md](docs/settings.md) | [docs/settings-internals.md](docs/settings-internals.md) |
 | **Terminal** — the virtualized text view and the libvterm-backed VT100 terminal | [docs/terminal.md](docs/terminal.md) | [docs/terminal-internals.md](docs/terminal-internals.md) |
+| **Keyboard** — the on-screen keyboard: the layouts, the three modifiers, the flick and the long-press chooser | [docs/keyboard.md](docs/keyboard.md) | `src/lcd_ui/lcd_keys.h`, `lcd_keyboard.cpp` |
 
 The shared foundation that every function sits on — the display bring-up, the
 input HAL, auto-init, icons, fonts, and the display-power keys — is described
@@ -102,28 +105,55 @@ build already routes there, or hop on with `lcdRun()`/`ON_LCD`. See
 
 ## The display
 
-The display is the component's own concern: an SPI panel (bus, controller,
+The display is the component's own concern: a panel (bus, controller,
 backlight, orientation) configured entirely through Kconfig (`CONFIG_LCD_*`) and
-brought up by `lcd_panel.cpp`. A board with a standard SPI panel contributes no
-display code — it sets the pins in its `sdkconfig.defaults` and supplies only
-the input HAL (below).
+brought up by `lcd_panel.cpp` or `lcd_panel_rgb.cpp`. A board with a standard
+panel contributes no display code — it sets the pins in its `straddle.yaml`
+`kconfig:` block and supplies only the input HAL (below).
+
+**Two transports, `CONFIG_LCD_BUS_SPI` (default) or `CONFIG_LCD_BUS_RGB`.** An
+SPI panel is a controller with its own memory, written a strip at a time over a
+bus it may share. An RGB panel has no memory: the SoC's LCD_CAM peripheral
+refreshes the glass continuously out of a framebuffer in PSRAM, and what the
+Kconfig describes is a timing generator — porches, pulse widths, a pixel clock
+— rather than a bus. Exactly one of the two files compiles; everything above
+`lcdPanelInit` is shared.
+
+**An RGB panel's controller registers are the board's job.** An ST7701S and its
+kin still want their gamma, power and mode registers written once before the
+timing starts, over a side channel — typically a 3-wire SPI whose chip-select
+sits on an IO expander and whose data and clock lines are the SD card's. Nothing
+generic can be said about that channel, so the board writes that sequence in its
+own `onStart`, before `spangapInit()` hands those pins to anyone else. By the
+time this component runs, the glass is configured and waiting for pixels — which
+is also why there is no RGB entry in the controller choice.
 
 | Kconfig | Default | Meaning |
 |---|---|---|
+| `LCD_BUS_SPI` / `LCD_BUS_RGB` | SPI | Panel transport; picks which pin block below applies. |
 | `LCD_SPI_HOST` | `2` | SPI peripheral (1=SPI1, 2=SPI2/FSPI, 3=SPI3); shares the bus with SD/LoRa via `spi_helper`. |
 | `LCD_SCK_PIN` / `LCD_MOSI_PIN` / `LCD_MISO_PIN` | `-1` | Shared-bus pins (MISO `-1` if unused). |
 | `LCD_CS_PIN` / `LCD_DC_PIN` / `LCD_RST_PIN` | `-1` | Panel chip-select / data-command / reset (`-1` if reset rides the power rail). |
 | `LCD_BL_PIN` | `-1` | Backlight pin, driven as LEDC PWM (`-1` if not host-controlled). |
-| `LCD_PCLK_MHZ` | `40` | Pixel clock; the GPIO matrix caps the ESP32-S3 near 40 MHz. |
-| `LCD_CONTROLLER_ST7789` / `LCD_CONTROLLER_ILI9341` | ST7789 | Panel controller. ST7789 is built into `esp_lcd`; ILI9341 pulls in `esp_lcd_ili9341`. |
-| `LCD_NATIVE_WIDTH` / `LCD_NATIVE_HEIGHT` | `240` / `320` | Native pixels, pre-rotation (an SPI panel can't report its glass size). |
-| `LCD_ROTATION` | `90` | Hardware rotation (0/90/180/270); applied as swap_xy+mirror, same transform applied to raw touch. |
+| `LCD_PCLK_MHZ` | `40` SPI / `16` RGB | Pixel clock. On SPI the GPIO matrix caps the ESP32-S3 near 40 MHz; on RGB it is the refresh rate in disguise (`pclk / (htotal × vtotal)`) and the PSRAM bandwidth the panel takes from everything else. |
+| `LCD_CONTROLLER_ST7789` / `LCD_CONTROLLER_ILI9341` | ST7789 | Panel controller (SPI only). ST7789 is built into `esp_lcd`; ILI9341 pulls in `esp_lcd_ili9341`. |
+| `LCD_RGB_HSYNC_PIN` / `_VSYNC_PIN` / `_DE_PIN` / `_PCLK_PIN` | `-1` | RGB sync signals. |
+| `LCD_RGB_B0..B4` / `G0..G5` / `R0..R4_PIN` | `-1` | The sixteen RGB565 data lines, named as the panel names them. |
+| `LCD_RGB_HSYNC_PULSE` / `_BACK` / `_FRONT` | `8` / `50` / `10` | Horizontal blanking, in pixel clocks — from the panel's data sheet. |
+| `LCD_RGB_VSYNC_PULSE` / `_BACK` / `_FRONT` | `8` / `20` / `10` | Vertical blanking, in lines. |
+| `LCD_RGB_PCLK_ACTIVE_NEG` | `n` | Which PCLK edge the glass latches on; wrong, the image is smeared rather than absent. |
+| `LCD_RGB_DRAW_LINES` | `80` | Height of the PSRAM strip LVGL renders per flush. One framebuffer, so a repaint large enough to race the scan-out can be seen arriving. |
+| `LCD_RGB_BOUNCE_LINES` | `0` | Two internal-RAM buffers between PSRAM and the panel, in lines (0 = DMA straight from PSRAM). Raise it if the screen tears while the device writes flash — that is the moment the LCD DMA cannot have the memory bus. |
+| `LCD_NATIVE_WIDTH` / `LCD_NATIVE_HEIGHT` | `240` / `320` | Native pixels, pre-rotation. A panel cannot report its own glass size on either transport, so it is stated. |
+| `LCD_ROTATION` | `90` | Hardware rotation (0/90/180/270); applied as swap_xy+mirror, same transform applied to raw touch. An RGB panel scans the framebuffer out in the glass's own order, so only 0 and 180 exist there and a quarter turn is refused at bring-up with a log line. |
 | `LCD_MIRROR_X` / `LCD_MIRROR_Y` | `n` | Correct a mirrored image when the panel's scan direction differs. |
 | `LCD_INVERT_COLOR` | `y` | Most ST7789 IPS panels need inversion. |
 | `LCD_TOUCH_CONTROLLER_*` | NONE | Component-owned touch: `FT5X06` or `GT911`, driven through `esp_lcd_touch` (`lcd_touch.cpp`), sampled on its own task above the lcd task — a tap that lands mid-render still lands (see below). NONE = no touch, or the board HAL's `touch_read` below. |
-| `LCD_TOUCH_I2C_PORT` / `LCD_TOUCH_I2C_SDA` / `LCD_TOUCH_I2C_SCL` / `LCD_TOUCH_I2C_KHZ` | `0` / `-1` / `-1` / `100` | The touch I2C bus. The component creates the port itself, so touch must be its only creator — a bus shared with other board chips needs the board-HAL fallback. |
+| `LCD_TOUCH_I2C_PORT` / `LCD_TOUCH_I2C_SDA` / `LCD_TOUCH_I2C_SCL` / `LCD_TOUCH_I2C_KHZ` | `0` / `-1` / `-1` / `100` | The touch I2C bus. The component creates the port itself, so touch must be its only creator — unless the board created it first and says so below. |
+| `LCD_TOUCH_I2C_ADOPT` | `n` | The board already brought that port up for the other chips on those wires (an IO expander, an RTC, an IMU); add the controller to it instead of creating a second master. |
 | `LCD_TOUCH_INT_PIN` / `LCD_TOUCH_RST_PIN` | `-1` | Touch INT (wired to `lcdInputISR`; required for touch to fire) and reset (`-1` if it rides the power rail). |
 | `LCD_TOUCH_SWAP_XY` / `LCD_TOUCH_MIRROR_X` / `LCD_TOUCH_MIRROR_Y` | `n` | How the glass is laminated onto the panel, corrected on the raw point before the panel's rotation (swap first, then the mirrors). `LCD_MIRROR_X/Y` move pixels and points together and so can't straighten touch alone. |
+| `LCD_UI_SCALE_DEFAULT` | `100` | The shipped value of `s.lcd.scale`. One number scales the whole shell — every length through `lcdPx()`, every font token through the stylesheet — so it is a statement about the GLASS, not the pixel count: a panel of the same physical size at twice the density wants ~200 to feel identical, and less to trade size for content. |
 | `LCD_DRAW_STRIP_KB` | `8` | KB of internal DMA RAM rendered and sent per SPI transfer — the size of a repaint step, and so how visible a repaint is. Bounded by internal DMA RAM, which the SPI driver also allocates from at awkward moments; bring-up halves this until a reserve is still left standing. Never above the bus ceiling `SPANGAP_SPI_MAX_TRANSFER`. |
 | `LCD_WAKE_ON_TOUCH_DEFAULT` | `n` | The shipped value of `s.lcd.wake_on_touch` (below). A property of the case, so the board states it: `n` for a deck carried in a pocket, `y` for a handheld whose button is round the back. |
 | `LCD_SETTINGS_MARQUEE` | `y` | In Settings, a long read-only value scrolls horizontally on keypad focus instead of wrapping (see [docs/settings.md](docs/settings.md)). |
@@ -293,7 +323,7 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | Key | Default | Meaning |
 |---|---|---|
 | `s.lcd.backlight` | `200` | Backlight 0..255 (0 = off); applied live. |
-| `s.lcd.scale` | `100` | UI zoom in percent, clamped 50–250; read when the shell is built, so a change restarts the device (see [docs/shell.md](docs/shell.md#ui-zoom)). |
+| `s.lcd.scale` | board (`LCD_UI_SCALE_DEFAULT`) | UI zoom in percent, clamped 50–250; read when the shell is built, so a change restarts the device (see [docs/shell.md](docs/shell.md#ui-zoom)). |
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before the backlight drops right down; `sys.standby` follows 10 s later. `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
 | `s.lcd.wake_on_touch` | board (`LCD_WAKE_ON_TOUCH_DEFAULT`) | Whether the glass wakes the device from standby, as the board's button does. Seeded only where there is touch to wake with (this controller's or a board HAL's); read fresh at each standby, which is when the INT is armed as a light-sleep wake source. The waking finger is swallowed — it wakes and does nothing else. |
@@ -327,6 +357,29 @@ accepted — nanosvg has no raster-image path, so a PNG source needs re-authorin
 as SVG (the staging script warns and skips it). nanosvg covers paths, basic
 shapes, solid fills, strokes, and gradients; an icon that needs more (text,
 filters, masks) is too fancy for a launcher tile — the constraint is a feature.
+
+**The house style is one line drawing per tile**, and a new icon that follows it
+lands in a dock of others without being redrawn:
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"
+     stroke="#eef3f8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+```
+
+- **64-unit box, and fill it.** The tile is drawn at whatever size the launcher
+  and the zoom ask for, so the only scale that exists is this box: an icon
+  drawn at 40 units across is permanently smaller than its neighbours. Leave a
+  couple of units of margin, no more.
+- **Stroke, not fill.** One weight (`4`), the light `#eef3f8` the dark dock is
+  designed around, round caps and joins. A glyph alone in a tile — a question
+  mark, a letter — reads lighter than an icon that fills it and may go a shade
+  heavier; nothing else should.
+- **Transparent everywhere else.** No plate, no rounded background tile: the
+  dock provides the ground, and a filled backdrop makes one icon a sticker
+  among drawings.
+- **Three or four strokes.** Detail that closes up at tile size is worse than
+  no detail — a globe is an outline, one meridian and the equator, and a second
+  meridian is one too many.
 
 ## Fonts
 

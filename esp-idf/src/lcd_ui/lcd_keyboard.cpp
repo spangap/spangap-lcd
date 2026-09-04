@@ -30,7 +30,9 @@
  * line and puts the keyboard away, since a terminal has no other way to say it
  * is done. Enter in a one-line field does the same and fires the field's
  * LV_EVENT_READY, which is the Enter a device with keys would have sent; in a
- * multi-line field it is a newline and the keyboard stays.
+ * multi-line field it is a newline and the keyboard stays — unless that field
+ * submits on Enter (lcd_input_box's own switch), which is the one-line bargain
+ * made by a field that is multi-line only so that it can grow.
  *
  * The crossed-out keyboard key puts it away at any time. Being a tracked dialog
  * (lcdModalTrack) it also goes the same way for anything else that clears the
@@ -160,6 +162,20 @@ bool numericOnly(const char* accepted) {
     return accepted && *accepted && strspn(accepted, "0123456789.-+") == strlen(accepted);
 }
 
+/* Its face. Re-applied per open because a font can be freed and rebuilt under us
+ * (lcdFontsReset), and a parked widget must never be the thing holding the stale
+ * pointer. Three legends on one key, and only ~23 px of key: the cap, then the
+ * two corner marks a single size down. */
+void kbFace(void) {
+    lv_obj_set_style_text_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(12)), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(10)), LV_PART_INDICATOR);
+    lv_obj_set_style_text_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(10)), LV_PART_CUSTOM_FIRST);
+    /* The long-press chooser, at twice the legend. It is shown one character at
+     * a time with room around it, and it exists to be READ: ä, å and ā are one
+     * smudge at 12 px under a finger. */
+    lcd_keys_set_alt_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(24)));
+}
+
 /* The one-time build. Everything here is true of every field. */
 void kbBuild(void) {
     lv_obj_t* kb = lcd_keys_create(lv_layer_top());
@@ -178,13 +194,7 @@ void kbOpen(lv_obj_t* target, lv_obj_t* anchor, bool asSink) {
     if (!s_kb.keys) kbBuild();
     if (s_kb.up) { kbUnbind(); kbDrop(); }          /* moving to another field */
 
-    /* Its face: re-applied per open because a font can be freed and rebuilt
-     * under us (lcdFontsReset), and a parked widget must never be the thing
-     * holding the stale pointer. Three legends on one key, and only ~23 px of
-     * key: the cap, then the two corner marks a single size down. */
-    lv_obj_set_style_text_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(12)), LV_PART_ITEMS);
-    lv_obj_set_style_text_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(10)), LV_PART_INDICATOR);
-    lv_obj_set_style_text_font(s_kb.keys, lcdFont(LcdFace::UI, lcdPx(10)), LV_PART_CUSTOM_FIRST);
+    kbFace();
 
     if (asSink) {
         lcd_keys_set_key_sink(s_kb.keys, target);
@@ -197,8 +207,16 @@ void kbOpen(lv_obj_t* target, lv_obj_t* anchor, bool asSink) {
          * would from a keyboard with keys. All this open needs from its rules is
          * which layout suits them. */
         const char* accepted = lv_textarea_get_accepted_chars(target);
-        lcd_keys_set_mode(s_kb.keys, numericOnly(accepted) ? LCD_KEYS_MODE_NUMBER
-                                                           : LCD_KEYS_MODE_TEXT_LOWER);
+        const bool numeric = numericOnly(accepted);
+        lcd_keys_set_mode(s_kb.keys, numeric ? LCD_KEYS_MODE_NUMBER
+                                             : LCD_KEYS_MODE_TEXT_LOWER);
+
+        /* A TEXT FIELD OPENED EMPTY STARTS A SENTENCE, so shift is armed for
+         * its first letter — and the keyboard SAYS so, shift standing blue,
+         * where a field that quietly upper-cased the letter could only be
+         * argued with by typing it and going back. One tap refuses it. */
+        const char* cur = lv_textarea_get_text(target);
+        if(!numeric && (!cur || !cur[0])) lcd_keys_arm_shift(s_kb.keys);
     }
 
     s_kb.target = target;
@@ -218,9 +236,88 @@ void kbOpen(lv_obj_t* target, lv_obj_t* anchor, bool asSink) {
 
 }  // namespace
 
+/* BUILT AND DRAWN ONCE AT BOOT, WHILE THE SCREEN IS STILL DARK.
+ *
+ * Parking the widget was never the whole cost of the first open. Making forty
+ * keys is cheap; RASTERISING THEIR LEGENDS is not — the font engine renders a
+ * glyph the first time it is asked for one and caches it after, so the first
+ * keyboard to appear pays for the whole alphabet at three sizes and every one
+ * after it pays nothing. That is why the second open always felt instant and the
+ * first did not, and it cannot be fixed by building the widget alone: a hidden
+ * object is never drawn, so it never asks for a glyph.
+ *
+ * So this shows the keys, forces one refresh, and hides them again. It runs from
+ * the lcd task's own bring-up, inside the window where the backlight is still
+ * held down for the boot reveal (lcd_lvgl.cpp) — the keyboard is drawn onto
+ * glass nobody is looking at yet, and the cost lands where there is already
+ * nothing to wait for.
+ *
+ * A board with keys of its own never calls this: lcdKeyboardOnScreen() is false
+ * and there is nothing to warm. */
+void lcdKeyboardPreload(void) {
+    if (!lcdKeyboardOnScreen()) return;
+    if (s_kb.keys) return;
+
+    kbBuild();
+    kbFace();
+
+    lv_obj_remove_flag(s_kb.keys, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_update_layout(s_kb.keys);
+    lv_refr_now(nullptr);
+    lv_obj_add_flag(s_kb.keys, LV_OBJ_FLAG_HIDDEN);
+}
+
 bool lcdKeyboardOnScreen(void) { return !lcdHasKeyboard(); }
 
 bool lcdKeyboardIsOpen(void) { return s_kb.up; }
+
+lv_obj_t* lcdKeyboardTarget(void) { return s_kb.up ? s_kb.target : nullptr; }
+
+/* HOW MUCH SCREEN `o` HAS TO GROW INTO — from the top of the layer it belongs to
+ * down to the top edge of the keys.
+ *
+ * Answered whether or not the keys are up, and that is the point: on a board
+ * that types over the panel they are always about to be, and a field that sized
+ * itself to the whole screen while they were down would be too tall the instant
+ * they arrived — with no second chance to shrink, because the lift that puts its
+ * bottom above the keys is what pushes its top off the top. So the room is the
+ * room WITH the keyboard, always. The parked widget answers for the closed case:
+ * it is built and laid out at boot (lcdKeyboardPreload), and it is the text
+ * layout — the taller of the two — so the number is honest for the shorter one
+ * too. A board with keys of its own has no keys widget and gets the screen.
+ *
+ * The ceiling is the same top-level object the lift moves, taken at REST: a
+ * translated object reports translated coordinates, so the lift is added back —
+ * the question is how much room the layer has, not where it has been pushed to.
+ * It is never taken below the status bar, though: a layer that starts further
+ * down the screen is a DIALOG, which is lifted bodily and may hang off the top
+ * if it must, and reading its own top as a ceiling would squeeze the field
+ * inside it to a line or two. So the ceiling is the top of the screen, or the
+ * foot of the status bar where one could be standing over it. Off it comes the
+ * same clearance the lift leaves above the keys, so a thing grown to exactly
+ * this height sits between the two edges and touches neither. */
+int lcdKeyboardRoomFor(lv_obj_t* o) {
+    const int screenH = lcdScreenH();
+
+    int bottom = screenH;
+    if (lcdKeyboardOnScreen() && s_kb.keys && lv_obj_is_valid(s_kb.keys)) {
+        const int kh = lv_obj_get_height(s_kb.keys);
+        if (kh > 0 && kh < screenH) bottom = screenH - kh;
+    }
+
+    int top = 0;
+    if (o && lv_obj_is_valid(o)) {
+        lv_obj_t* layer = topLevelOf(o);
+        lv_area_t a;
+        lv_obj_get_coords(layer, &a);
+        top = a.y1 - lv_obj_get_style_translate_y(layer, LV_PART_MAIN);
+        if (top < 0)                top = 0;
+        if (top > LCD_STATUSBAR_H)  top = LCD_STATUSBAR_H;
+    }
+
+    const int room = bottom - top - 2 * lcdPx(4);
+    return room > 0 ? room : 0;
+}
 
 void lcdKeyboardOpen(lv_obj_t* ta) { kbOpen(ta, ta, false); }
 

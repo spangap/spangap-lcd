@@ -151,6 +151,25 @@ void        lcdStatusbarSetVisible(bool visible);
  *  Releasing it puts the bar back if the shell wanted it there anyway. */
 void        lcdShellHomebarSuppress(bool on);
 
+/* ---- lcd_keyboard.cpp ---- */
+/** Build the on-screen keyboard and draw it once, while the boot reveal still
+ *  holds the backlight down, so the first field tapped gets it instantly
+ *  instead of waiting for a screen's worth of glyphs to be rasterized. No-op on
+ *  a board with real keys. Call on the lcd task, after the fonts and the shell. */
+void        lcdKeyboardPreload(void);
+
+/** The field (or key sink) the on-screen keyboard is typing into, or null when
+ *  it is down. What a field asks to find out whether the keys, and not the
+ *  field itself, are the ones deciding what an operator's press produces. */
+lv_obj_t*   lcdKeyboardTarget(void);
+
+/** How much screen height `o` has to grow into: from the top of the layer it
+ *  belongs to down to the top edge of the keys, less the clearance the lift
+ *  leaves. Answered with the keys DOWN as well as up — on a board that types
+ *  over the panel they are always about to be up — and it is the whole layer on
+ *  a board with real keys. What an auto-growing field caps itself to. */
+int         lcdKeyboardRoomFor(lv_obj_t* o);
+
 /* ---- safe_screen.cpp ---- */
 /** Cover the shell with what this boot is doing, when it is a safe-mode boot
  *  (backup / restore / factory reset) — and do nothing on an ordinary one.

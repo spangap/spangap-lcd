@@ -11,8 +11,8 @@
  * calls build/show/hide/back/close. Cross-task work hops on with lcdRun()/ON_LCD
  * (lcd.h).
  *
- * Only compiled-meaningful when CONFIG_LCD_PHONE=y. Available alongside lcd.h,
- * which carries the display / input / text-view / settings surface.
+ * Available alongside lcd.h, which carries the display / input / text-view /
+ * settings surface.
  */
 #ifndef SPANGAP_LCD_APP_H
 #define SPANGAP_LCD_APP_H

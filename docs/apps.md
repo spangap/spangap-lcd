@@ -120,7 +120,9 @@ Valid from `onCreate` onward (the root exists). They operate on **this** app, no
   And rest focus on a field only when `!lcdKeyboardOnScreen()`: focus means
   "start typing", which is worth nothing where the answer is a tap, and popping
   the keyboard on open instead would cover the screen the operator just asked
-  for.
+  for. What the operator then gets is [keyboard.md](keyboard.md) — worth reading
+  once, because a field that grows takes its ceiling from where those keys
+  stand.
 - `goHome()` — return to the launcher (e.g. wire it to a Back button).
 - `setFullscreen(on)` — hide the status bar and grow the layer to full height for
   an immersive screen; toggle it as your own view changes. The shell remembers

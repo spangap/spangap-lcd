@@ -26,7 +26,8 @@
 #include <vector>             /* the tracked-dialog list */
 #include <cstdint>
 
-/* Draw-strip byte budget. Each flush is one SPI transfer, so a strip must fit
+/* Draw-strip byte budget, SPI transport only (the RGB strip is stated in lines
+ * — see the bring-up). Each flush is one SPI transfer, so a strip must fit
  * the shared bus's max_transfer_sz — every driver that might bring that bus up
  * states SPANGAP_SPI_MAX_TRANSFER (spi_helper.h), so the ceiling is the same
  * whoever got there first. Strip line count is derived from this and the panel
@@ -39,9 +40,11 @@
  * two: the flush waits for its own DMA before returning (the shared bus demands
  * it, see flushCb), so LVGL can never be rendering one strip while another
  * flies — a second buffer would only halve the strip for nothing. */
+#if CONFIG_LCD_BUS_SPI
 #define LCD_DRAW_BUDGET (CONFIG_LCD_DRAW_STRIP_KB * 1024)
 static_assert(LCD_DRAW_BUDGET <= SPANGAP_SPI_MAX_TRANSFER,
               "a draw strip must fit one SPI transfer on the shared bus");
+#endif
 /* Internal DMA-capable RAM the strip must leave behind it, for the drivers that
  * allocate out of it later and at a worse moment (see the bring-up). */
 #define LCD_DRAW_RESERVE_B (48 * 1024)
@@ -53,7 +56,9 @@ static lv_indev_t*            s_indev = nullptr;       /* touch pointer indev */
 static lv_indev_t*            s_btnIndev = nullptr;   /* hardware Home/centre button */
 static lv_group_t*            s_group = nullptr;
 static int                    s_w = 0, s_h = 0;
+#if CONFIG_LCD_BUS_SPI
 static SemaphoreHandle_t      s_dmaDone = nullptr;   /* given when a strip's DMA completes */
+#endif
 
 /* Event-mode input bookkeeping (all touched only on the lcd task). The indevs
  * are LV_INDEV_MODE_EVENT, so they only read when lcdInputPoll() drives them. */
@@ -91,6 +96,7 @@ static lv_indev_t*            s_mirrorKeyIndev = nullptr;
 static QueueHandle_t          s_mirrorKeyQ     = nullptr;
 static void                   mirrorSchedule(void);   /* defined after the indevs */
 
+#if CONFIG_LCD_BUS_SPI
 /* Strip DMA completed (ISR context). Wakes the flush, which then drops the
  * shared-bus lock. */
 static bool onColorDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*,
@@ -99,6 +105,7 @@ static bool onColorDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t
     xSemaphoreGiveFromISR(s_dmaDone, &hp);
     return hp == pdTRUE;
 }
+#endif
 
 /* Screen-mirror sink (lcdMirrorAttach). Read on the lcd task in flushCb; a lone
  * pointer store, so a plain volatile is enough for the cross-task publish. */
@@ -108,11 +115,13 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     auto panel = static_cast<esp_lcd_panel_handle_t>(lv_display_get_user_data(disp));
     int w = area->x2 - area->x1 + 1;
     int h = area->y2 - area->y1 + 1;
-    /* Mirror tap: hand the little-endian pixels to the sink BEFORE the swap — the
-     * browser wants little-endian; tapping after would mirror mangled colours. The
-     * sink must copy and return at once (px is reused after flush). */
+    /* Mirror tap: hand the little-endian pixels to the sink BEFORE any byte
+     * order change — the browser wants little-endian; tapping after would
+     * mirror mangled colours. The sink must copy and return at once (px is
+     * reused after flush). */
     lcd_mirror_sink_t sink = s_sink;
     if (sink) sink(area, px);
+#if CONFIG_LCD_BUS_SPI
     /* esp_lcd ST7789 wants big-endian RGB565; LVGL renders little-endian. */
     lv_draw_sw_rgb565_swap(px, (uint32_t)w * h);
     /* Hold the shared-bus lock across the WHOLE transfer including the async
@@ -123,6 +132,14 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px);
     xSemaphoreTake(s_dmaDone, portMAX_DELAY);
     spiHelperBusUnlock();
+#else
+    /* RGB: no byte swap (the sixteen data lines carry the halfword as LVGL
+     * wrote it), no bus to lock, and nothing asynchronous to wait for —
+     * draw_bitmap on an RGB panel is a copy into the framebuffer the LCD DMA is
+     * already scanning out, which returns when the copy is done. */
+    (void)w; (void)h;
+    esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px);
+#endif
     lv_display_flush_ready(disp);
 }
 
@@ -711,7 +728,14 @@ static void tickTimerRun(bool on) {
 bool lcdLvglInit(void) {
     esp_lcd_panel_io_handle_t io = nullptr;
     s_panel = lcdPanelInit(&io, &s_w, &s_h);
-    if (!s_panel || !io || s_w <= 0 || s_h <= 0) {
+    /* An RGB panel hands back no panel-io — it has no command channel — so the
+     * handle is only required of the transport that has one. */
+#if CONFIG_LCD_BUS_SPI
+    const bool ioOk = (io != nullptr);
+#else
+    const bool ioOk = true;
+#endif
+    if (!s_panel || !ioOk || s_w <= 0 || s_h <= 0) {
         err("panel init failed\n");
         return false;
     }
@@ -739,6 +763,7 @@ bool lcdLvglInit(void) {
     lv_display_set_user_data(s_disp, s_panel);
     lv_display_set_flush_cb(s_disp, flushCb);
 
+#if CONFIG_LCD_BUS_SPI
     /* Take the biggest strip that fits AND LEAVES THE REST OF THE DEVICE ROOM.
      *
      * Internal DMA-capable RAM is the scarcest thing on this chip and the
@@ -770,6 +795,20 @@ bool lcdLvglInit(void) {
     if (!s_dmaDone) { err("dmaDone sem alloc failed\n"); return false; }
     const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = onColorDone };
     esp_lcd_panel_io_register_event_callbacks(io, &cbs, s_disp);
+#else
+    /* RGB: the strip is not bounded by a bus transfer and not made of internal
+     * DMA RAM — the flush is a copy into the framebuffer, so the strip is
+     * ordinary PSRAM and its only cost is PSRAM. It is stated in lines rather
+     * than derived, because on a panel this size a byte budget divided by the
+     * width is a number nobody can picture. */
+    int    lines = CONFIG_LCD_RGB_DRAW_LINES;
+    size_t bufSz = (size_t)s_w * lines * sizeof(lv_color16_t);
+    void*  buf   = heap_caps_malloc(bufSz, MALLOC_CAP_SPIRAM);
+    if (!buf) { err("draw-buffer alloc failed (%u B PSRAM)\n", (unsigned)bufSz); return false; }
+    info("draw strip %d lines (%u B PSRAM)\n", lines, (unsigned)bufSz);
+    lv_display_set_buffers(s_disp, buf, nullptr, bufSz, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    (void)io;
+#endif
 
     /* LVGL tick from a periodic esp_timer. */
     esp_timer_create_args_t targs = {};

@@ -21,6 +21,7 @@
 #define SPANGAP_LCD_H
 
 #include "lvgl.h"
+#include "lcd_input.h"   /* LCD_KEY_CTRL, and the input HAL itself */
 #include "lcd_settings_desc.h"
 
 /** Callback run on the lcd task. `arg` is whatever the lcdRun() caller passed
@@ -29,11 +30,6 @@ typedef void (*lcd_fn_t)(void* arg);
 
 /** Lambda -> lcd_fn_t sugar, mirroring storage's ON_CHANGE. No captures. */
 #define ON_LCD [](void* arg)
-
-/** Modifier bit a board keyboard driver OR's into an lv key to mean "Ctrl +
- *  this (lowercase) letter". Sits above every LVGL key code and ASCII, so it
- *  never collides; the on-device terminal decodes it to a control byte. */
-#define LCD_KEY_CTRL 0x40000000u
 
 /** Bring up display, LVGL, launcher and status bar, and spawn the lcd task.
  *  Called by spangapInit() when CONFIG_SPANGAP_LCD=y. Safe to call once. */
@@ -358,7 +354,7 @@ const lv_font_t* lcdFont(LcdFace face, int px);
  *  redraw. Lcd task. */
 void lcdFontsReset(void);
 
-/** The current UI zoom as a fraction (s.lcd.scale%, clamped 0.5–2.0). Multiply
+/** The current UI zoom as a fraction (s.lcd.scale%, clamped 0.5–2.5). Multiply
  *  a base pixel size by this when resolving lcdFont(), so an app's on-device
  *  text scales with the platform zoom like the shell does. An app that names its
  *  own fonts rebuilds at the current scale on its next open. Lcd task. */

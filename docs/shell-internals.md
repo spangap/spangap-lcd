@@ -33,7 +33,8 @@ display/LVGL/task foundation in `src/lcd_ui/`:
   app (`_arrows()`) or a focused textarea — so the gesture only means Back where
   it would otherwise be inert.
 - **recents.cpp** — the app switcher (cards over the running set).
-- **stylesheet.{h,cpp}** + **stylesheet_320x240.cpp** — theme/geometry as data.
+- **stylesheet.{h,cpp}** + **stylesheet_320x240.cpp** / **stylesheet_480x640.cpp**
+  — theme/geometry as data.
 - **lcd_app.cpp** — the `LcdApp` install registry and service methods (covered in
   [apps-internals.md](apps-internals.md)).
 
@@ -42,9 +43,8 @@ Nothing on screen is special-cased chrome: even Settings is just another install
 page-stack in a thin `SettingsApp` host and `lcdInstall`s it (gear icon), so it
 lifts, backgrounds, and appears in recents like any app.
 The built-in Log and CLI terminals are likewise `LcdApp` subclasses under
-`src/lcd_ui/apps/`. All of this compiles only when `CONFIG_LCD_PHONE=y`, which
-makes the shell the single UI — including the free functions in the manager
-bullet above, which are part of it rather than a layer over it.
+`src/lcd_ui/apps/`. The shell is the single UI — including the free functions in
+the manager bullet above, which are part of it rather than a layer over it.
 
 ## 2. The lcd task & threading (foundation)
 
@@ -95,8 +95,14 @@ accounting.
 
 `lcd_panel.cpp` brings up the SPI bus, panel-IO, and controller (ST7789 built
 into `esp_lcd`, or ILI9341 via the managed component) entirely from
-`CONFIG_LCD_*`; resolution can't be probed from an SPI panel, so native size +
-rotation are config. The same rotation/mirror transform is applied to raw touch
+`CONFIG_LCD_*`. `lcd_panel_rgb.cpp` is the other half of the
+`CONFIG_LCD_BUS_SPI`/`_RGB` choice — a timing generator over a PSRAM
+framebuffer, no panel-IO and no controller driver, the glass having been
+configured by the board before this runs — and exactly one of the two files
+compiles. Resolution can't be probed from a panel either way, so native size +
+rotation are config; an RGB panel scans its framebuffer out in the glass's own
+order, so only 0/180 are available there and a quarter turn is refused at
+bring-up. The same rotation/mirror transform is applied to raw touch
 (`lcdPanelOrientTouch`) so touch and pixels always agree. It also exposes the
 LEDC backlight (`lcdPanelBacklight`) and panel display on/off for standby
 (`lcdPanelDisplayPower`, GRAM retained for instant wake).
@@ -374,19 +380,32 @@ hundreds of KB — where nanosvg is two vendored headers. Revisit only if vector
 `stylesheet.h` is theme + geometry as data: one `LcdStyle` per (name, screen
 size), selected at `lcdStyleBegin(w, h)` by the real panel size and calibrated.
 The shell reads geometry/colour/font from `lcdStyle()` instead of `#define`d
-magic numbers, so a second board is a new sheet, not code. Only the 320×240
-dark sheet ships (`stylesheet_320x240.cpp`): status bar 24 px on dark navy,
-tiles derived from a 72 px `minTilePx` floor with a 36 px base icon, and the
-recents/nav/gesture thresholds. `LcdStyle::core.maxResidentApps` (4) is
+magic numbers, so a second board is a new sheet, not code. Two ship. The 320×240
+dark sheet (`stylesheet_320x240.cpp`) is the default any panel without one of
+its own falls back to — status bar 24 px on dark navy, tiles derived from a
+72 px `minTilePx` floor with a 36 px base icon, and the recents/nav/gesture
+thresholds — and it is written in proportions rather than absolute positions, so
+it holds its shape wherever the zoom puts it. `stylesheet_480x640.cpp` is the
+portrait sheet for the taller glass. `LcdStyle::core.maxResidentApps` (4) is
 declared as an eviction cap but is **not currently enforced** — teardown is
 only user-driven (a recents swipe-up, or an app stopping itself; see §4).
 
 **Font tokens.** Sheet font fields are `FontSpec { LcdFace face; int basePx; }`
-specs at the 240 px-tall reference panel; the resolved `const lv_font_t*`
-fields next to them are *outputs*. `calibrate()` resolves
-`px = round(basePx × uiScale × displayH / 240)` through `lcdFont()`. The scale
-basis is the panel-height ratio, not `lv_display_get_dpi()` — driver DPI is
-too often bogus.
+specs at 100% zoom; the resolved `const lv_font_t*` fields next to them are
+*outputs*. `calibrate()` resolves `px = round(basePx × uiScale)` through
+`lcdFont()`.
+
+**One number scales the shell, and only one.** `uiScale` is the whole of it:
+every length the UI states goes through `lcdPx()` and every font size through
+the line above, both multiplied by exactly the same factor, so a sheet's
+proportions survive any zoom. They do not if type scales on a second,
+panel-derived factor while the padding around it does not, so there is no
+`displayH` term in this resolution and there must not be one. What a bigger
+panel is worth in zoom is a judgement about the *glass* (pixel pitch, how far
+away it is held) that no
+ratio of pixel counts answers, and `lv_display_get_dpi()` cannot answer it
+either — driver DPI is too often bogus. So it is stated:
+`CONFIG_LCD_UI_SCALE_DEFAULT` per board, `s.lcd.scale` per operator.
 
 **Theme.** `lcdStyleBegin()` installs a dark
 `lv_theme_default` wrap (primary/secondary colours + the resolved UI font), so

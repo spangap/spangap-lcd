@@ -29,7 +29,7 @@ The shell shows exactly one of three screens at a time:
   with that icon already in your hand. Edit mode is the **wiggle**: every icon
   tilts back and forth through five stops — 20° and 10° left, upright, 10° and
   20° right — at 10 fps, with the one you are holding standing still.
-  Deliberately slow: each frame re-rasters every icon on an SPI panel.
+  Deliberately slow: each frame re-rasters every icon.
 
   In edit mode, dragging an icon picks it up immediately — no second hold —
   while dragging anywhere else scrolls the grid as usual. **Any tap leaves edit
@@ -163,9 +163,15 @@ no automatic memory-pressure eviction.
 ## UI zoom
 
 The whole interface scales: **Settings → System → Display → UI Zoom** picks a
-step over `s.lcd.scale` (percent, default 100) — 10% apart from 50 to 150, then
-25% apart to 250. Writing the key from anywhere — the picker, the browser, the
-CLI — has the same effect.
+step over `s.lcd.scale` (percent) — 10% apart from 50 to 150, then 25% apart to
+250. Writing the key from anywhere — the picker, the browser, the CLI — has the
+same effect.
+
+**Where it starts is the board's** (`CONFIG_LCD_UI_SCALE_DEFAULT`), because what
+size is comfortable is a fact about the glass rather than about the shell: 100
+means the sheet at its own size, which is what a ~143 ppi 2.8" panel wants, and
+a panel of the same physical size at twice that density wants about 200 to feel
+identical.
 
 **A change restarts the device**, and the picker says so. The scale sizes every
 font, icon, tile and pane the shell has already laid out, including the pane the

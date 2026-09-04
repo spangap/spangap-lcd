@@ -6,8 +6,16 @@
  * device:
  *
  *   • Auto-grows between minLines and maxLines as text wraps / newlines are typed;
- *     scrolls internally past maxLines.
+ *     scrolls internally past maxLines — and past what fits on the screen with
+ *     the on-screen keyboard up, which caps the height over minLines and
+ *     maxLines both. A box grows upwards, so an uncapped one walks the first
+ *     lines of what is being written off the top edge rather than overflowing
+ *     where it would be seen.
  *   • Double-space within 300 ms collapses to ". " (fast sentence breaks).
+ *   • A capital starts an empty field and follows a ". ". Under the on-screen
+ *     keyboard that IS its shift key — armed, blue, and one tap refuses it —
+ *     and the box does not also capitalise; where the keys are real there is
+ *     nothing to light up, so the box upper-cases the letter itself.
  *   • lcdInputBoxText() returns the body with trailing whitespace stripped.
  *   • On a device with no keys (`lcdKeyboardOnScreen()`), a tap on the box — or
  *     on the area around it, via lcdInputBoxActivate — puts the on-screen
@@ -18,7 +26,10 @@
  *     rest on the box permanently — a keystroke re-lights the caret even after a
  *     walk-out, so typing never depends on where focus wandered.
  *   • submit-on-Enter is configurable: on, Enter fires LV_EVENT_READY (and inserts
- *     no newline); off, Enter inserts a newline like any multi-line field.
+ *     no newline); off, Enter inserts a newline like any multi-line field. A
+ *     submit also puts the on-screen keyboard away first, exactly as Enter in a
+ *     one-line field does — the box is finished being typed into, and answering
+ *     may rebuild the screen the keys were standing over.
  *
  * Lcd task only (like the rest of the UI).
  */
@@ -41,7 +52,10 @@ void lcdInputBoxSetSubmitOnEnter(lv_obj_t* box, bool on);
 
 /** Change the auto-grow bounds at runtime (e.g. a Signal-style expand toggle
  *  flipping between a 1–4 line field and a fixed 8-line one via min==max). Resizes
- *  the box immediately. */
+ *  the box immediately — to fewer lines than asked for where the screen above the
+ *  keyboard cannot hold them, so a caller may ask for more than a small panel
+ *  has. A consumer whose own widgets align to the box should follow its height
+ *  (LV_EVENT_SIZE_CHANGED) rather than assume the count it asked for. */
 void lcdInputBoxSetLines(lv_obj_t* box, int minLines, int maxLines);
 
 /** Focus the box (if not already) and light its caret — for a tap anywhere in a

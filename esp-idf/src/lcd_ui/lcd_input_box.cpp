@@ -53,13 +53,30 @@ void caretActivate(lv_obj_t* ta) {
     lcdPointerHide();   /* editing → trackball drives arrows; the ball leaves at once */
 }
 
-/* Size the box to its content, clamped to [minLines, maxLines]. We force a layout
- * FIRST so the label's wrapped height is current (measuring before that layout is
- * what lagged a line behind), set the exact height, then — when everything fits —
- * pin the internal scroll to the top. That last step kills the phantom scroll LVGL
- * leaves after briefly showing a shorter box: a scrollbar with the first line
- * scrolled off and the caret hidden below. Past maxLines the box keeps LVGL's
- * cursor-following scroll. */
+/* THE SCREEN HAS THE LAST WORD ON HOW TALL A BOX MAY BE, over minLines and
+ * maxLines both. A box grows upwards — its bottom is where the layout put it, or
+ * where the keyboard's lift put it, and every line added lifts its top — so a
+ * box asked for more lines than there is screen above it does not overflow
+ * downwards where it would be noticed. It walks its own first lines off the top
+ * edge, and what is lost is the beginning of the very thing being written, which
+ * is exactly what a writer looks back at. Past the cap the box scrolls
+ * internally, which is what it already does past maxLines.
+ *
+ * How much room there is belongs to the keyboard (lcdKeyboardRoomFor): it owns
+ * the lift, so it knows both edges. Off it comes the box's own chrome, and what
+ * is left is a count of lines, never below one. */
+int fitLines(lv_obj_t* ta, int lineH, int chrome) {
+    const int lines = (lcdKeyboardRoomFor(ta) - chrome) / lineH;
+    return lines < 1 ? 1 : lines;
+}
+
+/* Size the box to its content, clamped to [minLines, maxLines] and to what fits
+ * on the screen. We force a layout FIRST so the label's wrapped height is current
+ * (measuring before that layout is what lagged a line behind), set the exact
+ * height, then — when everything fits — pin the internal scroll to the top. That
+ * last step kills the phantom scroll LVGL leaves after briefly showing a shorter
+ * box: a scrollbar with the first line scrolled off and the caret hidden below.
+ * Past the cap the box keeps LVGL's cursor-following scroll. */
 void growNow(lv_obj_t* ta, InputCtx* c) {
     lv_obj_t* label = lv_textarea_get_label(ta);
     if (!label) return;
@@ -69,22 +86,49 @@ void growNow(lv_obj_t* ta, InputCtx* c) {
     lv_obj_update_layout(ta);                              /* re-wrap at the current width */
     int contentLines = (lv_obj_get_height(label) + lineH / 2) / lineH;
     if (contentLines < 1) contentLines = 1;
-    int lines = contentLines;
-    if (lines < c->minLines) lines = c->minLines;
-    if (lines > c->maxLines) lines = c->maxLines;
     int padT = lv_obj_get_style_pad_top(ta, LV_PART_MAIN);
     int padB = lv_obj_get_style_pad_bottom(ta, LV_PART_MAIN);
     int bw   = lv_obj_get_style_border_width(ta, LV_PART_MAIN);
+
+    int cap = c->maxLines;
+    const int fits = fitLines(ta, lineH, padT + padB + 2 * bw);
+    if (cap > fits) cap = fits;
+    int lines = contentLines;
+    if (lines < c->minLines) lines = c->minLines;
+    if (lines > cap) lines = cap;                          /* over minLines too */
+
     lv_obj_set_height(ta, lines * lineH + padT + padB + 2 * bw);
     lv_obj_update_layout(ta);
-    if (contentLines <= c->maxLines) lv_obj_scroll_to_y(ta, 0, LV_ANIM_OFF);
+    if (contentLines <= lines) lv_obj_scroll_to_y(ta, 0, LV_ANIM_OFF);
 }
 
+/* WHOSE CAPITAL IS IT. "A capital belongs here" is one decision with two ways of
+ * showing itself, and which one applies is simply which keyboard is typing.
+ *
+ * Where the keys are real there is nothing to light up, so the box capitalises
+ * the letter itself as it lands — silent, but there is no other surface to say
+ * it on. Where typing comes off the panel, the capital IS the on-screen
+ * keyboard's shift: armed for one letter, standing blue, and one tap on it
+ * refuses the capital before it is typed (lcd_keys_arm_shift, from
+ * lcd_keyboard.cpp as the field opens). Doing BOTH would put back the very thing
+ * the blue shift is there to fix — an operator who turns shift off and gets a
+ * capital anyway — so while the panel keyboard is pointed at this box, the box
+ * keeps its hands off. */
+static bool capsIsOurs(lv_obj_t* ta) { return lcdKeyboardTarget() != ta; }
+
 /* Fire LV_EVENT_READY out of band: we veto the Enter insert inside the INSERT
- * event, so there's no VALUE_CHANGED to ride — hand the submit to the next loop. */
-void asyncReady(void* ta) {
-    if (ta && lv_obj_is_valid((lv_obj_t*)ta))
-        lv_obj_send_event((lv_obj_t*)ta, LV_EVENT_READY, nullptr);
+ * event, so there's no VALUE_CHANGED to ride — hand the submit to the next loop.
+ *
+ * THE KEYS GO AWAY FIRST. Enter here is the same Enter a one-line field takes,
+ * and there the keyboard puts itself away before telling the field (lcd_keys.c):
+ * answering may well rebuild the screen the keys were standing over, and it must
+ * not do that with them still up. A box that submits is a box that is finished
+ * being typed into, so the keyboard has nothing left to do either way. */
+void asyncReady(void* p) {
+    lv_obj_t* ta = (lv_obj_t*)p;
+    if (!ta || !lv_obj_is_valid(ta)) return;
+    if (lcdKeyboardTarget() == ta) lcdKeyboardClose();
+    if (lv_obj_is_valid(ta)) lv_obj_send_event(ta, LV_EVENT_READY, nullptr);
 }
 
 /* Preprocess (runs BEFORE the textarea's own key handling): the first backspace
@@ -111,7 +155,7 @@ void boxEvent(lv_event_t* e) {
     case LV_EVENT_INSERT: {
         const char* ins = (const char*)lv_event_get_param(e);
         if (!ins || !ins[0]) break;
-        if (c->capsNext) {                            /* first letter after ". " → capital */
+        if (c->capsNext && capsIsOurs(ta)) {          /* first letter after ". " → capital */
             c->capsNext = false;
             if (!ins[1] && ins[0] >= 'a' && ins[0] <= 'z') {
                 /* set_insert_replace stores the POINTER and reads it after this
@@ -151,12 +195,14 @@ void boxEvent(lv_event_t* e) {
             lv_textarea_add_text(ta, ". ");
             c->lastSpaceTick = 0;
             c->converting = false;
-            c->capsNext = true;
+            c->capsNext = capsIsOurs(ta);
         }
         /* An empty field starts a fresh sentence → arm caps so the first letter is
          * a capital (a leading backspace, eaten by keyPreCb, cancels it and fires
-         * no VALUE_CHANGED, so it stays off). */
-        { const char* t = lv_textarea_get_text(ta); if (!t || !t[0]) c->capsNext = true; }
+         * no VALUE_CHANGED, so it stays off). Under the on-screen keyboard the
+         * armed shift is that, and it is the keyboard's to arm and to drop. */
+        { const char* t = lv_textarea_get_text(ta);
+          if ((!t || !t[0]) && capsIsOurs(ta)) c->capsNext = true; }
         growNow(ta, c);
         break;
     }

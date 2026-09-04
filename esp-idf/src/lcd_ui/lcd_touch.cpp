@@ -22,6 +22,11 @@
  * case (a drag is a stream, not an edge), and are reported whenever the queue
  * is empty. A burst of five taps during one long render arrives as five taps.
  *
+ * A LIFT HAS TO BE SEEN SEVERAL TIMES BEFORE IT IS BELIEVED (kLiftReads). The
+ * glass drops the occasional sample, and one empty read is not a finger going
+ * away — it is a finger the controller missed. Anything reading a whole stroke
+ * would otherwise get it in pieces.
+ *
  * How the glass is laminated onto the panel is board wiring like any other pin:
  * CONFIG_LCD_TOUCH_SWAP_XY / _MIRROR_X / _MIRROR_Y correct the raw point into
  * the panel's native frame before the panel's own rotation is applied to it.
@@ -34,8 +39,10 @@
  * clears it on the way out; the subscription flips lcdTouchSetMultipoint().
  *
  * The bus: the component creates the CONFIG_LCD_TOUCH_I2C_PORT master bus
- * itself, so the touch controller must be that port's only creator — a board
- * whose bus carries other chips keeps the board-HAL fallback instead.
+ * itself, so the touch controller must be that port's only creator — unless the
+ * board brought that bus up first for the other chips on those wires and says
+ * so with CONFIG_LCD_TOUCH_I2C_ADOPT, in which case the controller is added to
+ * it as one more device.
  *
  * In standby (sys.standby truthy) reads are gated off — the INT still fires,
  * the sample is discarded — so a resting finger cannot hold the device awake;
@@ -85,6 +92,9 @@ static bool                   s_asleep = false; /* sys.standby: reads gated */
  * far past any render, and a full queue drops the oldest rather than the newest
  * so a burst reads as its own tail rather than freezing on its head. */
 static const int          kTrackMs   = 10;
+/* Reads with no finger in a row before it counts as lifted — see the block over
+ * its use in touchSamplerTask. Three of them at kTrackMs is 30 ms. */
+static const int          kLiftReads = 3;
 static const int          kEventQLen = 16;
 struct TouchEdge { int16_t x, y; bool down; };
 static QueueHandle_t      s_edges     = nullptr;   /* sampler → lcd task */
@@ -265,6 +275,7 @@ static void pushEdge(int16_t x, int16_t y, bool down) {
  * latch (which it reports while nothing is queued). */
 static void touchSamplerTask(void*) {
     bool down = false;
+    int  emptyReads = 0;      /* reads with no finger in a row; see kLiftReads */
     int16_t xs[LCD_TOUCH_MAXPTS], ys[LCD_TOUCH_MAXPTS];
     for (;;) {
         ulTaskNotifyTake(pdTRUE, down ? pdMS_TO_TICKS(kTrackMs) : portMAX_DELAY);
@@ -277,6 +288,7 @@ static void touchSamplerTask(void*) {
              * clears the key — and only a real one, since the INT can fire for
              * a glitch. */
             down = false;
+            emptyReads = 0;
             taskENTER_CRITICAL(&s_liveMux);
             s_liveN = 0;
             taskEXIT_CRITICAL(&s_liveMux);
@@ -299,6 +311,20 @@ static void touchSamplerTask(void*) {
             continue;
         }
 
+        /* ONE EMPTY READ IS NOT A LIFT. A capacitive panel misses the odd
+         * sample — a fast-moving finger lightens its contact, a read lands
+         * between the controller's own scans — and a finger is only gone once
+         * it has been missing for kLiftReads reads together. Until then the
+         * live latch holds its last position and no edge is queued.
+         *
+         * A tap barely notices either way. What does is anything that reads a
+         * WHOLE STROKE rather than its ends: taking the first empty read as a
+         * release chops one drag into two, and the two halves are not a gesture
+         * that was made. Thirty milliseconds of grace is far below the gap
+         * between a real lift and the next touch, and far above a dropout. */
+        if (n == 0 && down && ++emptyReads < kLiftReads) continue;
+        if (n > 0) emptyReads = 0;
+
         taskENTER_CRITICAL(&s_liveMux);
         for (int i = 0; i < n; i++) { s_liveX[i] = xs[i]; s_liveY[i] = ys[i]; }
         s_liveN = n;
@@ -314,6 +340,16 @@ static void touchSamplerTask(void*) {
 }
 
 static void touchCtlBringup(void) {
+    i2c_master_bus_handle_t i2c = nullptr;
+#if CONFIG_LCD_TOUCH_I2C_ADOPT
+    /* The board's bus. It exists already — a board service runs in the start
+     * band, ahead of the display — so a failure here is a board that named the
+     * wrong controller, not a race to retry. */
+    if (i2c_master_get_bus_handle(CONFIG_LCD_TOUCH_I2C_PORT, &i2c) != ESP_OK) {
+        warn("touch: no i2c bus on port %d to share\n", CONFIG_LCD_TOUCH_I2C_PORT);
+        return;
+    }
+#else
     i2c_master_bus_config_t bcfg = {};
     bcfg.i2c_port                     = CONFIG_LCD_TOUCH_I2C_PORT;
     bcfg.sda_io_num                   = (gpio_num_t)CONFIG_LCD_TOUCH_I2C_SDA;
@@ -321,11 +357,11 @@ static void touchCtlBringup(void) {
     bcfg.clk_source                   = I2C_CLK_SRC_DEFAULT;
     bcfg.glitch_ignore_cnt            = 7;
     bcfg.flags.enable_internal_pullup = SPANGAP_I2C_PULLUP;
-    i2c_master_bus_handle_t i2c = nullptr;
     if (i2c_new_master_bus(&bcfg, &i2c) != ESP_OK) {
         warn("touch: i2c bus init failed\n");
         return;
     }
+#endif
 
     esp_lcd_touch_config_t tcfg = {};
     /* esp_lcd_touch stays at IDENTITY (native coords): the glass's own mounting

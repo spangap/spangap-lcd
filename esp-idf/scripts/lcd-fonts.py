@@ -11,7 +11,8 @@ FreeType / tiny_ttf:
 
 The four faces:
   ui.ttf, ui-semibold.ttf  proportional UI — Latin + punctuation + euro
-  mono.ttf                 monospace terminal — Latin + box-drawing + blocks
+  mono.ttf                 monospace terminal — the same Latin + box-drawing
+                           + blocks
   symbols.ttf              FontAwesome-5 subset, exactly the LV_SYMBOL_*
                            codepoints; already trimmed at the source, so it is
                            copied verbatim (no re-subsetting). lcd_fonts.cpp
@@ -44,6 +45,7 @@ def warn(msg):
 UI_UNICODES = (
     "U+0020-00FF,"   # Basic Latin + Latin-1 Supplement (Western European)
     "U+0100-017F,"   # Latin Extended-A (Central European)
+    "U+03A9,"        # ohm — the alternate the keyboard's O offers
     "U+2013-2014,"   # en/em dash
     "U+2018-2019,"   # curly single quotes
     "U+201C-201D,"   # curly double quotes
@@ -51,8 +53,19 @@ UI_UNICODES = (
     "U+2026,"        # ellipsis
     "U+20AC"         # euro
 )
+# The terminal face carries the letters the keyboard can type, Latin Extended-A
+# included: a keyboard whose long-press chooser offers a character the terminal
+# cannot draw types a box, and the chooser is one keyboard serving both.
 MONO_UNICODES = (
     "U+0020-00FF,"   # Basic Latin + Latin-1 Supplement
+    "U+0100-017F,"   # Latin Extended-A (Central European)
+    "U+03A9,"        # ohm
+    "U+2013-2014,"   # en/em dash
+    "U+2018-2019,"   # curly single quotes
+    "U+201C-201D,"   # curly double quotes
+    "U+2022,"        # bullet
+    "U+2026,"        # ellipsis
+    "U+20AC,"        # euro
     "U+2190-2193,"   # arrows (TUI)
     "U+2500-257F,"   # Box Drawing (complete)
     "U+2580-259F,"   # Block Elements (halves/quadrants/shades)

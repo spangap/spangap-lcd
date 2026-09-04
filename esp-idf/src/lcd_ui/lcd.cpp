@@ -144,6 +144,10 @@ static void lcdTaskFn(void*) {
      * the factory-reset wipe). No-op on an ordinary boot. */
     lcdSafeScreenInit();
 
+    /* Warm the on-screen keyboard behind the boot reveal: it is drawn once here,
+     * in the dark, so the first field tapped shows it at once. */
+    lcdKeyboardPreload();
+
     /* No NO_LIGHT_SLEEP lock: the panel holds its own GRAM, touch wakes the task
      * via a GPIO wake source, and the board keeps the backlight PWM alive across
      * light sleep (board HAL clocks it from RC_FAST with LEDC keep-alive). The
@@ -241,7 +245,9 @@ void lcdInit(void) {
 
     storageBegin();
     storageDefault("s.lcd.backlight",    200);
-    storageDefault("s.lcd.scale",        100);   /* UI zoom %, clamp 50–250 */
+    /* UI zoom %, clamp 50–250. The shipped value is the BOARD's, because what
+     * a comfortable size is depends on the glass rather than on the shell. */
+    storageDefault("s.lcd.scale",        CONFIG_LCD_UI_SCALE_DEFAULT);
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
     storageDefault("s.lcd.launcher_order", "");   /* empty = install order */
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */

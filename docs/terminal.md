@@ -74,5 +74,11 @@ lcdTermKey(t, lvKey);         // one focused key; encoded and emitted via onOutp
   new output while at the bottom) snaps back to the live screen.
 - `lcdTermDestroy(t)` frees the VTerm (the LVGL objects go with the parent layer).
 
-The keyboard driver may OR `LCD_KEY_CTRL` (`lcd.h`) into a key code to mean
-"Ctrl+letter"; the terminal decodes it to a control byte.
+A keyboard may OR `LCD_KEY_CTRL` (`lcd_input.h`) into a key code to mean
+"Ctrl+letter"; the terminal decodes it to a control byte. A board's key driver
+raises it, and so does the on-screen keyboard's own ctrl key, which is why the
+bit lives with the input HAL rather than with the display.
+
+Printable keys are passed to libvterm as **codepoints**, not bytes — the
+on-screen keyboard's long-press chooser reaches the accented letters, and the
+terminal's monospace face carries them.
