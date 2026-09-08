@@ -30,6 +30,14 @@
  *  shellNavigate(). */
 enum class NavIntent { BACK, HOME, RECENTS };
 
+/** What put an app in the foreground, readable in onShow() via shownFrom().
+ *  LAUNCHER is a deliberate "open this app" from the icon grid; RECENTS is a
+ *  return to something already in progress; PROGRAM is another straddle calling
+ *  lcdShowProgram() to land the user somewhere specific. An app that presents a
+ *  choice on entry — which account, which document — offers it on LAUNCHER and
+ *  stays where it was for the other two, which are already answers. */
+enum class ShowFrom { LAUNCHER, RECENTS, PROGRAM };
+
 /** Base class for an on-device app. An LcdApp IS a Service (service.h): declare
  *  it in a straddle's `services:` list and the generated boot registration
  *  constructs it and the onInit below installs its launcher tile — no
@@ -55,6 +63,9 @@ public:
     /* ---- Lifecycle (all on the lcd task) ---- */
     virtual void onCreate(lv_obj_t* root) = 0; /* build UI once, into root */
     virtual void onShow() {}                    /* brought to foreground */
+    /** How this show was asked for. Valid inside onShow() (and until the next
+     *  one). See ShowFrom. */
+    ShowFrom     shownFrom() const { return m_shownFrom; }
     virtual void onHide() {}                     /* sent to background */
     virtual bool onBack() { return false; }      /* true = handled; false = go Home */
     virtual void onClose() {}                     /* stopped or evicted; free the app's
@@ -112,6 +123,7 @@ public:
     int           id() const  { return m_id; }
     void          _setId(int id)        { m_id = id; }
     void          _setRoot(lv_obj_t* r) { m_root = r; }
+    void          _setShownFrom(ShowFrom f) { m_shownFrom = f; }
     const std::string& _recentsSubtitle() const { return m_recentsSubtitle; }
     /** Recents thumbnail: a PSRAM snapshot of this app's screen, captured by the
      *  manager the moment the app leaves the foreground (while still drawn) and
@@ -145,6 +157,7 @@ private:
     lv_obj_t*       m_root = nullptr;
     int             m_id   = -1;
     std::string     m_recentsSubtitle;
+    ShowFrom        m_shownFrom  = ShowFrom::LAUNCHER;
     bool            m_fullscreen = false;
     bool            m_arrows     = false;
     lcd_scroll_fn_t m_scrollFn   = nullptr;

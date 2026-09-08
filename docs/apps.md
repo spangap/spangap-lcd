@@ -78,6 +78,12 @@ Every method runs on the lcd task. The shell calls them at these points:
   lazily the first time the app is opened (or again after eviction). Build your
   whole tree here; the layer persists across hide/show.
 - **`onShow()`** — the app came to the foreground (every open after the first).
+  `shownFrom()` says what asked for it: `ShowFrom::LAUNCHER` (its icon was
+  tapped), `ShowFrom::RECENTS` (a switch back to work in progress) or
+  `ShowFrom::PROGRAM` (another straddle called `lcdShowProgram()` to land the
+  user somewhere specific). An app that asks a question on entry — which
+  account, which document — asks it on `LAUNCHER` and stays put for the other
+  two, which already carry an answer.
 - **`onHide()`** — the app went to the background (another app opened, or Home).
 - **`onBack()`** — a Back navigation arrived; return `true` if handled, `false`
   to let it fall through to Home (the default).

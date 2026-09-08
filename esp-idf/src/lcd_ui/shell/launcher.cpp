@@ -397,7 +397,7 @@ void onTileClick(lv_event_t* e) {
     /* In edit mode a tap is how you leave it — icons don't open until you have. */
     if (s_wiggle) { wiggleToggle(); return; }
     LcdApp* app = static_cast<LcdApp*>(lv_event_get_user_data(e));
-    if (app) { dbg("tile click '%s'\n", app->cfg().name); shellOpenApp(app); }
+    if (app) { dbg("tile click '%s'\n", app->cfg().name); shellOpenApp(app, ShowFrom::LAUNCHER); }
 }
 
 /* A tap on bare grid — the space past the last icon, or between two — leaves edit

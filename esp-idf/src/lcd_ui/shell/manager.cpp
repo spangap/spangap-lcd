@@ -319,8 +319,9 @@ void shellInit(lv_obj_t* screen) {
     info("phone shell ready\n");
 }
 
-void shellOpenApp(LcdApp* app) {
+void shellOpenApp(LcdApp* app, ShowFrom from) {
     if (!app) return;
+    app->_setShownFrom(from);
     bool firstBuild = (app->root() == nullptr);
     lv_obj_t* layer = firstBuild ? makeProgramLayer(app) : app->root();
     if (firstBuild) app->_setRoot(layer);
@@ -448,7 +449,7 @@ void shellEvictApp(LcdApp* app) { shellStopApp(app); }
 /* ---- lcd.h free functions: act on the foreground app ---- */
 
 void lcdShowProgram(const char* name) {
-    if (LcdApp* a = shellFindApp(name)) shellOpenApp(a);
+    if (LcdApp* a = shellFindApp(name)) shellOpenApp(a, ShowFrom::PROGRAM);
 }
 
 void lcdGoHomeInternal(void)      { shellNavigate(NavIntent::HOME); }

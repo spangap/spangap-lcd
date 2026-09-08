@@ -115,7 +115,7 @@ void onCardReleased(lv_event_t* e) {
     /* A still tap (no scroll, no drag) -> switch to the app. */
     if (realRelease && !wandered) {
         shellRecentsHide();
-        if (app) shellOpenApp(app);
+        if (app) shellOpenApp(app, ShowFrom::RECENTS);
         return;
     }
     /* Scroll, short drag, or lost press -> snap back. */

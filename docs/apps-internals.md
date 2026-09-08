@@ -37,7 +37,7 @@ The lifecycle maps onto the shell points (see shell-internals §4):
 | Method | Called when |
 |---|---|
 | `onCreate(root)` | first open (lazy build into the freshly made program layer) |
-| `onShow()` | every open after build (foreground raise) |
+| `onShow()` | every open after build (foreground raise); `shownFrom()` names the producer — LAUNCHER / RECENTS / PROGRAM |
 | `onHide()` | sent to background (another app opened, or Home slide-up completes) |
 | `onBack()` | a BACK intent reached the foreground app |
 | `onClose()` | a stop or eviction — before the ledger + root are freed |

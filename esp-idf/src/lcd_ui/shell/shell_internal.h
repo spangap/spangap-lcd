@@ -24,8 +24,9 @@ void shellInit(lv_obj_t* screen);
 void shellNavigate(NavIntent intent);
 
 /** Bring `app` to the foreground (lazy onCreate, then onShow, raise, restore
- *  focus). The launcher tile click and lcdShowProgram() call this. */
-void shellOpenApp(LcdApp* app);
+ *  focus). The launcher tile click, the recents switch and lcdShowProgram() all
+ *  call this; `from` is what the app reads back in onShow() via shownFrom(). */
+void shellOpenApp(LcdApp* app, ShowFrom from);
 
 /** The app currently in the foreground, or nullptr at the launcher/recents. */
 LcdApp* shellForeground(void);
