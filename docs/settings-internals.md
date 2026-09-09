@@ -134,7 +134,7 @@ reads as an end rather than as content cut off at the edge of the glass.
   — `lcdSettingsNotice` puts the range on screen and the field goes back to what
   is stored, because clamping writes something nobody typed and does it
   silently. This is the one place a pane row validates at all; a form's values
-  are still judged by the sentinel handler.
+  are still judged by the command key handler.
 - **Ipv4** — the Text row with `lv_textarea_set_accepted_chars` down to digits
   and dots, and `lcdSettingsIpv4Ok` on commit. Empty passes: an address left
   blank is unset, which is how a fixed IP is handed back to DHCP, so the check
@@ -226,7 +226,7 @@ reads as an end rather than as content cut off at the edge of the glass.
 Simple rows stay CALLS (that is what a hand-written pane writes, and the two
 should be indistinguishable); anything richer is DATA. `lcd_settings_desc.h`
 declares the structs, this file is the single place that knows what "confirm
-then write a key", "collect fields and submit them to a sentinel" or "list an
+then write a key", "collect fields and submit them to a command key" or "list an
 array with an editor" mean. Generating data instead of logic keeps the generated
 dispatch file small and puts the behaviour somewhere reviewable — the same
 argument that chose a runtime-interpreted descriptor over generated Vue
@@ -255,7 +255,7 @@ components on the web side.
   the key's owner independent of one another.
 - **Forms** hold their values locally and reach the device only on submit, which
   is what makes submit-and-error possible in place of per-keystroke validation.
-  One form is open at a time. The handler answers on the sentinel family's
+  One form is open at a time. The handler answers on the command key family's
   error/ack pair (a collection hands its forms the shared `<cmd>.error` /
   `<cmd>.done`; a bare form derives `<form-cmd>.error` / `.done`): the error key
   going non-empty shows the reason and keeps the form open, the ack key moving

@@ -10,7 +10,7 @@ shell state machine that drives these calls is in
 - **`LcdApp`** ([lcd_app.h](../esp-idf/include/lcd_app.h)) — the base class. It is
   a boot-registered `Service` (service.h): the UI lifecycle virtuals
   (`onCreate`/`onShow`/`onHide`/`onBack`/`onClose`) plus a `Config`, the per-app
-  service methods, the resource ledger, and shell-private accessors (the
+  service methods, the resource table, and shell-private accessors (the
   `_`-prefixed ones). Its **boot** lifecycle is fixed: `onInit()` is `final` — it
   hops onto the lcd task and calls `lcdInstall(this)`, so a straddle installs an
   app purely by listing the class in `services:` (no install hook). App-level boot
@@ -64,7 +64,7 @@ until reboot re-zeroes the static. **Reset such guards in the fresh-open path**
 (where the rest of the per-session state is reset), not just on the DELETE.
 Apps that rebuild unconditionally on open (Maps, Viewer, Nomad) are immune.
 
-## 3. The resource ledger
+## 3. The resource table (what the app allocated)
 
 Timers and animations have no LVGL owner, so a closed app would leak them.
 `timer()` records every `lv_timer_t*`; `anim()` returns a tracked zeroed scratch

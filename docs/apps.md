@@ -88,7 +88,7 @@ Every method runs on the lcd task. The shell calls them at these points:
 - **`onBack()`** — a Back navigation arrived; return `true` if handled, `false`
   to let it fall through to Home (the default).
 - **`onClose()`** — the app is being stopped or evicted. Tear down external
-  resources here (close connections, drop handles); the resource ledger and the
+  resources here (close connections, drop handles); the resource table and the
   root tree are freed for you afterward, and the next open rebuilds from
   `onCreate`. It fires for **both** a user stop (recents swipe-up, self-stop) and
   a memory-pressure eviction, so it must not assume the app is going away for
@@ -166,7 +166,7 @@ example: its Micron page renderer keeps a user-steppable ladder of
 control) while its chrome font is `lcdFont(LcdFace::UI, 14 × lcdUiScale())`,
 re-resolved at the top of every rebuild.
 
-## Resource ledger
+## Resource table
 
 Timers and animations live in LVGL globals with no owner, so a closed app would
 leak them. Create them through the app and the shell frees them on eviction:

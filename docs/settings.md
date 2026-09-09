@@ -65,8 +65,8 @@ counter, a formatted percentage) is written to an ephemeral key ready to render.
 A gate key is published truthy or empty, because `lcdSettingWhenKey` tests
 truthiness and never equality.
 
-**The firmware validates in sentinel handlers.** A form submits its fields as
-JSON to a command key; the owning task validates and answers on the sentinel
+**The firmware validates in command key handlers.** A form submits its fields as
+JSON to a command key; the owning task validates and answers on the command key
 family's shared keys: a rejection is a human-readable reason on `<cmd>.error`
 (the form shows it and stays open), an accepted mutation bumps `<cmd>.done`
 (the form closes — an edit that changes nothing still acks). There is no
@@ -205,7 +205,7 @@ puts a button in front of it:
   it** whatever its own buttons are doing (see [shell](shell.md#getting-out-of-a-dialog)).
   The form and the two editors pass their own closer, because the escape has to
   drop their subscriptions and must never commit a half-typed value.
-- **form** — the one dialog with inputs, because it fronts a sentinel. Fields
+- **form** — the one dialog with inputs, because it fronts a command key. Fields
   are ordinary rows carrying `field` instead of `key`; values live in a local
   buffer and reach the device as one JSON object on submit. On a board with a
   physical keyboard the fields are inline textareas, otherwise tapping one opens
@@ -213,7 +213,7 @@ puts a button in front of it:
   `lcdHasKeyboard()` any more.
 
   **Nothing a form shows is on the device until Save.** Typing fills the local
-  buffer and no more; Save serializes it to the sentinel and the owning task
+  buffer and no more; Save serializes it to the command key and the owning task
   either rejects it (a sentence appears, the form stays open) or accepts it (the
   form closes). Cancel discards the buffer. That is the whole reason a form is
   the only dialog with inputs — a pane row writes its key the instant you touch
