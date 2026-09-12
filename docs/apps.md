@@ -70,6 +70,11 @@ ordinary straddle app never calls it directly.
 (`navBar` and `fullscreen` also exist in `Config` but are not yet consumed —
 request fullscreen at runtime with `setFullscreen()` instead.)
 
+There is no position field, deliberately: where a tile sits is a statement about
+the image as a whole, so the straddle being built states the launcher's order by
+`name` (`CONFIG_LCD_LAUNCHER_ORDER`, see [shell.md](shell.md)) and the operator
+overrides it by dragging. An app with no opinion to declare needs none.
+
 ## The lifecycle
 
 Every method runs on the lcd task. The shell calls them at these points:

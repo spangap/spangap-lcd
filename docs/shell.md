@@ -48,11 +48,31 @@ The shell shows exactly one of three screens at a time:
 
   **The order key.** `s.lcd.launcher_order` is a comma-separated list of app
   names (`Config::name`) — writable by hand over the CLI or the browser, and the
-  grid re-sorts live. It is a preference, not the roster: an app the key doesn't
-  name keeps its install position after the named ones, so a straddle added since
-  the last rearrange lands at the end rather than jumping the queue, and a name
-  for an app that isn't installed is ignored. Empty (the default) is install
-  order.
+  grid re-sorts live. It is a preference, not the roster: a name for an app that
+  isn't installed is ignored, and an app the key doesn't name is placed by the
+  build's order below.
+
+  **The build's order.** The straddle being built states the order its image
+  opens on, as `app_order: [LXMF, Nomad, Maps]` in its straddle.yaml — which the
+  build hands the firmware as `CONFIG_LCD_LAUNCHER_ORDER` (the comma-separated
+  form this reads) and the browser's dock as its own order, so a device offers
+  its apps the same way on both surfaces. Which apps ship together — and which of
+  them an operator reaches for first — is a property of the image rather than of
+  any one app, so the buildable says it and no app claims a position for itself.
+  Left unset, the tiles sit in the order the apps install in, which follows the
+  dependency graph.
+
+  Because that one list spans both surfaces, an entry matches an app by its
+  `Config::name` **or** its icon basename, case-insensitively — the two surfaces
+  do not always label the same app identically, and the icon name is what they
+  share. An entry naming nothing installed is simply ignored, which is how the
+  browser's own apps can sit in the same list.
+
+  It sits *under* the key rather than seeding it: an app the operator's order
+  doesn't name is placed from here, after everything that order does name, and
+  only an app named in neither falls back to install position. So a device that
+  has been rearranged still puts an app arriving with a later build where the
+  build asked instead of at the end — and a drag wins over both.
 - **App** — one app's full-screen layer, below the status bar (or reclaiming it
   when the app is fullscreen). Opening another app hides this one; it keeps
   running in the background and re-opening resumes it exactly as left.

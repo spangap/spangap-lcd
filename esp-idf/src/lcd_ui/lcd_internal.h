@@ -97,12 +97,26 @@ void        lcdMirrorApplyHold(void);
 /** True while the screen is in standby (lcdScreenSleep). The lcd loop skips
  *  rendering and sleeps until input while this holds. */
 bool        lcdScreenIsOff(void);
-/** Set the backlight target (s.lcd.backlight). Applied at once while awake and past
- *  the boot reveal; otherwise remembered for the next fade-in. */
+/** Set the backlight target (s.lcd.backlight). Applied at once while awake and once
+ *  the panel is lit (the boot splash); otherwise remembered for the next fade-in. */
 void        lcdBacklightSetTarget(uint8_t level);
-/** Nudge the one-shot boot reveal: the backlight is held dark from boot and fades
- *  up once launcher icon loads go quiet (or a hard cap fires). Called as icons land. */
+/** Nudge the one-shot boot reveal: the boot splash (splash.cpp) holds the screen
+ *  until the boot walk is done AND launcher icon loads go quiet — or a hard cap
+ *  fires. Called as icons land. */
 void        lcdBootSettleKick(void);
+/** The boot walk finished (sys.boot_complete): every straddle has had its chance
+ *  to install a tile, so the reveal may now happen once the icons go quiet. */
+void        lcdBootWalkDone(void);
+/** The boot splash is built: paint it and bring the backlight up on it. Called by
+ *  lcdSplashShow, which is the only caller that should. */
+void        lcdBootSplashLit(void);
+
+/** The boot splash — the firmware's name over "Loading...", covering the shell
+ *  while it assembles (splash.cpp). Shown before the shell is built; dismissed by
+ *  the boot reveal, which is what decides the launcher is worth looking at. */
+void        lcdSplashShow(void);
+bool        lcdSplashActive(void);
+void        lcdSplashDismiss(void);
 /** Focus group for non-pointer indevs (encoder/keypad). Launcher icons join
  *  it so a trackball-only board navigates the same UI. */
 lv_group_t* lcdInputGroup(void);

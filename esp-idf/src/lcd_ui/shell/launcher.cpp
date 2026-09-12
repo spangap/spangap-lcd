@@ -12,7 +12,9 @@
  * icon tilts back and forth through five stops between -20° and +20° at 10 fps
  * (slow on purpose — SPI), bar the one being held. In edit mode a tile is picked
  * up the moment it moves, dragging anywhere else scrolls the grid, and any tap
- * leaves edit mode. The order the tiles sit in is `s.lcd.launcher_order`.
+ * leaves edit mode. The order the tiles sit in is `s.lcd.launcher_order` over the
+ * image's own app order (CONFIG_LCD_LAUNCHER_ORDER, which the browser's dock
+ * reads too).
  *
  * Tiles are added by shellLauncherAddTile(), called from lcdInstall()
  * (lcd_app.cpp) for every installed LcdApp.
@@ -22,12 +24,14 @@
 #include "lcd_internal.h"   /* lcdScreenW/H, lcdInputGroup, lcdIcon* */
 #include "storage.h"
 #include "log.h"
+#include "sdkconfig.h"      /* CONFIG_LCD_LAUNCHER_ORDER — the build's tile order */
 
 #include <algorithm>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>        /* strncasecmp — order fields match either case */
 #include <string>
 #include <vector>
 
@@ -87,15 +91,30 @@ Grid gridFor() {
  * the order the tiles sit. A drag writes it; a hand-edit over the CLI or the
  * browser re-sorts the grid the same way.
  *
- * It is a *preference*, not the roster: an app the key doesn't name keeps its
- * install position, after the named ones, so a straddle added since the last
- * drag lands at the end instead of jumping the queue; a name for an app that
- * isn't installed is ignored. Names come from string literals in app code, so
- * they carry no commas of their own. */
+ * It is a *preference*, not the roster: a name for an app that isn't installed
+ * is ignored. Names come from string literals in app code, so they carry no
+ * commas of their own.
+ *
+ * Under it sits the build's own order, CONFIG_LCD_LAUNCHER_ORDER, in the same
+ * comma-separated form: the buildable straddle states which of the apps it
+ * assembled the operator meets first, so a fresh device opens on a considered
+ * screen rather than on the dependency graph's install order. An app the
+ * operator's key doesn't name is placed from there, after everything the key
+ * does name — so an app that arrives with a later build lands where the build
+ * asked even on a device that has been rearranged — and only an app named in
+ * neither falls back to install order.
+ *
+ * A field in either list matches an app by its `name` or its `iconBasename`,
+ * case-insensitively. The build's list is the SAME list the browser's dock reads
+ * (the build writes both from one `app_order:`), and the two surfaces do not
+ * always label an app identically — the icon basename is the name they do share,
+ * so one field can reach the app on both. A field naming nothing installed is
+ * ignored, which is how one list can also carry apps this surface hasn't got. */
 constexpr const char* kOrderKey = "s.lcd.launcher_order";
+constexpr const char* kOrderBuild = CONFIG_LCD_LAUNCHER_ORDER;
 
-/* Position of `name` among the key's comma-separated fields, or -1. Whole fields
- * only, so "Log" does not match inside "Logbook". */
+/* Position of `name` among the list's comma-separated fields, or -1. Whole
+ * fields only, so "Log" does not match inside "Logbook". */
 int rankIn(const char* order, const char* name) {
     if (!name || !*name) return -1;
     size_t nlen = strlen(name);
@@ -103,14 +122,30 @@ int rankIn(const char* order, const char* name) {
     for (const char* p = order; *p; idx++) {
         const char* end = strchr(p, ',');
         size_t flen = end ? (size_t)(end - p) : strlen(p);
-        if (flen == nlen && strncmp(p, name, nlen) == 0) return idx;
+        if (flen == nlen && strncasecmp(p, name, nlen) == 0) return idx;
         if (!end) break;
         p = end + 1;
     }
     return -1;
 }
 
-/* Sort the grid's children to match the key. Only ever moves children, so the
+/* Position of an app in one list: either of the names it answers to, or -1. */
+int rankAppIn(const char* order, const LcdApp* app) {
+    int r = rankIn(order, app->cfg().name);
+    return r >= 0 ? r : rankIn(order, app->cfg().iconBasename);
+}
+
+/* Rank across both lists: the operator's order first, then the build's below it
+ * (offset past any position the key could hold), then install order. */
+constexpr int kBuildTier = 1 << 16;
+int rankOf(const char* order, const LcdApp* app) {
+    int r = rankAppIn(order, app);
+    if (r >= 0) return r;
+    r = rankAppIn(kOrderBuild, app);
+    return r >= 0 ? kBuildTier + r : INT_MAX;
+}
+
+/* Sort the grid's children to match the lists. Only ever moves children, so the
  * write a drop makes lands back here through the subscription and sorts to the
  * order already on screen — it settles rather than loops. */
 void applyOrder() {
@@ -121,11 +156,9 @@ void applyOrder() {
     std::vector<const Tile*> want;
     want.reserve(s_tiles.size());
     for (auto& t : s_tiles) if (t.tile) want.push_back(&t);
-    /* Stable, and unnamed apps all rank last, so they keep install order. */
+    /* Stable, and an app neither list names ranks last, so it keeps install order. */
     std::stable_sort(want.begin(), want.end(), [&order](const Tile* a, const Tile* b) {
-        int ra = rankIn(order, a->app->cfg().name);
-        int rb = rankIn(order, b->app->cfg().name);
-        return (ra < 0 ? INT_MAX : ra) < (rb < 0 ? INT_MAX : rb);
+        return rankOf(order, a->app) < rankOf(order, b->app);
     });
     for (size_t i = 0; i < want.size(); i++)
         lv_obj_move_to_index(want[i]->tile, (int32_t)i);

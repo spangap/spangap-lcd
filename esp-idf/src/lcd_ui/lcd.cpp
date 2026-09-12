@@ -135,6 +135,13 @@ static void lcdTaskFn(void*) {
     lcdFontsInit();      /* bring up the font engine before the shell resolves fonts */
     lcdIconsInit();
 
+    /* The boot splash goes up FIRST and the panel lights on it: everything below
+     * this — the shell, the tiles each straddle installs from its own onInit, the
+     * icons rasterized as they land — assembles behind it, and the operator sees
+     * the device's name and "Loading..." rather than a dark panel or a launcher
+     * filling in. Dismissed by the boot reveal in lcd_lvgl.cpp. */
+    lcdSplashShow();
+
     lv_obj_t* scr = lv_screen_active();
     /* The phone-style shell: status bar + launcher + LcdApp lifecycle.
      * Installs the built-in Settings/Log/CLI apps; other straddles install their
@@ -153,9 +160,15 @@ static void lcdTaskFn(void*) {
      * light sleep (board HAL clocks it from RC_FAST with LEDC keep-alive). The
      * device can light-sleep with the screen on. */
 
-    /* Live config. Backlight target applies on this task (held dark until the boot
-     * reveal). Icons are rasterized on demand at the tile size. */
+    /* Live config. Backlight target applies on this task (remembered rather than
+     * applied until the splash lights the panel). Icons are rasterized on demand
+     * at the tile size. */
     NOW_AND_ON_CHANGE("s.lcd.backlight", { lcdBacklightSetTarget((uint8_t)atoi(val)); });
+    /* The end of the boot walk (spangap-core publishes it once every straddle's
+     * onInit has run) is half of what the splash waits for: only then has every
+     * app that is going to install a tile installed it. The other half is the
+     * icon loads going quiet. */
+    NOW_AND_ON_CHANGE("sys.boot_complete", { if (atoi(val)) lcdBootWalkDone(); });
     /* UI zoom is read once, by lcdStyleBegin, when the shell is built. A change
      * restarts the device: the scale sizes every font, icon, tile and pane the
      * shell has already laid out, and the rows the setting is being changed from

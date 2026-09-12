@@ -17,7 +17,8 @@ display/LVGL/task foundation in `src/lcd_ui/`:
   straddle's `lcd/` slice calls from outside an `LcdApp` method.
 - **launcher.cpp** — the scrolling icon grid (one vertical flex-wrap container
   with a hairline scrollbar), `shellLauncherAddTile`, drag-to-reorder over
-  `s.lcd.launcher_order`, the edit-mode wiggle, and the icon-loaded hook.
+  `s.lcd.launcher_order` above the build's `CONFIG_LCD_LAUNCHER_ORDER`, the
+  edit-mode wiggle, and the icon-loaded hook.
 - **statusbar.cpp** — the opaque top bar renderer (clock/wifi/upstream/battery),
   all event-driven off storage subscriptions. `lcdStatusbarAddIndicator()` hands
   a straddle a bare, content-width flex slot in the right-hand cluster, inserted
@@ -306,6 +307,15 @@ board's back would swallow the next timeout expiry outright. The backlight is he
 from boot and faded up only once launcher icon loads go quiet (`lcdBootSettleKick`,
 debounced with a hard cap), so the UI never flashes on half-built.
 
+Every duty goes through one function, `blApply()` — `lcdPanelBacklight` plus the
+`s_blCur` store plus the optional follower registered by `lcdBacklightOnChange`.
+A board with a lamp of its own (a lit keyboard) registers there and scales what it
+gets by `lcdBacklightTarget()`, which is why the follower is fed the live duty and
+not the ratio: the ratio is the part it wants, but the division is its own, and
+the same hook serves a board that wants the absolute number. Registering calls
+back at once, so the order of bring-up between the lcd task's input init and the
+first fade doesn't matter.
+
 ## 9. Fonts: the (face, px) engine (lcd_fonts.cpp, foundation)
 
 `lcdFont(LcdFace, px)` (public, `lcd.h`) is the one wrapper; everything
@@ -424,13 +434,22 @@ not a capacity: the grid is one flex-wrap container and takes any number of
 tiles. Tiles are flex-column buttons (icon over label); `cols`/`tileW`/`tileH`
 still exist in the sheet but the derived grid is what renders.
 
-**Tile order.** `s.lcd.launcher_order` is a comma-separated list of
-`Config::name`. `applyOrder()` reads it, `std::stable_sort`s a vector of tile
-records by each app's position in it (unnamed apps all rank `INT_MAX`, so
-stability leaves them in install order after the named ones), and realizes the
+**Tile order.** `s.lcd.launcher_order` and `CONFIG_LCD_LAUNCHER_ORDER` are both
+comma-separated lists of `Config::name` — the operator's order and the buildable
+straddle's. `rankOf()` reads a tile's position out of the first, else out of the
+second plus `kBuildTier` (1 << 16, past any position the key could hold), else
+`INT_MAX`. `applyOrder()` `std::stable_sort`s a vector of tile records by that
+rank — so apps neither list names keep install order, last — and realizes the
 permutation with `lv_obj_move_to_index(tile, i)` for ascending `i`. Every tile
 add ends in `applyOrder()`, so incremental installation still lands each tile
-where the key wants it without a separate insert-position path.
+where the lists want it without a separate insert-position path.
+
+The two lists are read on every sort rather than the build's being seeded into
+the key at first boot, which is what lets a build change reach a device that has
+already been rearranged: `saveOrder()` writes only the apps installed at the time
+of the drag (and only what fits its 256-byte buffer), so an app that arrives with
+a later image is unnamed in the key and takes the build's position instead of
+falling to the end.
 
 The key is live (`NOW_AND_ON_CHANGE`), which also absorbs the write a drop makes:
 `applyOrder()` only moves children, so the change notification for our own

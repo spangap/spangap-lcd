@@ -156,6 +156,7 @@ is also why there is no RGB entry in the controller choice.
 | `LCD_UI_SCALE_DEFAULT` | `100` | The shipped value of `s.lcd.scale`. One number scales the whole shell — every length through `lcdPx()`, every font token through the stylesheet — so it is a statement about the GLASS, not the pixel count: a panel of the same physical size at twice the density wants ~200 to feel identical, and less to trade size for content. |
 | `LCD_DRAW_STRIP_KB` | `8` | KB of internal DMA RAM rendered and sent per SPI transfer — the size of a repaint step, and so how visible a repaint is. Bounded by internal DMA RAM, which the SPI driver also allocates from at awkward moments; bring-up halves this until a reserve is still left standing. Never above the bus ceiling `SPANGAP_SPI_MAX_TRANSFER`. |
 | `LCD_WAKE_ON_TOUCH_DEFAULT` | `n` | The shipped value of `s.lcd.wake_on_touch` (below). A property of the case, so the board states it: `n` for a deck carried in a pocket, `y` for a handheld whose button is round the back. |
+| `LCD_LAUNCHER_ORDER` | `""` | The order the launcher's tiles sit in on a device nobody has rearranged, as a comma-separated list of app names (`"LXMF,Nomad,Maps"`). Not written by hand: it is what the build lowers the buildable's straddle.yaml `app_order:` to, the same list the browser's dock reads — which apps ship together is a property of the image, not of any one app. Empty means the order the apps install in. It is the floor under `s.lcd.launcher_order` rather than its seed, so an app added by a later build lands where this says even on a device whose icons have been dragged. An entry matches an app by its name or its icon basename, either case (see [docs/shell.md](docs/shell.md)). |
 | `LCD_SETTINGS_MARQUEE` | `y` | In Settings, a long read-only value scrolls horizontally on keypad focus instead of wrapping (see [docs/settings.md](docs/settings.md)). |
 
 **Taps are events, not a state that gets sampled.** The controller is read by a
@@ -288,6 +289,18 @@ non-scroll content register their own pan handler — see [docs/apps.md](docs/ap
 applies it on the lcd task, so writing the key directly (browser, CLI) has the
 identical effect.
 
+**The boot splash.** The panel comes up on the firmware's name
+(`CONFIG_SPANGAP_FW_NAME`) over "Loading...", centred on an opaque layer, and
+holds it until the device is assembled: the screen lights on the splash, not on a
+launcher that is still filling in. Two things have to happen before it goes — the
+boot walk must be complete (`sys.boot_complete`, so every straddle has had its
+chance to install a tile) and the launcher's icon loads must have gone quiet —
+after which it fades out in 250 ms onto a finished launcher. A 20 s cap dismisses
+it regardless, so a straddle that never finishes its init leaves an operator with
+a device rather than a word. It lives on the system layer (above the status bar,
+the keyboard preload and the safe-mode screen alike) and swallows touches, since
+there is nothing behind it yet to touch.
+
 The timeout runs in **two stages**. After `s.lcd.inactivity_timeout` seconds with
 no input the backlight drops to 20/255 (or half the configured level, if that is
 already dimmer) — the screen is still on and still usable,
@@ -303,6 +316,17 @@ and calls `lcdScreenSleep()` / `lcdScreenWake()` (backlight off + panel display
 off, GRAM retained for an instant fade-in wake) and powers its own input
 down/up. The board's button sets/clears the same key, so timeout and button
 share one path.
+
+**A second lamp can ride along.** `lcdBacklightOnChange(cb)` hands a board every
+duty the panel backlight takes — boot reveal, wake fade, dim step, fade to dark —
+and calls back once as it is registered, so a follower coming up late starts in
+step. `lcdBacklightTarget()` is the configured on-level to divide by: the ratio is
+the part worth following, since the screen's own brightness setting belongs to the
+screen. One follower; registering again replaces it. Both are lcd task. This is
+for a board whose hardware carries a light of its own — a lit keyboard, a lit
+bezel — that should read as part of the same screen, not for anything that merely
+wants to know the screen is awake (`sys.standby` says that, and says it to
+everyone).
 
 `lcdScreenWake()` also reports `humanDetected("screen")` to core: a screen only
 leaves standby because a touch, button, or key asked it to, which makes it the
@@ -326,6 +350,7 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | `s.lcd.scale` | board (`LCD_UI_SCALE_DEFAULT`) | UI zoom in percent, clamped 50–250; read when the shell is built, so a change restarts the device (see [docs/shell.md](docs/shell.md#ui-zoom)). |
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before the backlight drops right down; `sys.standby` follows 10 s later. `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
+| `s.lcd.launcher_order` | `""` | The launcher's tile order, a comma-separated list of app names — written by dragging an icon in the grid's edit mode, editable by hand, re-sorts live. An app it doesn't name takes its place from the build's `LCD_LAUNCHER_ORDER`, and only then from install order. |
 | `s.lcd.wake_on_touch` | board (`LCD_WAKE_ON_TOUCH_DEFAULT`) | Whether the glass wakes the device from standby, as the board's button does. Seeded only where there is touch to wake with (this controller's or a board HAL's); read fresh at each standby, which is when the INT is armed as a light-sleep wake source. The waking finger is swallowed — it wakes and does nothing else. |
 | `s.lcd.touch_sens` | `50` | How light a touch registers, 0..100 (higher = lighter), applied live. FT5x06 only — it is that part's `ID_G_THGROUP` threshold, mapped `120 - sens`, so 50 is the value its driver writes at init. Seeded and offered only where that controller is selected. |
 | `sys.standby` | — | Ephemeral. Set by the component on inactivity, set/cleared by the board's button; the board acts on it. |

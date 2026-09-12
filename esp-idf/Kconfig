@@ -500,6 +500,27 @@ config LCD_UI_SCALE_DEFAULT
         size for content — the Waveshare 2.8B ships 150. Set it from the pixel
         pitch, then look at the thing.
 
+# ─── launcher ───────────────────────────────────────────────────────────────
+config LCD_LAUNCHER_ORDER
+    string "Default launcher icon order (comma-separated app names)"
+    default ""
+    help
+        The order the launcher tiles sit in on a device nobody has rearranged,
+        as a comma-separated list of LcdApp::Config::name — "LXMF,Nomad,Maps".
+        Empty means the order the apps install in, which is a fact about the
+        dependency graph rather than a decision anyone made.
+
+        This belongs to the straddle being BUILT: which apps ship together, and
+        which of them the operator reaches for first, is a property of the image
+        rather than of any one app, so the buildable states it in its `kconfig:`
+        block and no app gets to claim a position for itself.
+
+        It is the floor under s.lcd.launcher_order, not a seed for it: a name the
+        operator's own order doesn't carry is placed from here, and only an app
+        named in neither falls back to install order. So an app added by a later
+        build lands where this says even on a device that has already been
+        rearranged, and dragging an icon still wins over everything.
+
 # ─── settings UI ────────────────────────────────────────────────────────────
 config LCD_SETTINGS_MARQUEE
     bool "Marquee long settings values on focus"

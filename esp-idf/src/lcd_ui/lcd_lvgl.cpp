@@ -494,9 +494,12 @@ void lcdPointerSetVisibleMs(int ms) {
  * sets/clears the same key, so the timeout and the button share one path. While
  * asleep the lcd loop stops rendering so the chip can light-sleep.
  *
- * The backlight is faded (not snapped) on wake and on the one-shot boot reveal, and
- * is held dark from boot until the launcher has settled with its icons placed — so
- * the UI never flashes on half-built. lcdScreenSleep snaps it to 0 (dark fast). */
+ * The backlight is faded (not snapped) on wake and on the one-shot boot reveal.
+ * It is held dark from boot only until the splash (splash.cpp) is on the glass:
+ * the panel lights on THAT, and the launcher is uncovered later, once the boot
+ * walk is done and its icons have settled — so the UI is never seen half-built,
+ * and a slow boot says so instead of looking dead. lcdScreenSleep snaps the
+ * backlight to 0 (dark fast). */
 static constexpr uint32_t kDimGraceMs = 10000;   /* dimmed -> asleep */
 static constexpr uint32_t kDimFadeMs  = 400;     /* the dim itself: slow enough to notice */
 static constexpr int32_t  kDimLevel   = 20;      /* backlight duty while dimmed (of 255) */
@@ -519,11 +522,26 @@ static bool        s_fadingOut  = false;   /* backlight ramping down; still rend
  * the live duty an lv_anim eases toward it (starts dark — backlightInit duty 0). */
 static uint8_t     s_blTarget   = 200;
 static int32_t     s_blCur      = 0;
-static bool        s_booted     = false;   /* boot reveal done (backlight allowed up) */
+static bool        s_booted     = false;   /* boot reveal done (splash gone) */
+static bool        s_blLive     = false;   /* backlight tracks the setting (lit at the splash) */
+static bool        s_walkDone   = false;   /* sys.boot_complete: every tile had its chance */
 static lv_timer_t* s_settle     = nullptr; /* debounce: reveal once icon loads quiesce */
 static lv_timer_t* s_revealCap  = nullptr; /* hard cap so boot always reveals */
 
-static void blAnimExec(void* var, int32_t v) { (void)var; lcdPanelBacklight((uint8_t)v); s_blCur = v; }
+/* A board with a lamp of its own to keep in step with the screen (lcdBacklightOnChange). */
+static void (*s_blFollow)(uint8_t) = nullptr;
+
+/* The single place the panel duty is applied, so a follower is told about every
+ * change — the boot reveal, the wake fade, the dim step, the fade to dark. */
+static void blApply(int32_t v) {
+    if (v < 0)   v = 0;
+    if (v > 255) v = 255;
+    lcdPanelBacklight((uint8_t)v);
+    s_blCur = v;
+    if (s_blFollow) s_blFollow((uint8_t)v);
+}
+
+static void blAnimExec(void* var, int32_t v) { (void)var; blApply(v); }
 
 static void backlightFadeTo(int32_t level, uint32_t ms, lv_anim_completed_cb_t done = nullptr) {
     lv_anim_delete(&s_blCur, blAnimExec);
@@ -550,14 +568,39 @@ static int32_t dimLevel(void) {
 
 void lcdBacklightSetTarget(uint8_t level) {
     s_blTarget = level;
-    /* Live slider change: apply at once while awake and past the boot reveal;
-     * before the reveal (or while asleep) just remember it — the fade-in uses it. */
-    if (s_booted && !s_screenOff) {
+    /* Live slider change: apply at once while awake and once the panel is lit;
+     * before that (or while asleep) just remember it — the fade-in uses it. */
+    if (s_blLive && !s_screenOff) {
         lv_anim_delete(&s_blCur, blAnimExec);
-        int32_t now = s_dimmed ? dimLevel() : (int32_t)level;
-        lcdPanelBacklight((uint8_t)now);
-        s_blCur = now;
+        blApply(s_dimmed ? dimLevel() : (int32_t)level);
     }
+}
+
+/* A second lamp follows the screen. The duty handed over is the live one — the
+ * follower divides by lcdBacklightTarget() to get the ratio, so it dims when the
+ * screen dims and goes out when the screen does, without inheriting the screen's
+ * own brightness setting. Registering calls back at once with the current duty,
+ * so a follower coming up late starts in step. Lcd task, both ways. */
+void lcdBacklightOnChange(void (*cb)(uint8_t duty)) {
+    s_blFollow = cb;
+    if (cb) cb((uint8_t)s_blCur);
+}
+
+uint8_t lcdBacklightTarget(void) { return s_blTarget; }
+
+/* The panel lights on the splash, not on the launcher: as soon as splash.cpp has
+ * built it, paint that frame and fade the backlight up on it. From here the
+ * backlight is live — a change to s.lcd.backlight applies while the splash is up
+ * exactly as it does afterwards. */
+void lcdBootSplashLit(void) {
+    if (s_blLive || s_screenOff) return;
+    s_blLive = true;
+    lv_refr_now(s_disp);          /* the splash is on the glass BEFORE any light */
+    /* Snapped, not faded: the lcd loop that drives an animation has not started
+     * yet — the shell and the keyboard preload still run between here and it — so
+     * a fade would sit at zero through exactly the stretch it is meant to cover.
+     * Dark to lit in one step is what a screen coming on looks like anyway. */
+    blApply(s_blTarget);
 }
 
 static void bootReveal(void) {
@@ -565,17 +608,44 @@ static void bootReveal(void) {
     s_booted = true;
     if (s_settle)    { lv_timer_delete(s_settle);    s_settle = nullptr; }
     if (s_revealCap) { lv_timer_delete(s_revealCap); s_revealCap = nullptr; }
-    if (!s_screenOff) backlightFadeTo(s_blTarget, 300);
+    /* Ordinarily the screen is already lit and the splash is what goes — and it
+     * goes even if the device reached standby first, so waking never lands back
+     * on it. A board that never got a splash up (an early failure) gets the bare
+     * backlight fade instead, so a boot still ends on a visible screen either
+     * way. */
+    if (lcdSplashActive()) {
+        lcdSplashDismiss();
+    } else if (!s_blLive && !s_screenOff) {
+        s_blLive = true;
+        backlightFadeTo(s_blTarget, 300);
+    }
 }
 
-/* Each launcher icon that lands pushes the reveal out a little; when the loads go
- * quiet the screen lights with everything already placed. lcdLvglInit arms a hard
- * cap so a board with no icons (or a stuck loader) still reveals. */
+/* What the splash waits for. Two conditions, because either alone reveals too
+ * early: the boot walk must be done (a straddle that inits late has had its
+ * chance to install a tile) AND the icon loads must have gone quiet (each icon
+ * that lands pushes this out, so the launcher is complete when it is first seen).
+ * lcdLvglInit arms a hard cap in case one of them never arrives. */
+static void revealWhenReady(void) {
+    if (s_booted || !s_walkDone) return;
+    bootReveal();
+}
+
 void lcdBootSettleKick(void) {
     if (s_booted) return;
     if (s_settle) { lv_timer_reset(s_settle); return; }
-    s_settle = lv_timer_create([](lv_timer_t*) { s_settle = nullptr; bootReveal(); }, 200, nullptr);
+    s_settle = lv_timer_create([](lv_timer_t*) { s_settle = nullptr; revealWhenReady(); },
+                               200, nullptr);
     lv_timer_set_repeat_count(s_settle, 1);
+}
+
+void lcdBootWalkDone(void) {
+    if (s_booted || s_walkDone) return;
+    s_walkDone = true;
+    /* Whatever icons are still in flight keep pushing the settle out; if none
+     * are, this is the last thing the reveal was waiting for. */
+    if (s_settle) return;
+    lcdBootSettleKick();
 }
 
 /* Stage two: the grace window ran out with nobody there. */
@@ -927,10 +997,13 @@ bool lcdLvglInit(void) {
      * indev joined to s_group via lcdInputGroup()) — see lcdSetHasKeyboard() and
      * reticulous/main/tdeck.cpp. The lcd component creates no keyboard indev. */
 
-    /* Boot reveal hard cap: the backlight stays dark until the launcher settles
-     * (lcdBootSettleKick as icons land), but light it regardless after this so a
-     * board with no icons or a stuck loader never boots to a black screen. */
-    s_revealCap = lv_timer_create([](lv_timer_t*) { s_revealCap = nullptr; bootReveal(); }, 3000, nullptr);
+    /* Boot reveal hard cap: the splash holds the screen until the boot walk is
+     * done and the launcher settles, but it goes regardless after this — so a
+     * straddle that never finishes its init, or a stuck icon loader, leaves the
+     * operator with a device to use rather than "Loading..." forever. Generous,
+     * because unlike a dark screen the splash is not itself a fault: a boot that
+     * genuinely takes this long should look like one. */
+    s_revealCap = lv_timer_create([](lv_timer_t*) { s_revealCap = nullptr; bootReveal(); }, 20000, nullptr);
     lv_timer_set_repeat_count(s_revealCap, 1);
 
     return true;

@@ -117,6 +117,20 @@ bool lcdModalAny(void);
 void lcdScreenSleep(void);
 void lcdScreenWake(void);
 
+/** Follow the panel backlight: `cb` is called with the live duty (0-255) on every
+ *  change — the boot reveal, the wake fade, the dim step, the fade to dark — and
+ *  once, immediately, with the current duty as it is registered. For a board that
+ *  carries a second lamp of its own (a lit keyboard) and wants it to rise, dim and
+ *  go out with the screen. Divide by lcdBacklightTarget() for the ratio: that is
+ *  the part worth following, since the screen's configured brightness is its own
+ *  setting and not the lamp's. One follower; registering again replaces it, null
+ *  clears it. Lcd task, both directions. */
+void lcdBacklightOnChange(void (*cb)(uint8_t duty));
+
+/** The configured panel-backlight on-level (`s.lcd.backlight`, 0-255) — what the
+ *  live duty returns to when nothing is dimming it. Lcd task. */
+uint8_t lcdBacklightTarget(void);
+
 /** Hide the status bar and grow the current program layer to the full screen
  *  height (`on`), or restore both. For an immersive program screen (e.g. a chat
  *  thread). The launcher remembers which layer asked: the bar stays hidden only
