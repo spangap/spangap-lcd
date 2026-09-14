@@ -446,7 +446,12 @@ static void mirrorDrain(void*) {
 static void mirrorSchedule(void) {
     if (s_mirrorReadPending) return;
     s_mirrorReadPending = true;
-    lcdRun(mirrorDrain);
+    /* The latch is cleared by the hop, so it may only stand while a hop is really
+     * coming: an aux send is best-effort (full inbox, no memory) and the one that
+     * fails is the one that would have cleared it — a latch left standing would
+     * silence remote input for the rest of the boot. The samples stay queued, so
+     * dropping the latch here costs nothing but the next event's re-post. */
+    if (!lcdRun(mirrorDrain)) s_mirrorReadPending = false;
 }
 
 void lcdMirrorInjectKey(uint32_t key) {
@@ -1017,26 +1022,24 @@ bool lcdInputPoll(void) {
     return s_inputAgain;
 }
 
-/* Off-task touch drive (lcd_input.h). Like the mirror path, coalesce to one
- * pending lcdRun so a board sampling touch every few ms can't flood the lcd
- * task's ITS aux inbox (which also carries storage notifications). The hop reads
- * only the touch indev; ongoing tracking is then sustained by touchReadCb's own
- * 10ms re-read timer, so the board bumps once per gesture, not once per sample. */
-static volatile bool s_touchPollPending = false;
-
-static void touchPollDrain(void*) {
-    s_touchPollPending = false;
-    if (!s_indev) return;
-    /* Keep reading while edges remain: one read is one edge, and a burst of
-     * taps that arrived during the last render is only a burst of clicks if all
-     * of it is handed to LVGL before this pass renders again. */
-    do { lv_indev_read(s_indev); } while (lcdTouchCtlPending());
-}
-
+/* Off-task touch drive (lcd_input.h): the task-context twin of a touch INT, so
+ * it takes the same route an edge does — flag the input and notify the lcd task,
+ * whose `while (lcdInputPoll())` reads the touch indev and comes straight back
+ * for any edge still queued behind it (touchReadCb's s_inputAgain). A burst of
+ * taps that landed during one render is therefore a burst of clicks.
+ *
+ * It must NOT be an lcdRun hop. That rides the lcd task's ITS aux inbox — bounded,
+ * and shared with storage's CHANGED notifications — and its send is best-effort:
+ * a flash flush stalls every task running from flash for the better part of a
+ * second, the inbox fills, and the post is dropped. A dropped notify is harmless
+ * (the flag is the coalescing, and the next sample re-raises it); a dropped hop
+ * that was supposed to clear a "one hop pending" latch would leave touch dead for
+ * the rest of the boot, reachable only when some other input edge happened to
+ * pump the indevs. The notify costs one store and cannot fail, so a sampler that
+ * bumps per sample while a finger is down is free to. */
 void lcdTouchPoll(void) {
-    if (!s_indev || s_touchPollPending) return;
-    s_touchPollPending = true;
-    lcdRun(touchPollDrain);
+    if (!s_indev) return;
+    lcdInputSignal();
 }
 
 /* Pause the per-indev read timer LVGL keeps for its own press timing whenever the

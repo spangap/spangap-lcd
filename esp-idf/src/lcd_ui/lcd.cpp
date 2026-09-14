@@ -90,11 +90,11 @@ static void onRunMsg(TaskHandle_t, const void* d, size_t len) {
 
 /* ---- public API ---- */
 
-void lcdRun(lcd_fn_t fn, void* arg) {
-    if (!lcdTaskHandle || !fn) return;
+bool lcdRun(lcd_fn_t fn, void* arg) {
+    if (!lcdTaskHandle || !fn) return false;
     lcd_run_msg_t m{ fn, arg };
-    itsSendAuxByTaskHandle(lcdTaskHandle, LCD_RUN_PORT, &m, sizeof(m),
-                           pdMS_TO_TICKS(200));
+    return itsSendAuxByTaskHandle(lcdTaskHandle, LCD_RUN_PORT, &m, sizeof(m),
+                                  pdMS_TO_TICKS(200));
 }
 
 void lcdSetBacklight(uint8_t level) {

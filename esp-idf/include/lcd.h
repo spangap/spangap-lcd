@@ -36,8 +36,14 @@ typedef void (*lcd_fn_t)(void* arg);
 void lcdInit(void);
 
 /** Run fn(arg) on the lcd task — the only place LVGL may be touched. Returns
- *  once queued; fn runs shortly after on the lcd task. Safe from any task. */
-void lcdRun(lcd_fn_t fn, void* arg = nullptr);
+ *  once queued; fn runs shortly after on the lcd task. Safe from any task.
+ *
+ *  Best-effort, and it says so: the post rides the lcd task's bounded ITS aux
+ *  inbox (shared with storage's CHANGED notifications) and is given 200 ms to
+ *  land, which a flash flush stalling every task can outlast. False means fn will
+ *  NEVER run — so a caller that armed anything the callback was to disarm (a
+ *  "hop pending" latch, an allocation the callback owns) must undo it here. */
+bool lcdRun(lcd_fn_t fn, void* arg = nullptr);
 
 /* Launcher programs are LcdApp objects (lcd_app.h): subclass LcdApp and hand an
  * instance to lcdInstall(). The free functions below act on whichever app is in

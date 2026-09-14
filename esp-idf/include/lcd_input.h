@@ -95,10 +95,11 @@ void lcdInputSignal(void);
 /** Off-task touch drive. A board that samples its touch controller on its own
  *  task — to keep the read (and its I2C traffic) off the render path — calls this
  *  after latching each new sample. It is the task-safe analogue of an lcdInputISR()
- *  touch edge: it hops onto the lcd task and reads the touch indev on demand. The
- *  board still reports the sample through touch_read (which now returns its latch
- *  rather than touching hardware). Coalesced to one pending hop, so a tight sample
- *  loop can't flood the lcd task; a no-op if the board registered no touch_read. */
+ *  touch edge, and takes the same route: flag the input and wake the lcd task,
+ *  which reads its (event-mode) touch indev on demand. The board still reports the
+ *  sample through touch_read (which now returns its latch rather than touching
+ *  hardware). The flag coalesces, so a tight sample loop costs the lcd task one
+ *  read per pass however often it bumps; a no-op if there is no touch indev. */
 void lcdTouchPoll(void);
 
 #ifdef __cplusplus

@@ -178,7 +178,14 @@ void loaderFn(void*) {
         safeStrncpy(m->base, req.base, sizeof(m->base));
         m->px = req.px;
         m->icon = ic;
-        lcdRun(onLoaded, m);
+        /* onLoaded owns the raster once it is posted; a post that never lands
+         * leaves it ours to free. The (base, px) stays marked pending — that set
+         * is the lcd task's alone — so this icon simply doesn't appear, but the
+         * raster isn't leaked with it. */
+        if (!lcdRun(onLoaded, m)) {
+            if (ic) { free(ic->pixels); delete ic; }
+            delete m;
+        }
     }
 }
 

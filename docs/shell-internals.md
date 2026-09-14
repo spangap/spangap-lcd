@@ -66,6 +66,17 @@ message on `LCD_RUN_PORT` (10) and returns immediately. `lcdGoHome()` is just
 `lcdRun([]{ lcdGoHomeInternal(); })`; `lcdSetBacklight()` is just
 `storageSet("s.lcd.backlight", …)` and the subscription does the rest.
 
+**`lcdRun` is best-effort, and it returns whether the post landed.** That inbox is
+bounded and shared with storage's CHANGED deliveries, and a flash flush stops every
+task running from flash for the better part of a second — long enough to outlast the
+200 ms send bound (the same congestion shows in the log as
+`notify drop: … → [lcd]`). `false` means the callback will **never** run, so a
+caller that armed anything the callback was to disarm — a "hop pending" latch, an
+allocation the callback would own — undoes it on the spot; a latch that outlives its
+failed post is silence for the rest of the boot. Input that must not be lost does
+not take this path at all: `lcdInputSignal()` / `lcdInputISR()` set a flag and
+notify, which cannot be dropped, which is why `lcdTouchPoll()` is one of them.
+
 The loop is event-driven: indevs are `LV_INDEV_MODE_EVENT`, so `lv_timer_handler`'s
 idle return is honest and the task sleeps until the next LVGL timer or a wake (an
 input ISR or an ITS message). `lcdInputISR` (IRAM, DRAM-only) only flags
