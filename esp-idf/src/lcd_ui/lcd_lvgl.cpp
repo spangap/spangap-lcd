@@ -11,7 +11,7 @@
 #include "lcd_input.h"
 
 #include "log.h"
-#include "spangap.h"      /* humanDetected — a wake is somebody touching the device */
+#include "spangap.h"      /* humanDetected — input on the screen is somebody being there */
 #include "spi_helper.h"   /* flushCb holds the shared-bus lock across the DMA drain */
 #include "storage.h"
 
@@ -712,7 +712,9 @@ void lcdScreenSleep(void) {
 void lcdScreenWake(void) {
     if (!s_screenOff && !s_fadingOut) return;   /* already awake / fading in */
     /* A screen only leaves standby because a touch, a button, or a key asked it
-     * to — the one place every input path on this device converges. */
+     * to. The board absorbs that press to keep it from landing as a click, so
+     * it never reaches lcdActivity — this is the one input the general path
+     * below does not see, and it is as much a person as any other. */
     humanDetected("screen");
     bool wasOff = s_screenOff;
     s_fadingOut = false;                          /* cancel a fade-out in progress */
@@ -761,10 +763,22 @@ void lcdMirrorKeepAwake(bool on) {
     lcdRun([](void*) { lcdMirrorApplyHold(); });   /* prompt apply; a dropped run self-heals */
 }
 
-/* Register user input: just re-arm the inactivity timer. Waking from standby is the
- * board's job (it clears sys.standby), not ours, so this no longer wakes and always
- * returns false — kept bool for lcdNotifyActivity's callers. */
+/* Register user input: re-arm the inactivity timer, and record that somebody is
+ * at the controls. Waking from standby is the board's job (it clears
+ * sys.standby), not ours, so this no longer wakes and always returns false —
+ * kept bool for lcdNotifyActivity's callers.
+ *
+ * **Every input path on the device converges here** — the touch read_cb, the
+ * lcd loop's button/trackball edge drain, and a board's keyboard read_cb
+ * through lcdNotifyActivity — which is what makes it the place to call
+ * humanDetected(). Hanging that off the standby wake instead only counts a
+ * person who found the screen dark: somebody who boots the device and starts
+ * using it straight away never wakes anything, so an attended node would serve
+ * the whole unattended mesh-safety hold (s.rns.boot_max_s, 5 minutes) with its
+ * operator watching it do nothing. humanDetected coalesces (30 s), so the cost
+ * per read after the first is a compare. */
 bool lcdActivity(void) {
+    humanDetected("screen");
     dimLeave();                          /* a touch in the grace window is the answer */
     if (s_blankTimer) lv_timer_reset(s_blankTimer);
     else              armBlankTimer();   /* (re)arm if a setting change left it off */
