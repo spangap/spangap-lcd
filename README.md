@@ -143,15 +143,16 @@ is also why there is no RGB entry in the controller choice.
 | `LCD_RGB_VSYNC_PULSE` / `_BACK` / `_FRONT` | `8` / `20` / `10` | Vertical blanking, in lines. |
 | `LCD_RGB_PCLK_ACTIVE_NEG` | `n` | Which PCLK edge the glass latches on; wrong, the image is smeared rather than absent. |
 | `LCD_RGB_DRAW_LINES` | `80` | Height of the PSRAM strip LVGL renders per flush. One framebuffer, so a repaint large enough to race the scan-out can be seen arriving. |
-| `LCD_RGB_BOUNCE_LINES` | `0` | Two internal-RAM buffers between PSRAM and the panel, in lines (0 = DMA straight from PSRAM). Raise it if the screen tears while the device writes flash — that is the moment the LCD DMA cannot have the memory bus. |
+| `LCD_RGB_BOUNCE_LINES` | `0` | Two internal-RAM buffers between PSRAM and the panel, in lines (0 = DMA straight from PSRAM). **A panel of any size wants these.** Straight from PSRAM the DMA queues behind every cache miss the CPU takes, and esp_lcd — with no bounce buffer to sync instead — writes back the whole framebuffer's worth of cache lines on *every* flush; a starved RGB panel does not glitch and recover, its frame starts in the wrong place and stays there. Bouncing removes both: the DMA reads internal RAM, which nothing contends for, and the refill reads the framebuffer through the cache, so coherency is free and the sync is skipped. The cost is that refill — a CPU copy in an interrupt, at the rate the glass consumes it (23 MB/s on a 480x640 panel at 37 Hz) — plus two buffers of internal RAM. Must divide the framebuffer evenly. |
 | `LCD_NATIVE_WIDTH` / `LCD_NATIVE_HEIGHT` | `240` / `320` | Native pixels, pre-rotation. A panel cannot report its own glass size on either transport, so it is stated. |
-| `LCD_ROTATION` | `90` | Hardware rotation (0/90/180/270); applied as swap_xy+mirror, same transform applied to raw touch. An RGB panel scans the framebuffer out in the glass's own order, so only 0 and 180 exist there and a quarter turn is refused at bring-up with a log line. |
+| `LCD_ROTATION` | `90` | The shipped value of `s.lcd.rotation` (below), which is what the panel actually reads: how the picture is held (0/90/180/270), with the same transform applied to raw touch. On an SPI panel it is the controller's swap_xy+mirror. An RGB panel scans the framebuffer out in the glass's own order, so 0 and 180 are free there and a quarter turn is transposed into the framebuffer strip by strip — one extra pass per repainted pixel and one draw buffer of PSRAM. |
 | `LCD_MIRROR_X` / `LCD_MIRROR_Y` | `n` | Correct a mirrored image when the panel's scan direction differs. |
 | `LCD_INVERT_COLOR` | `y` | Most ST7789 IPS panels need inversion. |
 | `LCD_TOUCH_CONTROLLER_*` | NONE | Component-owned touch: `FT5X06` or `GT911`, driven through `esp_lcd_touch` (`lcd_touch.cpp`), sampled on its own task above the lcd task — a tap that lands mid-render still lands (see below). NONE = no touch, or the board HAL's `touch_read` below. |
 | `LCD_TOUCH_I2C_PORT` / `LCD_TOUCH_I2C_SDA` / `LCD_TOUCH_I2C_SCL` / `LCD_TOUCH_I2C_KHZ` | `0` / `-1` / `-1` / `100` | The touch I2C bus. The component creates the port itself, so touch must be its only creator — unless the board created it first and says so below. |
 | `LCD_TOUCH_I2C_ADOPT` | `n` | The board already brought that port up for the other chips on those wires (an IO expander, an RTC, an IMU); add the controller to it instead of creating a second master. |
-| `LCD_TOUCH_INT_PIN` / `LCD_TOUCH_RST_PIN` | `-1` | Touch INT (wired to `lcdInputISR`; required for touch to fire) and reset (`-1` if it rides the power rail). |
+| `LCD_TOUCH_INT_PIN` / `LCD_TOUCH_RST_PIN` | `-1` | Touch INT (wired to `lcdInputISR`; the only thing that fires a read, and the only thing that can wake a board whose glass is its whole input) and reset (`-1` if it rides the power rail). |
+| `LCD_TOUCH_POLL_MS` | `0` | Ask the controller every N ms as well, for glass whose INT cannot carry it alone — no line brought out, or a line that stays silent. `0` sleeps on the INT and costs nothing; `50` is the value for a board that needs it. Both paths stay live where there is an INT too. |
 | `LCD_TOUCH_SWAP_XY` / `LCD_TOUCH_MIRROR_X` / `LCD_TOUCH_MIRROR_Y` | `n` | How the glass is laminated onto the panel, corrected on the raw point before the panel's rotation (swap first, then the mirrors). `LCD_MIRROR_X/Y` move pixels and points together and so can't straighten touch alone. |
 | `LCD_UI_SCALE_DEFAULT` | `100` | The shipped value of `s.lcd.scale`. One number scales the whole shell — every length through `lcdPx()`, every font token through the stylesheet — so it is a statement about the GLASS, not the pixel count: a panel of the same physical size at twice the density wants ~200 to feel identical, and less to trade size for content. |
 | `LCD_DRAW_STRIP_KB` | `8` | KB of internal DMA RAM rendered and sent per SPI transfer — the size of a repaint step, and so how visible a repaint is. Bounded by internal DMA RAM, which the SPI driver also allocates from at awkward moments; bring-up halves this until a reserve is still left standing. Never above the bus ceiling `SPANGAP_SPI_MAX_TRANSFER`. |
@@ -181,6 +182,100 @@ checksummed config table and gets no row), and serves the `lcd.multi_touch`
 request key — an ephemeral a consumer (e.g. maps) sets truthy while it wants
 multi-finger reads + gestures, on any board (the subscription drives
 `lcdTouchSetMultipoint` whether touch comes from the component or a board HAL).
+
+It also registers **`touch`**, the CLI command for a board being brought up on a
+pin map nobody has proved yet. Glass that does nothing fails in three places and
+they look identical from the outside, so the command reports all three, off
+counters rather than a log — the question is always asked after the touch, not
+during it:
+
+```
+GT911 @ 0x14 on i2c0 (sda 15, scl 7)
+int pin 16: now 1, 0 edges since boot      ← the line never moved: wrong pin
+polling every 50 ms
+reads 41233, failed 0, with a finger 0     ← the part answers, sees nothing
+id '911' fw 1060, config version 65
+config version 65, status 0x00 (idle, 0 points)
+```
+
+`touch watch [s]` then follows the live sample for a few seconds — raw point and
+where it lands on the display — which is what says whether the glass is
+laminated the way `LCD_TOUCH_SWAP_XY` / `_MIRROR_*` claim. `touch reg <addr>
+[n]` and `touch poke <addr> <byte>` read and write the part's own registers,
+which is how a controller that answers the bus but reports nothing is
+questioned — its thresholds, its configured resolution, its command register.
+
+The RGB transport registers **`panel`** for the same reason: an unsteady picture
+has several possible causes and none of them can be reasoned out from a
+schematic, so every one of them is a switch you turn while looking at the
+screen. Nothing it changes is stored — a reboot is back to what the board's
+straddle.yaml says, which is where an answer goes once it is known.
+
+| Command | What it moves |
+|---|---|
+| `panel` | The current state: glass and display size, the turn, clock, edge, porches, strip and bounce sizes, drive strength, whether the CPU is pinned. |
+| `panel pclk <MHz>` | The pixel clock, from the next vsync — and it restarts the transmission behind the change, because the frame a clock change lands in is malformed and that is exactly the frame a panel stops following. |
+| `panel fps <n>` | The frame rate, by stretching the blanking rather than slowing the clock. The clock has a floor the panel sets; blanking is free. Bounded by a 10-bit vertical and 12-bit horizontal total. |
+| `panel edge <0\|1>` | Which clock edge the glass latches on, by inverting PCLK in the GPIO matrix (the peripheral's own flag is fixed at create). The knob for **ghosting** — a pixel wearing a trace of the one before it. |
+| `panel drive <0-3>` | Drive strength on all twenty pins. Try both directions: twenty pins switching at once can bounce the ground, so softer sometimes beats stronger. |
+| `panel cpu <0\|1>` | Hold the CPU at maximum while the screen is on (off by default — see below). |
+| `panel restart` | Begin a frame cleanly. |
+| `panel test` / `fill <hex>` / `bits` / `restore` | The test card and its narrower instruments. |
+
+**`panel test`** is the card those knobs are turned against, and it is written
+into the framebuffer rather than drawn with LVGL — what it tests is the path
+LVGL's own pixels take, so it cannot be made of them. Eight colour bars, a ramp
+per channel, a grey ramp (grey is the only thing that shows a channel imbalance
+as a tint), one-pixel columns and one-pixel rows — the columns are the pixel
+clock's worst case, the rows are the same test where the clock cannot be the
+answer — and the sixteen data-line stripes. `panel fill <hex>` and `panel bits`
+are the narrower instruments behind it.
+
+**An RGB panel wants bounce buffers, and then wants nothing else done to it.**
+`LCD_RGB_BOUNCE_LINES` takes the panel's DMA out of the race for PSRAM, which it
+loses, and takes esp_lcd's whole-framebuffer cache writeback out of every flush
+with it. That is the one thing to get right; the rest of the advice on the
+subject is about the deadline bouncing introduces, and this is where it lands:
+the refill is a CPU copy in an interrupt, so a processor free to scale down to
+80 MHz has a third of the speed to make it in. Measured on a 480x640 panel at
+37 Hz it makes it comfortably, so this component does **not** pin the clock —
+`panel cpu 1` takes a `PM_CPU_FREQ_MAX` lock for a board or a build where the
+measurement comes out the other way, and standby hands it back either way.
+(ESP-IDF's own driver takes that lock unconditionally on the P4, and takes only
+a no-light-sleep lock here.)
+
+**Nothing should touch the panel per frame.** `LCD_RGB_RESTART_IN_VSYNC` resets
+the DMA at every vertical blank so that a starved frame costs only itself, and
+it is the right trade while the DMA starves — but the reset runs in an interrupt
+and the frame then begins however late that interrupt was. The picture sits a
+few pixels over, and moves by however much that latency varies. It is off here:
+feed the DMA properly instead, and use `panel restart` for the once in a while
+that something slips anyway.
+
+**And nothing with a deadline survives a long critical section**, wherever it
+comes from. The fault that cost the most to find on this panel was not in this
+component at all: an Activity monitor open meant `uxTaskGetSystemState` ran once
+a second, which holds the FreeRTOS kernel lock across every task list with
+interrupts disabled, and the refill simply was not allowed to run. It presented
+as a display fault and answered to none of the display's knobs. If a picture
+loses sync on a beat that matches something else on the device, suspect that
+something else first (see spangap-core's power-management notes).
+
+**`panel restart`** begins a frame cleanly, and it is the first thing to try
+before believing a timing value is bad. An RGB panel that stops following the
+sync does not start again by itself — the SoC goes on clocking out a perfectly
+good frame and the glass goes on drawing it unsteadily, or in the wrong place,
+for as long as it is left alone. A clock change is one of the things that can
+knock it out of lock, since the frame the change lands in is malformed, so
+`panel pclk` restarts the transmission behind every change; without that, a
+sweep leaves the glass unlocked at some step and every step after it reads as
+bad too.
+
+A pattern **owns the glass while it is up**: every LVGL flush is dropped, so the
+UI carries on underneath and none of it is seen. The first press anywhere — a
+touch, a board's button — spends itself putting the UI back and repainting it
+whole, so a pattern needs no way out of its own. `panel restore` does the same
+from the CLI.
 
 ## The input HAL
 
@@ -348,6 +443,7 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 |---|---|---|
 | `s.lcd.backlight` | `200` | Backlight 0..255 (0 = off); applied live. |
 | `s.lcd.scale` | board (`LCD_UI_SCALE_DEFAULT`) | UI zoom in percent, clamped 50–250; read when the shell is built, so a change restarts the device (see [docs/shell.md](docs/shell.md#ui-zoom)). |
+| `s.lcd.rotation` | board (`LCD_ROTATION`) | Which way up the picture is held: 0, 90, 180 or 270. Read by the panel before there is a UI at all — it decides which way round the display's own width and height are — so a change restarts the device. Anything else in the key is refused back to the board's value with a log line. |
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before the backlight drops right down; `sys.standby` follows 10 s later. `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
 | `s.lcd.launcher_order` | `""` | The launcher's tile order, a comma-separated list of app names — written by dragging an icon in the grid's edit mode, editable by hand, re-sorts live. An app it doesn't name takes its place from the build's `LCD_LAUNCHER_ORDER`, and only then from install order. |
@@ -406,6 +502,36 @@ lands in a dock of others without being redrawn:
   no detail — a globe is an outline, one meridian and the equator, and a second
   meridian is one too many.
 
+## Sizes: one contract
+
+**Every length in the shell is a reference pixel put through the UI zoom, and
+the active stylesheet is already in device pixels.** Those are two halves of one
+rule and getting either half wrong is invisible until someone runs a screen at a
+different size:
+
+- A number written in code — a padding, a gap, a font size, a hit area — goes
+  through `lcdPx()` at the point of use. A literal that skips it is a length
+  that shrinks as the display grows, because the type around it grew and it
+  did not.
+- A number that comes from `lcdStyle()` has **already** been through it.
+  `lcdStyleBegin` resolves every length in the sheet once, so the sheets state
+  reference pixels and the rest of the shell reads device pixels. Applying
+  `lcdPx()` to a sheet field doubles the zoom.
+- LVGL's own metrics — scrollbar widths, dropdown and button paddings, knobs,
+  corner radii — come from the display's **DPI**, not from our zoom, so the zoom
+  is written there too (`lv_display_set_dpi`) before the theme is built.
+- Fonts are inherited, and the shell strips theme styles wherever it draws its
+  own chrome (`lv_obj_remove_style_all`, in fifty places). A label under one of
+  those finds no font in its parents and lands on LVGL's compiled-in default —
+  fixed size, ignores the zoom. The scaled face is therefore set on the screen
+  and on all three LVGL layers, at the root of every inheritance chain.
+
+And a length that merely *scales* is not thereby *right*. A tile grid or a graph
+band written for a 320x240 deck stays proportionally identical on a 640x480
+panel, which is not the same as filling it. Anything that should use the space
+it is given — the app graphs, the launcher rows — takes a share of the viewport
+rather than a reference pixel count (see the Activity monitor's bands).
+
 ## Fonts
 
 Text renders from vector faces — TTFs shipped read-only under `/fixed/fonts/` —
@@ -426,8 +552,15 @@ file; synthetic bold is muddy at title sizes), **DejaVu Sans Mono** (MONO), and
 a **FontAwesome 5 subset** (SYMBOLS) — the italic and mono-bold/italic variants
 are synthesized by FreeType from the base files. Every UI/MONO font gets the
 SYMBOLS face chained as its `.fallback` at the same size, so `LV_SYMBOL_*`
-renders everywhere and scales with the text it sits in. Scale a base size by
-`lcdUiScale()` when resolving, so your text follows the platform zoom.
+renders everywhere and scales with the text it sits in. Put the base size
+through `lcdPx()` when resolving, so your text follows the platform zoom —
+`lcdFont(LcdFace::UI, 16)` is a 16-pixel font on every screen ever built, which
+is a bug with a plausible-looking call site.
+
+For anything terminal-shaped — a log, a console, a monitor's figures — take
+**`lcdFontMono()`** instead of naming a size. It is the stylesheet's own mono
+face at the current zoom, so every such surface on the device matches and
+follows the zoom together.
 
 The engine behind `lcdFont()` is a Kconfig choice, `LCD_FONT_ENGINE`:
 

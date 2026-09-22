@@ -16,7 +16,7 @@
 #include <cmath>
 
 extern const LcdStyle lcdStyleDefault320x240;
-extern const LcdStyle lcdStyle480x640;
+extern const LcdStyle lcdStyle640x480;
 
 namespace {
 
@@ -24,7 +24,7 @@ namespace {
  * nobody wrote a sheet for gets the 320x240 default, which is written in
  * proportions rather than in absolute positions and so holds its shape at any
  * size the zoom puts it at. */
-const LcdStyle* const s_sheets[] = { &lcdStyleDefault320x240, &lcdStyle480x640 };
+const LcdStyle* const s_sheets[] = { &lcdStyleDefault320x240, &lcdStyle640x480 };
 
 LcdStyle s_active = lcdStyleDefault320x240;   /* safe default before begin() */
 
@@ -58,12 +58,33 @@ void calibrate(LcdStyle& s, int w, int h) {
 
     /* Resolve font tokens → concrete fonts. */
     s.core.font          = resolveFont(s.core.fontSpec);
+    s.core.monoFont      = resolveFont(s.core.monoSpec);
     s.launcher.labelFont = resolveFont(s.launcher.labelSpec);
     s.recents.titleFont  = resolveFont(s.recents.titleSpec);
     s.recents.subFont    = resolveFont(s.recents.subSpec);
 
     /* Resolve percents to px. Only the recents card is a percent today. */
     s.recents.cardW = (w * s.recents.cardWPct) / 100;
+
+    /* Every length the sheet states is in REFERENCE pixels; the active sheet
+     * carries DEVICE pixels. Resolving them all here, once, is what keeps a
+     * field from being read raw at one call site and scaled at another — which
+     * is a status bar of the shipped 24 px under type that grew with the zoom. */
+    s.statusBar.h        = lcdPx(s.statusBar.h);
+    s.launcher.tileW     = lcdPx(s.launcher.tileW);
+    s.launcher.tileH     = lcdPx(s.launcher.tileH);
+    s.launcher.iconPx    = lcdPx(s.launcher.iconPx);
+    s.launcher.padTop    = lcdPx(s.launcher.padTop);
+    s.launcher.padLeft   = lcdPx(s.launcher.padLeft);
+    s.launcher.padRow    = lcdPx(s.launcher.padRow);
+    s.launcher.padCol    = lcdPx(s.launcher.padCol);
+    s.launcher.minTilePx = lcdPx(s.launcher.minTilePx);
+    s.navBar.h           = lcdPx(s.navBar.h);
+    s.navBar.btnPx       = lcdPx(s.navBar.btnPx);
+    s.recents.iconPx     = lcdPx(s.recents.iconPx);
+    s.recents.swipeClosePx = lcdPx(s.recents.swipeClosePx);
+    s.gesture.vSwipePx   = lcdPx(s.gesture.vSwipePx);
+    s.gesture.edgePx     = lcdPx(s.gesture.edgePx);
 }
 
 /* Install a dark theme wrapping lv_theme_default, carrying the UI font so every
@@ -72,6 +93,12 @@ void installTheme(const LcdStyle& s) {
 #if LV_USE_THEME_DEFAULT
     lv_display_t* disp = lv_display_get_default();
     if (!disp) return;
+    /* Everything LVGL sizes for itself — scrollbar widths, dropdown and button
+     * paddings, knobs, corner radii — comes from the display's DPI, not from
+     * our zoom. Left at the built-in default it stays deck-sized under text
+     * that has grown, which reads as a widget that has shrunk. The theme reads
+     * this at init, so it is set before the init below. */
+    lv_display_set_dpi(disp, (int)lroundf((float)LV_DPI_DEF * s_uiScale));
     const lv_font_t* uiFont = s.core.font ? s.core.font : LV_FONT_DEFAULT;
     lv_theme_t* th = lv_theme_default_init(disp,
                                            lv_color_hex(0x2563a0),   /* primary */
@@ -79,6 +106,18 @@ void installTheme(const LcdStyle& s) {
                                            /*dark=*/true,
                                            uiFont);
     lv_display_set_theme(disp, th);
+
+    /* The theme reaches an object when it is created and the shell strips it
+     * off again wherever it draws its own chrome (lv_obj_remove_style_all, in
+     * fifty places). A label under one of those asks its parents for a font,
+     * finds none, and lands on LVGL's compiled-in default — a fixed size that
+     * ignores the zoom, so it SHRINKS as the display grows. The font is
+     * inherited, so putting it on the layers themselves puts a scaled font at
+     * the root of every chain, whatever is stripped in between. */
+    lv_obj_t* const roots[] = { lv_screen_active(), lv_layer_top(),
+                                lv_layer_sys(), lv_layer_bottom() };
+    for (lv_obj_t* r : roots)
+        if (r) lv_obj_set_style_text_font(r, uiFont, 0);
 #endif
 }
 
@@ -87,6 +126,8 @@ void installTheme(const LcdStyle& s) {
 const LcdStyle& lcdStyle(void) { return s_active; }
 float           lcdUiScale(void) { return s_uiScale; }
 int             lcdPx(int px)    { return (int)(px * s_uiScale + 0.5f); }
+int             lcdStatusBarH(void) { return s_active.statusBar.h; }
+const lv_font_t* lcdFontMono(void) { return s_active.core.monoFont; }
 
 void lcdStyleBegin(int w, int h) {
     const LcdStyle* pick = &lcdStyleDefault320x240;

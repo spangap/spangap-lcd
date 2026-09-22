@@ -16,9 +16,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* Opaque status bar height (px), reserved at the top of the screen. Program
- * layers and the launcher live below it. */
-#define LCD_STATUSBAR_H 24
+/* Opaque status bar height in device px, reserved at the top of the screen —
+ * the active sheet's, so it follows the display and the zoom. Program layers
+ * and the launcher live below it. */
+int         lcdStatusBarH(void);
 
 /* ---- lcd.cpp ---- */
 /** The lcd task handle (for aux sends from other tasks / the loader). */
@@ -28,6 +29,13 @@ const lcd_input_t* lcdInput(void);
 /** Whether a consumer reported a hardware text keyboard (lcdSetHasKeyboard).
  *  Settings text fields edit in place when true, else use the on-screen kb. */
 bool lcdHasKeyboard(void);
+
+/** The turn the picture is held at: `s.lcd.rotation`, one of 0/90/180/270,
+ *  seeded from CONFIG_LCD_ROTATION. It is read once, by the panel module at
+ *  bring-up, because rotation decides the display's size and every length the
+ *  shell has laid out against it — so changing it restarts the device, exactly
+ *  as changing the UI zoom does. */
+int         lcdRotationSetting(void);
 
 /* ---- lcd_panel.cpp: generic Kconfig-driven panel + backlight ---- */
 /** Bring up the SPI bus + panel-io + controller from CONFIG_LCD_*; returns the
@@ -42,6 +50,21 @@ void        lcdPanelDisplayPower(bool on);
 /** Map a raw native touch point to display coordinates using CONFIG_LCD_ROTATION
  *  + mirror (the same transform applied to the pixels); out params are clamped. */
 void        lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY);
+/** RGB transport only: one rendered strip into the scanned-out framebuffer,
+ *  turned on the way if the display is held at a quarter turn (an RGB glass has
+ *  no rotation of its own, so the copy is where it happens). `area` is in
+ *  display coordinates. The SPI transport has no equivalent — its turn is the
+ *  controller's, and its flush is a bus transfer lcd_lvgl.cpp drives itself. */
+void        lcdPanelBlitRgb(const lv_area_t* area, const void* px);
+/** Whether one of the `panel` test patterns currently owns the glass. It is
+ *  written straight into the framebuffer, under LVGL rather than in it — what
+ *  those patterns test is the path LVGL's own pixels take — so while it is up
+ *  every flush is dropped and the UI carries on unseen. Always false on the SPI
+ *  transport, which has no such patterns. */
+bool        lcdPanelPatternUp(void);
+/** Put the UI back and repaint it whole. The first press does this, wherever
+ *  input comes from, so a pattern needs no way out of its own. */
+void        lcdPanelPatternClear(void);
 
 /* ---- lcd_touch.cpp: component-owned touch controller (CONFIG_LCD_TOUCH_*) ---- */
 /** Most fingers a touch read reports (multipoint mode). */

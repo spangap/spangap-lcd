@@ -84,7 +84,7 @@ public:
     void onCreate(lv_obj_t* root) override {
         s_logApp = this;
         s_log.tv = lcdTextViewCreate(root, lcdScreenW(), bodyH(),
-                                     lcdFont(LcdFace::MONO, 8), logFg(), scrollbackBudget());
+                                     lcdStyle().core.monoFont, logFg(), scrollbackBudget());
         lcdTextViewSetLineColor(s_log.tv, logLineColor);
         s_log.primed = false;
 

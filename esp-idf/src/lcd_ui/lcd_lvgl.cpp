@@ -134,11 +134,12 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     spiHelperBusUnlock();
 #else
     /* RGB: no byte swap (the sixteen data lines carry the halfword as LVGL
-     * wrote it), no bus to lock, and nothing asynchronous to wait for —
-     * draw_bitmap on an RGB panel is a copy into the framebuffer the LCD DMA is
-     * already scanning out, which returns when the copy is done. */
-    (void)w; (void)h;
-    esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px);
+     * wrote it), no bus to lock, and nothing asynchronous to wait for — the
+     * flush is a copy into the framebuffer the LCD DMA is already scanning out,
+     * which returns when the copy is done. The panel module owns that copy,
+     * because on a quarter-turned display it is also where the turn happens. */
+    (void)w; (void)h; (void)panel;
+    lcdPanelBlitRgb(area, px);
 #endif
     lv_display_flush_ready(disp);
 }
@@ -255,6 +256,16 @@ static void touchReadCb(lv_indev_t*, lv_indev_data_t* data) {
         gp[i].x = (int16_t)x; gp[i].y = (int16_t)y;
     }
 
+    /* A test pattern owns the glass: the first finger takes it away again and
+     * is spent doing so, rather than pressing whatever the UI has been holding
+     * unseen underneath. */
+    if (n > 0 && lcdPanelPatternUp()) {
+        lcdPanelPatternClear();
+        lcdActivity();
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+
     /* Keep re-reading while any finger is down (the GT911 INT only guarantees the
      * first edge). */
     if (n > 0) {
@@ -307,6 +318,14 @@ static void buttonReadCb(lv_indev_t*, lv_indev_data_t* data) {
     const lcd_input_t* in = lcdInput();
     bool click = in && in->click_read && in->click_read();
     data->key = LV_KEY_ENTER;
+    /* A press with a test pattern up spends itself putting the UI back, exactly
+     * as a touch does — on a board with keys, this is the way out of one. */
+    if (click && lcdPanelPatternUp()) {
+        lcdPanelPatternClear();
+        lcdActivity();
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
     if (click) { data->state = LV_INDEV_STATE_PRESSED;  s_inputAgain = true; }
     else         data->state = LV_INDEV_STATE_RELEASED;
 }

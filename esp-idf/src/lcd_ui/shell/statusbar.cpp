@@ -107,7 +107,7 @@ void lcdStatusbarInit(void) {
     lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, 0);
 
     s_clock = lv_label_create(s_bar);
-    lv_obj_align(s_clock, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_align(s_clock, LV_ALIGN_LEFT_MID, lcdPx(8), 0);
     lv_obj_set_style_text_color(s_clock, lv_color_hex(st.statusBar.text), 0);
     if (st.core.font) lv_obj_set_style_text_font(s_clock, st.core.font, 0);
     lv_label_set_text(s_clock, "");
@@ -120,25 +120,32 @@ void lcdStatusbarInit(void) {
     lv_obj_remove_style_all(cluster);
     lv_obj_set_height(cluster, st.statusBar.h);
     lv_obj_set_width(cluster, LV_SIZE_CONTENT);
-    lv_obj_align(cluster, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_align(cluster, LV_ALIGN_RIGHT_MID, -lcdPx(8), 0);
     lv_obj_set_flex_flow(cluster, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(cluster, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(cluster, 6, 0);
+    lv_obj_set_style_pad_column(cluster, lcdPx(6), 0);
     lv_obj_remove_flag(cluster, LV_OBJ_FLAG_SCROLLABLE);
 
     s_up = lv_obj_create(cluster);
     lv_obj_remove_style_all(s_up);
-    lv_obj_set_size(s_up, 6, 6);
-    lv_obj_set_style_radius(s_up, 3, 0);
+    lv_obj_set_size(s_up, lcdPx(6), lcdPx(6));
+    lv_obj_set_style_radius(s_up, lcdPx(3), 0);
     lv_obj_set_style_bg_opa(s_up, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_up, lv_color_hex(0x404850), 0);
 
     s_batt = lv_label_create(cluster);
+    /* The face is set on every label here, not inherited: the bar strips its
+     * own styles (lv_obj_remove_style_all), so a child that asks its parents
+     * for a font finds none and lands on LVGL's built-in default — a fixed
+     * size that ignores the zoom, which is a glyph that shrinks as the screen
+     * grows. The symbols ride the same font's fallback chain. */
+    if (st.core.font) lv_obj_set_style_text_font(s_batt, st.core.font, 0);
     lv_obj_set_style_text_color(s_batt, lv_color_hex(st.statusBar.text), 0);
     lv_label_set_text(s_batt, LV_SYMBOL_BATTERY_EMPTY);
     lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
 
     s_wifi = lv_label_create(cluster);
+    if (st.core.font) lv_obj_set_style_text_font(s_wifi, st.core.font, 0);
     lv_obj_set_style_text_color(s_wifi, lv_color_hex(st.statusBar.text), 0);
     lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
 

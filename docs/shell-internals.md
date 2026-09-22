@@ -34,7 +34,7 @@ display/LVGL/task foundation in `src/lcd_ui/`:
   app (`_arrows()`) or a focused textarea — so the gesture only means Back where
   it would otherwise be inert.
 - **recents.cpp** — the app switcher (cards over the running set).
-- **stylesheet.{h,cpp}** + **stylesheet_320x240.cpp** / **stylesheet_480x640.cpp**
+- **stylesheet.{h,cpp}** + **stylesheet_320x240.cpp** / **stylesheet_640x480.cpp**
   — theme/geometry as data.
 - **lcd_app.cpp** — the `LcdApp` install registry and service methods (covered in
   [apps-internals.md](apps-internals.md)).
@@ -113,8 +113,10 @@ framebuffer, no panel-IO and no controller driver, the glass having been
 configured by the board before this runs — and exactly one of the two files
 compiles. Resolution can't be probed from a panel either way, so native size +
 rotation are config; an RGB panel scans its framebuffer out in the glass's own
-order, so only 0/180 are available there and a quarter turn is refused at
-bring-up. The same rotation/mirror transform is applied to raw touch
+order, so a quarter turn there is the flush's work rather than a controller's —
+`lcdPanelBlitRgb` transposes each rendered strip into the framebuffer in 16x16
+tiles, which is what keeps a transpose off the cache's worst path. The same
+rotation/mirror transform is applied to raw touch
 (`lcdPanelOrientTouch`) so touch and pixels always agree. It also exposes the
 LEDC backlight (`lcdPanelBacklight`) and panel display on/off for standby
 (`lcdPanelDisplayPower`, GRAM retained for instant wake).
@@ -406,8 +408,12 @@ dark sheet (`stylesheet_320x240.cpp`) is the default any panel without one of
 its own falls back to — status bar 24 px on dark navy, tiles derived from a
 72 px `minTilePx` floor with a 36 px base icon, and the recents/nav/gesture
 thresholds — and it is written in proportions rather than absolute positions, so
-it holds its shape wherever the zoom puts it. `stylesheet_480x640.cpp` is the
-portrait sheet for the taller glass. `LcdStyle::core.maxResidentApps` (4) is
+it holds its shape wherever the zoom puts it. `stylesheet_640x480.cpp` is the
+sheet for a panel with no keys at all (the Waveshare 2.8B, held landscape): the
+same 4:3 grid, asking for the navigation bar that a board with no Back button
+needs. `LcdStyle::navBar.defaultHidden` and `LcdApp::Config::navBar` are both
+declared and **not read** — there is no bar yet, and that board navigates by
+gesture like the rest. `LcdStyle::core.maxResidentApps` (4) is
 declared as an eviction cap but is **not currently enforced** — teardown is
 only user-driven (a recents swipe-up, or an app stopping itself; see §4).
 

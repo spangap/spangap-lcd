@@ -83,7 +83,7 @@ public:
     void onCreate(lv_obj_t* root) override {
         s_cliApp  = this;
         s_cliTerm = lcdTermCreate(root, lcdScreenW(), bodyH(),
-                                  lcdFont(LcdFace::MONO, 8), cliFg(), cliOutput, nullptr);
+                                  lcdStyle().core.monoFont, cliFg(), cliOutput, nullptr);
 
         lv_obj_t* cont = lcdTermObj(s_cliTerm);
         if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), cont);

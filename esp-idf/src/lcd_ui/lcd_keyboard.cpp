@@ -312,7 +312,7 @@ int lcdKeyboardRoomFor(lv_obj_t* o) {
         lv_obj_get_coords(layer, &a);
         top = a.y1 - lv_obj_get_style_translate_y(layer, LV_PART_MAIN);
         if (top < 0)                top = 0;
-        if (top > LCD_STATUSBAR_H)  top = LCD_STATUSBAR_H;
+        if (top > lcdStatusBarH())  top = lcdStatusBarH();
     }
 
     const int room = bottom - top - 2 * lcdPx(4);

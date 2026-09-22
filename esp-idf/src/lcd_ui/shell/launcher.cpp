@@ -46,8 +46,8 @@ std::vector<Tile> s_tiles;   /* install order, never reordered — see applyOrde
 
 int viewportW() { return lcdScreenW(); }
 int viewportH() { return lcdScreenH() - lcdStyle().statusBar.h; }
-/* Icon raster size for the current tile + zoom: the sheet base × UI scale. */
-int iconPx() { return lcdPx(lcdStyle().launcher.iconPx); }
+/* Icon raster size for the current tile + zoom. */
+int iconPx() { return lcdStyle().launcher.iconPx; }
 
 lv_point_t activePoint() {
     lv_point_t p = { 0, 0 };
@@ -63,9 +63,9 @@ lv_point_t activePoint() {
 struct Grid { int tileW, tileH; };
 Grid gridFor() {
     const LcdStyle& st = lcdStyle();
-    int padL = lcdPx(st.launcher.padLeft), padT = lcdPx(st.launcher.padTop);
-    int padC = lcdPx(st.launcher.padCol),  padR = lcdPx(st.launcher.padRow);
-    int minT = lcdPx(st.launcher.minTilePx);
+    int padL = st.launcher.padLeft, padT = st.launcher.padTop;
+    int padC = st.launcher.padCol,  padR = st.launcher.padRow;
+    int minT = st.launcher.minTilePx;
     if (minT < 1) minT = 1;
 
     /* The scrollbar is a few px wide and sits inside the right-hand padding, so
@@ -458,12 +458,12 @@ void shellLauncherInit(lv_obj_t* screen) {
     lv_obj_set_style_bg_opa(s_grid, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(s_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_top(s_grid, lcdPx(st.launcher.padTop), 0);
-    lv_obj_set_style_pad_bottom(s_grid, lcdPx(st.launcher.padTop), 0);
-    lv_obj_set_style_pad_left(s_grid, lcdPx(st.launcher.padLeft), 0);
-    lv_obj_set_style_pad_right(s_grid, lcdPx(st.launcher.padLeft), 0);
-    lv_obj_set_style_pad_row(s_grid, lcdPx(st.launcher.padRow), 0);
-    lv_obj_set_style_pad_column(s_grid, lcdPx(st.launcher.padCol), 0);
+    lv_obj_set_style_pad_top(s_grid, st.launcher.padTop, 0);
+    lv_obj_set_style_pad_bottom(s_grid, st.launcher.padTop, 0);
+    lv_obj_set_style_pad_left(s_grid, st.launcher.padLeft, 0);
+    lv_obj_set_style_pad_right(s_grid, st.launcher.padLeft, 0);
+    lv_obj_set_style_pad_row(s_grid, st.launcher.padRow, 0);
+    lv_obj_set_style_pad_column(s_grid, st.launcher.padCol, 0);
     lv_obj_add_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(s_grid, LV_DIR_VER);
     lv_obj_add_flag(s_grid, LV_OBJ_FLAG_CLICKABLE);   /* only to hear the tap below */

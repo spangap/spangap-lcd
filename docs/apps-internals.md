@@ -112,8 +112,9 @@ is limbo, so it returns to the launcher instead of sitting there. Our own
 normal stop path never recurses.
 
 - **`log_app.cpp`** — a virtualized text view ([terminal.md](terminal.md)) in
-  `lcdFont(LcdFace::MONO, 8)` (which resolves to Spleen 5×8 through the
-  small-mono bitmap band), an ITS client of the log task's `log:1` DC port with connect
+  `lcdFontMono()` — the stylesheet's mono face at the current zoom, shared with
+  the CLI and the monitor so every terminal-shaped surface matches and follows
+  the zoom together — an ITS client of the log task's `log:1` DC port with connect
   payload `{"ansi":0}` (plain text, no ANSI escapes LVGL can't render).
   Per-line severity colour via `lcdTextViewSetLineColor` (the scrollback stays
   plain text, so the column math never sees colour). Scrollback is capped to
@@ -125,6 +126,28 @@ normal stop path never recurses.
   launcher tile that opened the app grabs the focus group on click-release (after
   the app's handlers), so an immediate focus is stolen back — a one-shot 40 ms
   timer re-focuses the terminal once that settles.
+- **`actmon_app.cpp`** — the Activity monitor: an RGB565 canvas in PSRAM, sized
+  to the app's root once LVGL has laid it out (`lv_obj_update_layout` first —
+  read the content size before that pass and it is 0, which is an app that
+  builds its canvas to a guess and keeps it), with a half-height retry because
+  a full-screen canvas is half a megabyte that PSRAM may not have.
+
+  It **sweeps rather than scrolls**. A scrolling graph gives every column a new
+  sample every second, so the whole canvas has to reach the glass again — on an
+  RGB panel that is megabytes a second through the one memory the display is
+  refreshed from. Sweeping writes the newest sample over the oldest at a head
+  that walks and wraps, so one column changes and only that column is
+  invalidated; a blanked band of 5% of the width ahead of the head is what says
+  where *now* is. Full redraws are for when the columns change meaning: first
+  paint, a tab switch, and a new peak on the traffic graph, which is scaled to
+  its window. The head starts where the history *ends*, so a graph holding fewer
+  samples than the screen is wide fills from the left and grows rightwards.
+
+  It claims pm's sampler with `pmStatsWatch()` on show and releases it on hide,
+  and raises `s.sys.cpu_sample_buf` to its own width — the graph draws one
+  sample per pixel column, and the shipped 320 is a 320-px deck's width. Band
+  heights are shares of the viewport, not reference pixels, so the graphs fill
+  whatever screen they are given.
 
 ## 6. Pitfalls
 

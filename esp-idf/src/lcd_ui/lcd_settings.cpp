@@ -96,8 +96,9 @@ bool nodeLess(const Node* a, const Node* b) {
  * deletes the row being clicked (the old rebuild-in-place scheme cleaned the
  * content out from under the live click event). */
 
-const int SETTINGS_HDR_H = 30;
-const int SETTINGS_ROW_H = 36;   /* one control row; the pane's vertical unit */
+/* Reference pixels through the UI zoom, like every other length in the shell. */
+inline int SETTINGS_HDR_H() { return lcdPx(30); }
+inline int SETTINGS_ROW_H() { return lcdPx(36); }   /* one control row; the pane's vertical unit */
 
 lv_obj_t* s_titleLbl = nullptr;
 lv_obj_t* s_back     = nullptr;
@@ -152,11 +153,11 @@ lv_obj_t* makePage() {
     lv_obj_set_style_bg_color(pg, lv_color_hex(0x10141a), 0);
     lv_obj_set_style_bg_opa(pg, LV_OPA_COVER, 0);
     lv_obj_set_flex_flow(pg, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(pg, 6, 0);
-    lv_obj_set_style_pad_row(pg, 4, 0);
+    lv_obj_set_style_pad_all(pg, lcdPx(6), 0);
+    lv_obj_set_style_pad_row(pg, lcdPx(4), 0);
     /* Half a row of run-off under the last one, so the bottom of a scrolled
      * pane doesn't read as content cut off at the edge of the screen. */
-    lv_obj_set_style_pad_bottom(pg, SETTINGS_ROW_H / 2, 0);
+    lv_obj_set_style_pad_bottom(pg, SETTINGS_ROW_H() / 2, 0);
     lv_obj_add_event_cb(pg, onAnyPageScroll, LV_EVENT_SCROLL, nullptr);
     return pg;
 }
@@ -193,10 +194,10 @@ void pushNode(Node* node) {
         /* A pixel off the top and bottom of the label's breathing room. The
          * main menu is four of these, and at 38 they came to more than the
          * viewport — a whole page that scrolled to show nothing. */
-        lv_obj_set_height(row, 36);
+        lv_obj_set_height(row, SETTINGS_ROW_H());
         lv_obj_set_style_bg_color(row, lv_color_hex(0x20262e), 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(row, 6, 0);
+        lv_obj_set_style_radius(row, lcdPx(6), 0);
         lv_obj_add_event_cb(row, onRowClick, LV_EVENT_CLICKED, k);
 
         lv_obj_t* lbl = lv_label_create(row);
@@ -205,12 +206,12 @@ void pushNode(Node* node) {
         /* Navigation rows get a larger face than the in-pane controls (which
          * keep the inherited size) — these are the primary tap targets. */
         lv_obj_set_style_text_font(lbl, lcdFont(LcdFace::UI, lcdPx(16)), 0);
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 10, 0);
+        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, lcdPx(10), 0);
 
         lv_obj_t* ch = lv_label_create(row);
         lv_label_set_text(ch, LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_color(ch, lv_color_hex(0x8a93a0), 0);
-        lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -10, 0);
+        lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -lcdPx(10), 0);
     }
     afterPagePush(pg);
 }
@@ -231,12 +232,12 @@ void onRowClick(lv_event_t* e) {
 
 void settingsOpen(void* arg) {
     lv_obj_t* layer = static_cast<lv_obj_t*>(arg);
-    int layerH = lcdScreenH() - LCD_STATUSBAR_H;
+    int layerH = lcdScreenH() - lcdStatusBarH();
 
     lv_obj_t* hdr = lv_obj_create(layer);
     lv_obj_remove_style_all(hdr);
     lv_obj_set_pos(hdr, 0, 0);
-    lv_obj_set_size(hdr, lv_pct(100), SETTINGS_HDR_H);
+    lv_obj_set_size(hdr, lv_pct(100), SETTINGS_HDR_H());
     lv_obj_set_style_bg_color(hdr, lv_color_hex(0x222b38), 0);   /* distinct from the page bg */
     lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(hdr, LV_BORDER_SIDE_BOTTOM, 0);
@@ -246,20 +247,20 @@ void settingsOpen(void* arg) {
     s_back = lv_label_create(hdr);
     lv_label_set_text(s_back, LV_SYMBOL_LEFT);
     lv_obj_set_style_text_color(s_back, lv_color_white(), 0);
-    lv_obj_align(s_back, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_align(s_back, LV_ALIGN_LEFT_MID, lcdPx(8), 0);
     lv_obj_add_flag(s_back, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(s_back, 12);
+    lv_obj_set_ext_click_area(s_back, lcdPx(12));
     lv_obj_add_event_cb(s_back, [](lv_event_t*) { popPage(); }, LV_EVENT_CLICKED, nullptr);
 
     s_titleLbl = lv_label_create(hdr);
     lv_obj_set_style_text_color(s_titleLbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_titleLbl, lcdFont(LcdFace::UI_BOLD, 16), 0);  /* a touch bigger */
-    lv_obj_align(s_titleLbl, LV_ALIGN_LEFT_MID, 34, 0);
+    lv_obj_set_style_text_font(s_titleLbl, lcdFont(LcdFace::UI_BOLD, lcdPx(16)), 0);
+    lv_obj_align(s_titleLbl, LV_ALIGN_LEFT_MID, lcdPx(34), 0);
 
     s_host = lv_obj_create(layer);
     lv_obj_remove_style_all(s_host);
-    lv_obj_set_pos(s_host, 0, SETTINGS_HDR_H);
-    lv_obj_set_size(s_host, lv_pct(100), layerH - SETTINGS_HDR_H);
+    lv_obj_set_pos(s_host, 0, SETTINGS_HDR_H());
+    lv_obj_set_size(s_host, lv_pct(100), layerH - SETTINGS_HDR_H());
     lv_obj_remove_flag(s_host, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_host, LV_OBJ_FLAG_CLICKABLE);
 
@@ -270,15 +271,15 @@ void settingsOpen(void* arg) {
     auto makePill = [](const char* sym, lv_align_t align) {
         lv_obj_t* p = lv_obj_create(s_host);
         lv_obj_remove_style_all(p);
-        lv_obj_set_size(p, 24, 16);
+        lv_obj_set_size(p, lcdPx(24), lcdPx(16));
         lv_obj_set_style_bg_color(p, lv_color_hex(0x3a4658), 0);
         lv_obj_set_style_bg_opa(p, LV_OPA_80, 0);
-        lv_obj_set_style_radius(p, 8, 0);
+        lv_obj_set_style_radius(p, lcdPx(8), 0);
         lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_remove_flag(p, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag   (p, LV_OBJ_FLAG_HIDDEN);
-        int y = (align == LV_ALIGN_TOP_RIGHT) ? 4 : -4;
-        lv_obj_align(p, align, -4, y);
+        int y = (align == LV_ALIGN_TOP_RIGHT) ? lcdPx(4) : -lcdPx(4);
+        lv_obj_align(p, align, -lcdPx(4), y);
         lv_obj_t* l = lv_label_create(p);
         lv_label_set_text(l, sym);
         lv_obj_set_style_text_color(l, lv_color_white(), 0);
@@ -303,9 +304,9 @@ lv_obj_t* makeRow(lv_obj_t* parent, bool compact = false) {
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, compact ? (SETTINGS_ROW_H * 3) / 4 : SETTINGS_ROW_H);
-    lv_obj_set_style_pad_hor(row, 8, 0);
-    lv_obj_set_style_pad_column(row, 10, 0);
+    lv_obj_set_height(row, compact ? (SETTINGS_ROW_H() * 3) / 4 : SETTINGS_ROW_H());
+    lv_obj_set_style_pad_hor(row, lcdPx(8), 0);
+    lv_obj_set_style_pad_column(row, lcdPx(10), 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -522,8 +523,12 @@ void onTextRow(lv_event_t* e) {
 
     lv_obj_t* ta = lv_textarea_create(ov);
     halfPadVer(ta);
-    lv_obj_set_size(ta, lv_pct(96), 56);
-    lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 6);
+    /* The value being edited is the subject of this screen, so it is set larger
+     * than body text and in mono — digits under a finger, on a field that holds
+     * nothing else. */
+    lv_obj_set_style_text_font(ta, lcdFont(LcdFace::MONO, lcdPx(20)), 0);
+    lv_obj_set_size(ta, lv_pct(96), lcdPx(56));
+    lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, lcdPx(6));
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_password_mode(ta, tr->secret);
     /* Digits only (and a sign where the range goes below zero): the field
@@ -838,7 +843,7 @@ lv_obj_t* lcdSettingTitle(lv_obj_t* parent, const char* title) {
     lv_obj_set_style_border_side(l, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(l, 1, 0);
     lv_obj_set_style_border_color(l, lv_color_hex(0x3a4658), 0);
-    lv_obj_set_style_pad_bottom(l, 5, 0);
+    lv_obj_set_style_pad_bottom(l, lcdPx(5), 0);
     return l;
 }
 
@@ -850,7 +855,7 @@ lv_obj_t* lcdSettingHeading(lv_obj_t* parent, const char* title) {
     lv_label_set_text(l, title);
     lv_obj_set_style_text_color(l, lv_color_hex(0x6cc0ff), 0);
     lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(21)), 0);
-    lv_obj_set_style_pad_top(l, 14, 0);
+    lv_obj_set_style_pad_top(l, lcdPx(14), 0);
     return l;
 }
 
@@ -862,7 +867,7 @@ lv_obj_t* lcdSettingSection(lv_obj_t* parent, const char* title) {
     lv_label_set_text(l, title);
     lv_obj_set_style_text_color(l, lv_color_hex(0x6cc0ff), 0);
     lv_obj_set_style_text_font(l, lcdFont(LcdFace::UI_BOLD, lcdPx(17)), 0);
-    lv_obj_set_style_pad_top(l, 12, 0);
+    lv_obj_set_style_pad_top(l, lcdPx(12), 0);
     return l;
 }
 
@@ -899,8 +904,8 @@ lv_obj_t* lcdSettingCaption(lv_obj_t* parent, const char* text, bool underHeadin
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_hor(row, 8, 0);
-    lv_obj_set_style_pad_column(row, 10, 0);
+    lv_obj_set_style_pad_hor(row, lcdPx(8), 0);
+    lv_obj_set_style_pad_column(row, lcdPx(10), 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -923,7 +928,7 @@ lv_obj_t* lcdSettingSwitch(lv_obj_t* parent, const char* label, const char* key)
     lv_obj_t* row = makeRow(parent);
     addRowLabel(row, label);
     lv_obj_t* sw = lv_switch_create(row);
-    lv_obj_set_size(sw, 36, 18);                              /* compact (~60% of default height) */
+    lv_obj_set_size(sw, lcdPx(36), lcdPx(18));                /* compact (~60% of default height) */
     /* High off-state contrast: a light knob on a clearly darker track. */
     lv_obj_set_style_bg_color(sw, lv_color_hex(0x3a4150), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sw, lv_color_white(), LV_PART_KNOB);
@@ -1015,7 +1020,7 @@ lv_obj_t* lcdSettingInteger(lv_obj_t* parent, const char* label, const char* key
     fillRowControl(grp);
     lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(grp, 6, 0);
+    lv_obj_set_style_pad_column(grp, lcdPx(6), 0);
     lv_obj_remove_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* tr = static_cast<TextRef*>(gp_alloc(sizeof(TextRef)));
@@ -1028,8 +1033,8 @@ lv_obj_t* lcdSettingInteger(lv_obj_t* parent, const char* label, const char* key
 
     auto stepper = [&](const char* glyph, int dir) {
         lv_obj_t* b = lv_button_create(grp);
-        lv_obj_set_style_pad_hor(b, 8, 0);
-        lv_obj_set_style_pad_ver(b, 1, 0);
+        lv_obj_set_style_pad_hor(b, lcdPx(8), 0);
+        lv_obj_set_style_pad_ver(b, lcdPx(1), 0);
         lv_obj_t* l = lv_label_create(b);
         lv_label_set_text(l, glyph);
         lv_obj_center(l);

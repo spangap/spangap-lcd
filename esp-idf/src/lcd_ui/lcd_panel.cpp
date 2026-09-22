@@ -37,8 +37,12 @@
 static esp_lcd_panel_handle_t s_panel        = nullptr;
 static bool                   s_hasBacklight = false;
 
+/* The turn in force, read from s.lcd.rotation at bring-up and fixed for the
+ * life of the boot (changing the key restarts the device — see lcd.cpp). */
+static int                    s_rot = CONFIG_LCD_ROTATION;
+
 /* Final (post-rotation) display size. 90°/270° swap the native axes. */
-static bool rotated(void) { return CONFIG_LCD_ROTATION == 90 || CONFIG_LCD_ROTATION == 270; }
+static bool rotated(void) { return s_rot == 90 || s_rot == 270; }
 static int  dispW(void)   { return rotated() ? CONFIG_LCD_NATIVE_HEIGHT : CONFIG_LCD_NATIVE_WIDTH;  }
 static int  dispH(void)   { return rotated() ? CONFIG_LCD_NATIVE_WIDTH  : CONFIG_LCD_NATIVE_HEIGHT; }
 
@@ -90,6 +94,8 @@ void lcdPanelDisplayPower(bool on) {
 }
 
 esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut, int* hOut) {
+    s_rot = lcdRotationSetting();      /* before anything asks how big the display is */
+
     /* CONFIG_LCD_SPI_HOST is the peripheral *name* (2=SPI2/FSPI); the IDF
      * spi_host_device_t enum is offset by one (SPI2_HOST=1). Subtract — a raw
      * cast puts the panel on the wrong host where it fights the shared SD/LoRa
@@ -141,7 +147,7 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
      * rotation table; the Kconfig mirror toggles XOR on top for glass whose scan
      * direction differs. */
     bool swap, mx, my;
-    switch (CONFIG_LCD_ROTATION) {
+    switch (s_rot) {
         case 90:  swap = true;  mx = true;  my = false; break;
         case 180: swap = false; mx = true;  my = true;  break;
         case 270: swap = true;  mx = false; my = true;  break;
@@ -183,7 +189,7 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
 void lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY) {
     const int NW = CONFIG_LCD_NATIVE_WIDTH, NH = CONFIG_LCD_NATIVE_HEIGHT;
     int x, y;
-    switch (CONFIG_LCD_ROTATION) {
+    switch (s_rot) {
         case 90:  x = rawY;            y = (NW - 1) - rawX; break;
         case 180: x = (NW - 1) - rawX; y = (NH - 1) - rawY; break;
         case 270: x = (NH - 1) - rawY; y = rawX;            break;
@@ -201,5 +207,12 @@ void lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY) {
     if (outX) *outX = x;
     if (outY) *outY = y;
 }
+
+/* The `panel` test patterns are the RGB transport's, because the questions they
+ * answer — which data line reaches which colour bit, how fast the glass can be
+ * clocked — are questions about a parallel bus. There is nothing to stand over
+ * here, so the UI is never held back. */
+bool lcdPanelPatternUp(void) { return false; }
+void lcdPanelPatternClear(void) {}
 
 #endif  /* CONFIG_LCD_BUS_SPI */

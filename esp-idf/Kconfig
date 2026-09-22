@@ -366,14 +366,33 @@ config LCD_TOUCH_INT_PIN
     default -1
     depends on !LCD_TOUCH_CONTROLLER_NONE
     help
-        Wired to the shared input ISR: an edge wakes the lcd task, which reads
+        Wired to the shared input ISR: an edge wakes the sampler, which reads
         the controller and keeps re-reading at ~10 ms while a finger is down.
-        The indevs are event-mode (no polling), so without an INT line touch
-        never fires — -1 is only for a board with no touch routed.
+        It is also the only thing that can wake the device from standby on a
+        board whose glass is its only input.
+
+        Without an edge nothing is read at all, so a board with no INT routed
+        (-1), or one whose line turns out to be silent, needs
+        LCD_TOUCH_POLL_MS below to have touch at all.
 config LCD_TOUCH_RST_PIN
     int "Touch reset pin (-1 if it resets with the power rail)"
     default -1
     depends on !LCD_TOUCH_CONTROLLER_NONE
+config LCD_TOUCH_POLL_MS
+    int "Ask the controller anyway, every N ms (0 = only when the INT says so)"
+    default 0
+    depends on !LCD_TOUCH_CONTROLLER_NONE
+    help
+        A backstop for glass whose interrupt cannot be relied on: a board that
+        brings no INT line out, or one whose controller goes quiet on the line
+        while it is perfectly willing to be asked. The sampler then reads at
+        this cadence with nothing under the finger instead of sleeping on the
+        INT, and a tap is found at worst one interval late.
+
+        It costs a short I2C transaction per interval, forever, on a bus other
+        chips may share — so 0 (the default) is right wherever the INT works,
+        and 50 is a sensible value where it does not. With an INT pin as well,
+        both paths are live: the edge still arrives first when it arrives.
 
 # How the touch glass is mounted relative to the panel — a lamination fact, not
 # a display one, so it is corrected on the raw point BEFORE the panel's rotation
@@ -408,9 +427,11 @@ config LCD_WAKE_ON_TOUCH_DEFAULT
 # ─── geometry / orientation ─────────────────────────────────────────────────
 # Native = the panel's physical pixels, before rotation. Resolution can't be
 # probed from an SPI panel (the controller's GRAM doesn't report the attached
-# glass), so it must be set here. Rotation is done in hardware (swap_xy + mirror)
-# at bring-up and the post-rotation size is what LVGL is told; the same transform
-# is applied to raw touch (lcdPanelOrientTouch) so touch and pixels always agree.
+# glass), so it must be set here. Rotation is the panel controller's on an SPI
+# panel (swap_xy + mirror at bring-up) and the strip copy's on an RGB one, which
+# has no controller to ask; either way the post-rotation size is what LVGL is
+# told, and the same transform is applied to raw touch (lcdPanelOrientTouch) so
+# touch and pixels always agree.
 config LCD_NATIVE_WIDTH
     int "Native panel width (px, pre-rotation)"
     default 240
@@ -422,15 +443,18 @@ choice
     prompt "Rotation"
     default LCD_ROTATION_90
     help
-        Hardware rotation applied at bring-up. The base swap_xy/mirror per
-        rotation follows the common ST7789/ILI9341 table; if a panel's scan
+        How the picture is held on the glass. On an SPI panel it is the
+        controller's own swap_xy/mirror, applied at bring-up; the base per
+        rotation follows the common ST7789/ILI9341 table, and if a panel's scan
         direction differs the image comes out mirrored — use the Mirror X/Y
         toggles below to correct it.
 
-        An RGB panel has no rotation to apply: the SoC scans the framebuffer out
-        in the order the glass reads it, so only 0 and 180 exist there (180
-        being both mirrors) and the quarter turns are refused at bring-up with
-        a log line rather than rendered in software.
+        An RGB panel has no such controller — the SoC scans the framebuffer out
+        in the order the glass reads it — so 0 and 180 are free (180 is both
+        mirrors) and a QUARTER turn is paid for in the flush, which transposes
+        every strip on its way into the framebuffer. It costs one more pass over
+        each repainted pixel and one draw buffer's worth of PSRAM. A board with
+        no PSRAM to spare for that strip runs native and logs why.
     config LCD_ROTATION_0
         bool "0° (portrait, native)"
     config LCD_ROTATION_90

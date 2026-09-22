@@ -133,7 +133,7 @@ void addCard(LcdApp* app) {
     lv_obj_set_size(card, thumbW, cardH);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1A2028), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_set_style_radius(card, lcdPx(8), 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(card, onCardPressed,  LV_EVENT_PRESSED,    app);
     lv_obj_add_event_cb(card, onCardPressing, LV_EVENT_PRESSING,   app);
@@ -142,9 +142,9 @@ void addCard(LcdApp* app) {
     if (lcdInputGroup()) lv_group_add_obj(lcdInputGroup(), card);
 
     lv_obj_t* thumb = lv_image_create(card);
-    lv_obj_align(thumb, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_align(thumb, LV_ALIGN_TOP_MID, 0, lcdPx(4));
     lv_obj_set_size(thumb, thumbW, thumbH);
-    lv_obj_set_style_radius(thumb, 6, 0);
+    lv_obj_set_style_radius(thumb, lcdPx(6), 0);
     lv_obj_set_style_clip_corner(thumb, true, 0);
     if (app->_thumb()) {
         /* Fit the live snapshot into the card, keeping its aspect ratio. */
@@ -154,7 +154,7 @@ void addCard(LcdApp* app) {
         /* No snapshot yet (never minimised) — fall back to the launcher icon,
          * rasterized at the recents icon size. */
         const char* base = app->cfg().iconBasename ? app->cfg().iconBasename : "";
-        int px = lcdPx(lcdStyle().recents.iconPx);
+        int px = lcdStyle().recents.iconPx;
         const lv_image_dsc_t* dsc = lcdIconDsc(base, px);
         if (dsc) {
             lv_image_set_src(thumb, dsc);
@@ -168,10 +168,10 @@ void addCard(LcdApp* app) {
     lv_label_set_text(name, app->cfg().name ? app->cfg().name : "");
     lv_obj_set_style_text_color(name, lv_color_white(), 0);
     if (st.recents.titleFont) lv_obj_set_style_text_font(name, st.recents.titleFont, 0);
-    lv_obj_set_width(name, thumbW - 12);
+    lv_obj_set_width(name, thumbW - lcdPx(12));
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -lcdPx(4));
 }
 
 void build() {
@@ -192,8 +192,8 @@ void build() {
     lv_obj_set_style_bg_opa(s_cards, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(s_cards, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_cards, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(s_cards, 10, 0);
-    lv_obj_set_style_pad_left(s_cards, 10, 0);
+    lv_obj_set_style_pad_column(s_cards, lcdPx(10), 0);
+    lv_obj_set_style_pad_left(s_cards, lcdPx(10), 0);
     lv_obj_set_scroll_dir(s_cards, LV_DIR_HOR);
     lv_obj_set_scroll_snap_x(s_cards, LV_SCROLL_SNAP_CENTER);
     lv_obj_set_scrollbar_mode(s_cards, LV_SCROLLBAR_MODE_OFF);

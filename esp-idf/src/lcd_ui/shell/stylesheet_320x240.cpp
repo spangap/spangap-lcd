@@ -17,6 +17,8 @@ extern const LcdStyle lcdStyleDefault320x240 = {   /* extern: const has internal
         .bg              = 0x101418,
         .fontSpec        = { LcdFace::UI, 14 },   /* 14 = smallest UI face */
         .font            = nullptr,   /* resolved at calibrate() */
+        .monoSpec        = { LcdFace::MONO, 8 },
+        .monoFont        = nullptr,   /* resolved at calibrate() */
         .maxResidentApps = 4,
     },
 

@@ -77,6 +77,20 @@ static bool s_hasKeyboard = false;
 void lcdSetHasKeyboard(bool present) { s_hasKeyboard = present; }
 bool lcdHasKeyboard(void) { return s_hasKeyboard; }
 
+/* The stored rotation, and the board's if the store holds anything else. A
+ * value off the quarter turns is not a rotation any panel can be put in, and
+ * the panel is about to be told the display's size from it. */
+int lcdRotationSetting(void) {
+    const int r = storageGetInt("s.lcd.rotation", CONFIG_LCD_ROTATION);
+    switch (r) {
+        case 0: case 90: case 180: case 270: return r;
+        default:
+            warn("rotation %d is not a quarter turn — using the board's %d\n",
+                 r, CONFIG_LCD_ROTATION);
+            return CONFIG_LCD_ROTATION;
+    }
+}
+
 /* ---- aux payloads (delivered on the lcd task) ---- */
 
 struct lcd_run_msg_t { lcd_fn_t fn; void* arg; };
@@ -181,6 +195,16 @@ static void lcdTaskFn(void*) {
                                         400, nullptr);
         lv_timer_set_repeat_count(t, 1);
     });
+    /* Rotation restarts for the same reason and by the same route: it is read
+     * by the panel before there is a UI at all, it decides which way round the
+     * display's own width and height are, and a quarter turn from where the
+     * shell is sitting moves every pixel it has placed. */
+    storageSubscribeChanges("s.lcd.rotation", ON_CHANGE {
+        lcdSettingsRebootNotice();
+        lv_timer_t* t = lv_timer_create([](lv_timer_t*) { storageSave(); esp_restart(); },
+                                        400, nullptr);
+        lv_timer_set_repeat_count(t, 1);
+    });
     /* Inactivity: after s.lcd.inactivity_timeout s with no input we set the
      * ephemeral sys.standby key; the board decides what standby means (and clears
      * the key to wake). 0 = never. */
@@ -261,6 +285,11 @@ void lcdInit(void) {
     /* UI zoom %, clamp 50–250. The shipped value is the BOARD's, because what
      * a comfortable size is depends on the glass rather than on the shell. */
     storageDefault("s.lcd.scale",        CONFIG_LCD_UI_SCALE_DEFAULT);
+    /* Which way up the screen is held. The shipped value is the BOARD's
+     * (CONFIG_LCD_ROTATION) — how a case is meant to be carried is a fact about
+     * the case — and all four turns are on offer because a board can be built
+     * into anything. */
+    storageDefault("s.lcd.rotation",     CONFIG_LCD_ROTATION);
     storageDefault("s.lcd.date_format",  "%d %b %Y, %H:%M");
     storageDefault("s.lcd.launcher_order", "");   /* empty = install order */
     storageDefault("s.lcd.inactivity_timeout", 30);   /* s; 0 = never blank */

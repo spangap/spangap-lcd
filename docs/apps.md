@@ -75,6 +75,16 @@ the image as a whole, so the straddle being built states the launcher's order by
 `name` (`CONFIG_LCD_LAUNCHER_ORDER`, see [shell.md](shell.md)) and the operator
 overrides it by dragging. An app with no opinion to declare needs none.
 
+## Declining to exist
+
+`bool available() const` decides whether the app installs at all. Return false
+and there is no tile and no boot wiring — the app is in the image and not in the
+launcher. It is for hardware an app exists to show and this board does not have:
+LoRaMon returns `CONFIG_LORA_COUNT > 0`, because a radio monitor on a board with
+no radio is a tile that can only ever open onto an empty graph. Which straddles
+are in the build is straddle.yaml's business; this is for what only the board's
+own configuration knows.
+
 ## The lifecycle
 
 Every method runs on the lcd task. The shell calls them at these points:

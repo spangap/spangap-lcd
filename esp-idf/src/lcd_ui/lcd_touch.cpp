@@ -50,6 +50,7 @@
  * wakes it too (see the block over touchWakeArm).
  */
 #include "lcd_internal.h"
+#include "cli.h"            /* the `touch` bring-up command */
 #include "i2c_helper.h"     /* SPANGAP_I2C_PULLUP (shared bus wiring policy) */
 #include "log.h"
 #include "storage.h"
@@ -87,11 +88,20 @@ static bool                   s_asleep = false; /* sys.standby: reads gated */
 
 /* ---- the sampler ----
  * kTrackMs is the re-read cadence while a finger is down (a drag's smoothness);
- * with none down the task sleeps on the INT and costs nothing. The queue holds
+ * with none down the task sleeps on the INT and costs nothing — unless the
+ * board says the INT cannot carry that alone (CONFIG_LCD_TOUCH_POLL_MS), in
+ * which case the idle wait is that interval and a touch is found by asking. The
+ * queue holds
  * press/release EDGES only — 16 of them is four fast taps' worth of backlog,
  * far past any render, and a full queue drops the oldest rather than the newest
  * so a burst reads as its own tail rather than freezing on its head. */
 static const int          kTrackMs   = 10;
+/* The idle wait: the INT alone (block until it fires), or the INT and a clock,
+ * on the glass whose line cannot be trusted — see CONFIG_LCD_TOUCH_POLL_MS. */
+static const int          kPollMs    = CONFIG_LCD_TOUCH_POLL_MS;
+static inline TickType_t idleWait(void) {
+    return kPollMs > 0 ? pdMS_TO_TICKS(kPollMs) : portMAX_DELAY;
+}
 /* Reads with no finger in a row before it counts as lifted — see the block over
  * its use in touchSamplerTask. Three of them at kTrackMs is 30 ms. */
 static const int          kLiftReads = 3;
@@ -105,6 +115,20 @@ static TaskHandle_t       s_sampler   = nullptr;
 static portMUX_TYPE       s_liveMux   = portMUX_INITIALIZER_UNLOCKED;
 static int16_t            s_liveX[LCD_TOUCH_MAXPTS], s_liveY[LCD_TOUCH_MAXPTS];
 static int                s_liveN     = 0;
+
+/* What the `touch` command reports. Four numbers settle every bring-up question
+ * this module can be asked — is the INT line real, is the part answering, is it
+ * seeing fingers — and they are counters rather than a log because the question
+ * is always asked after the touch, not during it. */
+/* The panel-io the driver reads the controller through, kept from the probe:
+ * the FT5x06's sensitivity register is written on it, and `touch` reads the
+ * part's own id and status registers on it. */
+static esp_lcd_panel_io_handle_t s_tio = nullptr;
+
+static volatile uint32_t  s_intEdges  = 0;   /* ISR fires, i.e. the line moving */
+static uint32_t           s_reads     = 0;   /* controller reads attempted */
+static uint32_t           s_readFails = 0;   /* …that the bus refused */
+static uint32_t           s_ptReads   = 0;   /* …that came back with a finger */
 
 /* ---- wake on touch (s.lcd.wake_on_touch) ----
  * Whether the glass wakes the device, as the board's button does. It is a
@@ -150,7 +174,6 @@ static bool wakeOnTouch(void) { return storageGetInt("s.lcd.wake_on_touch", 0) !
 #define FT5X06_REG_THGROUP  0x80
 static const int  kSensDefault = 50;
 static const int  kThAtZero    = 120;   /* threshold at sens 0; sens 100 → 20 */
-static esp_lcd_panel_io_handle_t s_tio = nullptr;
 
 static void touchSensApply(int sens) {
     if (!s_tio) return;
@@ -167,6 +190,7 @@ static void touchSensApply(int sens) {
  * or not the lcd task is mid-render, which is the whole point of having a task
  * for it. IRAM: the shared ISR service is installed with ESP_INTR_FLAG_IRAM. */
 static void IRAM_ATTR touchISR(void*) {
+    s_intEdges = s_intEdges + 1;   /* ++ on a volatile is deprecated in C++20 */
     if (!s_sampler) return;
     BaseType_t hp = pdFALSE;
     vTaskNotifyGiveFromISR(s_sampler, &hp);
@@ -226,9 +250,11 @@ static bool touchSample(int16_t* xs, int16_t* ys, int* count) {
      * so this is a warning, not an error — reported on the failing edge only,
      * since a wedged bus fails on every read. */
     static bool readFailed = false;
+    s_reads++;
     if (esp_lcd_touch_read_data(s_tp) != ESP_OK) {
         if (!readFailed) warn("touch: read failed\n");
         readFailed = true;
+        s_readFails++;
         return false;
     }
     readFailed = false;
@@ -250,6 +276,7 @@ static bool touchSample(int16_t* xs, int16_t* ys, int* count) {
         xs[i] = (int16_t)x;
         ys[i] = (int16_t)y;
     }
+    if (n > 0) s_ptReads++;
     *count = n;
     return true;
 }
@@ -278,7 +305,8 @@ static void touchSamplerTask(void*) {
     int  emptyReads = 0;      /* reads with no finger in a row; see kLiftReads */
     int16_t xs[LCD_TOUCH_MAXPTS], ys[LCD_TOUCH_MAXPTS];
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, down ? pdMS_TO_TICKS(kTrackMs) : portMAX_DELAY);
+        const bool byInt = ulTaskNotifyTake(pdTRUE,
+                                            down ? pdMS_TO_TICKS(kTrackMs) : idleWait()) > 0;
         int n = 0;
 
         if (s_asleep) {
@@ -293,8 +321,12 @@ static void touchSamplerTask(void*) {
             s_liveN = 0;
             taskEXIT_CRITICAL(&s_liveMux);
             if (s_edges) xQueueReset(s_edges);
-            if (!s_wakeArmed) continue;
-            gpio_intr_enable((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN);   /* the wake ISR silenced it */
+            /* Asleep, a read only happens where a touch is allowed to wake the
+             * device: the armed INT, or the poll on glass whose INT is not
+             * what wakes anything. */
+            if (!s_wakeArmed && !(kPollMs > 0 && wakeOnTouch())) continue;
+            if (s_wakeArmed)
+                gpio_intr_enable((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN);  /* the wake ISR silenced it */
             if (!touchSample(xs, ys, &n) || n == 0) continue;
             s_wakeAbsorb = true;
             storageSet("sys.standby", 0);       /* the board takes it from here */
@@ -302,6 +334,11 @@ static void touchSamplerTask(void*) {
         }
 
         if (!touchSample(xs, ys, &n)) continue;
+        /* Which door a finger came through, for the board being brought up on a
+         * pin map nobody has proved yet: "int" means the line is live, "poll"
+         * means only CONFIG_LCD_TOUCH_POLL_MS found this touch. `log lcdtouch
+         * debug` turns it on. */
+        if (n > 0) dbg("%s: %d pt, raw %d,%d\n", byInt ? "int" : "poll", n, xs[0], ys[0]);
 
         /* The finger that woke the device: it wakes and does nothing else, so
          * it is watched (to know when it lifts) but never reported. */
@@ -427,9 +464,7 @@ static void touchCtlBringup(void) {
 #endif
             if (err == ESP_OK) {
                 info("touch: %s ready @ 0x%02X\n", name, addr);
-#if CONFIG_LCD_TOUCH_CONTROLLER_FT5X06
-                s_tio = tio;      /* kept for the sensitivity register */
-#endif
+                s_tio = tio;      /* kept: see its declaration */
                 char tch[20];
                 snprintf(tch, sizeof(tch), "%s @ 0x%02X", name, addr);
                 storageSet("lcd.touch", tch);   /* for a board's Hardware pane */
@@ -462,6 +497,138 @@ static void touchCtlBringup(void) {
     storageSet("lcd.touch", "not found");
 }
 
+/* `touch` — what the glass is doing, for a board being brought up on a pin map
+ * nobody has proved yet.
+ *
+ * It answers the three questions in the order they go wrong, and it answers
+ * them AFTER the fact, off counters, because the person asking has both hands
+ * on the device: does the INT line move (edges), does the part answer the bus
+ * (reads/failed), does it ever see a finger (with a finger). A line that never
+ * moves is a pin map that is wrong — and on a board whose glass is its only
+ * input, that same line is the only thing that can wake it, so it is worth
+ * knowing even where LCD_TOUCH_POLL_MS has made touch work without it.
+ *
+ * `touch watch [s]` then follows the live sample, which is what tells you
+ * whether the coordinates are the ones under your finger. It is bounded well
+ * inside the CLI's own execution budget — a command that outruns it is cut off
+ * mid-answer. */
+static void cliTouch(const char* args) {
+    if (cliWantsHelp(args)) {
+        cliPrintf("%-*s touch controller: the INT line, the reads, the live point\n",
+                  CLI_HELP_COL, "touch [watch [s]]");
+        if (args && args[0] == '-') {          /* -h / --help: the long form */
+            cliPrintf("%-*s follow the live point for a few seconds\n",
+                      CLI_HELP_COL, "touch watch [s]");
+            cliPrintf("%-*s read the part's own registers (hex address)\n",
+                      CLI_HELP_COL, "touch reg <addr> [n]");
+            cliPrintf("%-*s write one byte to one of them\n",
+                      CLI_HELP_COL, "touch poke <addr> <byte>");
+        }
+        return;
+    }
+    if (!s_tp) {
+        cliPrintf("no touch controller (bring-up did not find one)\n");
+        return;
+    }
+
+    /* The raw register doors, first because they take an argument and the
+     * status report below does not. They are for bring-up, and they are how a
+     * part that answers the bus but reports nothing is questioned: its
+     * thresholds, its configured resolution, its command register. A write is
+     * to the part's RAM — a GT911 keeps the copy that survives a power cycle
+     * behind a checksum and a separate flag — so a poke that makes things worse
+     * is undone by unplugging the board. */
+    if (args && *args) {
+        unsigned addr = 0, val = 0, n = 0;
+        if (sscanf(args, "reg %x %u", &addr, &n) >= 1) {
+            if (n < 1) n = 1;
+            if (n > 32) n = 32;
+            uint8_t buf[32] = {0};
+            if (!s_tio || esp_lcd_panel_io_rx_param(s_tio, (int)addr, buf, n) != ESP_OK) {
+                cliPrintf("read of 0x%04X failed\n", addr);
+                return;
+            }
+            cliPrintf("0x%04X:", addr);
+            for (unsigned i = 0; i < n; i++) cliPrintf(" %02X", buf[i]);
+            cliPrintf("\n");
+            return;
+        }
+        if (sscanf(args, "poke %x %x", &addr, &val) == 2) {
+            uint8_t b = (uint8_t)val;
+            if (!s_tio || esp_lcd_panel_io_tx_param(s_tio, (int)addr, &b, 1) != ESP_OK)
+                cliPrintf("write of 0x%02X to 0x%04X failed\n", b, addr);
+            else
+                cliPrintf("0x%04X <- 0x%02X\n", addr, b);
+            return;
+        }
+    }
+    cliPrintf("%s on i2c%d (sda %d, scl %d)\n",
+              storageGetStr("lcd.touch", "?").c_str(), CONFIG_LCD_TOUCH_I2C_PORT,
+              CONFIG_LCD_TOUCH_I2C_SDA, CONFIG_LCD_TOUCH_I2C_SCL);
+    if (CONFIG_LCD_TOUCH_INT_PIN >= 0)
+        cliPrintf("int pin %d: now %d, %lu edges since boot\n", CONFIG_LCD_TOUCH_INT_PIN,
+                  gpio_get_level((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN),
+                  (unsigned long)s_intEdges);
+    else
+        cliPrintf("int pin: none routed\n");
+    cliPrintf("polling every %d ms\n", kPollMs);
+    cliPrintf("reads %lu, failed %lu, with a finger %lu\n",
+              (unsigned long)s_reads, (unsigned long)s_readFails, (unsigned long)s_ptReads);
+#if CONFIG_LCD_TOUCH_CONTROLLER_GT911
+    /* Straight off the part, so a controller that is being read but never sees
+     * anything can be told apart from one that is not being read: the id proves
+     * the register path, and the status byte's top bit is the part saying it
+     * has a coordinate waiting. The sampler is reading the same register, so a
+     * "ready" seen here is a sample it is about to take. */
+    uint8_t id[6] = {0}, st = 0, cfg = 0;
+    if (s_tio && esp_lcd_panel_io_rx_param(s_tio, 0x8140, id, sizeof(id)) == ESP_OK)
+        cliPrintf("id '%c%c%c%c' fw %02X%02X\n", id[0] ? id[0] : '?', id[1] ? id[1] : '?',
+                  id[2] ? id[2] : '?', id[3] ? id[3] : '?', id[5], id[4]);
+    if (s_tio && esp_lcd_panel_io_rx_param(s_tio, 0x8047, &cfg, 1) == ESP_OK &&
+        s_tio && esp_lcd_panel_io_rx_param(s_tio, 0x814E, &st, 1) == ESP_OK)
+        cliPrintf("config version %u, status 0x%02X (%s, %u points)\n", cfg, st,
+                  (st & 0x80) ? "coordinate ready" : "idle", st & 0x0F);
+#endif
+
+    int secs = 0;
+    if (args && *args) {
+        const char* p = args;
+        while (*p == ' ') p++;
+        char verb[8] = {0};
+        size_t i = 0;
+        while (p[i] && p[i] != ' ' && i < sizeof(verb) - 1) { verb[i] = p[i]; i++; }
+        if (cliVerbIs(verb, "watch", 1)) {
+            secs = atoi(p + i);
+            if (secs <= 0) secs = 3;
+            if (secs > 4) secs = 4;     /* the framed reply is bounded at ~5 s */
+        }
+    }
+    if (!secs) return;
+
+    cliPrintf("watching %d s — put a finger on the glass\n", secs);
+    int lastN = -1, lastX = -1, lastY = -1;
+    for (int i = 0; i < secs * 20; i++) {
+        int16_t xs[LCD_TOUCH_MAXPTS], ys[LCD_TOUCH_MAXPTS];
+        int n;
+        taskENTER_CRITICAL(&s_liveMux);
+        n = s_liveN;
+        for (int j = 0; j < n; j++) { xs[j] = s_liveX[j]; ys[j] = s_liveY[j]; }
+        taskEXIT_CRITICAL(&s_liveMux);
+        if (n != lastN || (n > 0 && (xs[0] != lastX || ys[0] != lastY))) {
+            if (n == 0) {
+                cliPrintf("  lifted\n");
+            } else {
+                int dx = 0, dy = 0;
+                lcdPanelOrientTouch(xs[0], ys[0], &dx, &dy);
+                cliPrintf("  %d pt, raw %d,%d -> display %d,%d\n", n, xs[0], ys[0], dx, dy);
+                lastX = xs[0]; lastY = ys[0];
+            }
+            lastN = n;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
 #endif  /* LCD_TOUCH_CTL */
 
 bool lcdTouchCtlConfigured(void) { return LCD_TOUCH_CTL != 0; }
@@ -483,6 +650,7 @@ void lcdTouchCtlInit(void) {
         touchWakeArm(s_asleep && wakeOnTouch());
     });
     touchCtlBringup();
+    cliRegisterCmd("touch", cliTouch);
 #endif
 #if CONFIG_LCD_TOUCH_CONTROLLER_FT5X06
     /* After the bring-up: the driver writes its own threshold at init, and the

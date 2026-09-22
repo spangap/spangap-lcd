@@ -385,6 +385,13 @@ float lcdUiScale(void);
  *  gaps, font sizes) so on-device layout tracks the platform zoom. Lcd task. */
 int lcdPx(int px);
 
+/** The shell's monospace face at the current zoom — what the log, the CLI and
+ *  the on-device monitors are set in. An app showing columns, counters or
+ *  anything else that must not shuffle takes this rather than naming a size:
+ *  one face for every terminal-shaped surface on the device, and it follows the
+ *  zoom. Lcd task. */
+const lv_font_t* lcdFontMono(void);
+
 /* ---- Runtime SVG icons ----
  * Straddles ship icon *sources* to /fixed/icons/<base>.svg (see the
  * spangap_lcd_icons() build helper); the device rasterizes them on demand at an

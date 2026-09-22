@@ -1,9 +1,9 @@
 /**
- * stylesheet_480x640.cpp — the portrait sheet, for a 480x640 panel held tall
- * (the Waveshare 2.8B). It differs from the 320x240 default in the two things
- * the shape and the hardware actually change, and in nothing else: how many
- * rows of tiles a viewport twice as tall should hold, and whether the
- * navigation bar is on screen.
+ * stylesheet_640x480.cpp — the sheet for a bare touch panel, 640x480 (the
+ * Waveshare 2.8B, whose 480x640 glass is held landscape). The shape is the
+ * default's own 4:3, so the tile grid that fits one fits the other and the
+ * numbers below are the default's; what this sheet exists to say is that the
+ * board has no keys, which is the navigation bar's question.
  *
  * Everything here is in the same REFERENCE pixels as the default sheet — the
  * numbers a 320x240 panel wants — because the shell multiplies every length by
@@ -13,15 +13,17 @@
  */
 #include "stylesheet.h"
 
-extern const LcdStyle lcdStyle480x640 = {   /* extern: const has internal linkage by default */
-    .name = "portrait",
-    .displayW = 480,
-    .displayH = 640,
+extern const LcdStyle lcdStyle640x480 = {   /* extern: const has internal linkage by default */
+    .name = "touch",
+    .displayW = 640,
+    .displayH = 480,
 
     .core = {
         .bg              = 0x101418,
         .fontSpec        = { LcdFace::UI, 14 },
         .font            = nullptr,   /* resolved at calibrate() */
+        .monoSpec        = { LcdFace::MONO, 8 },
+        .monoFont        = nullptr,   /* resolved at calibrate() */
         .maxResidentApps = 4,
     },
 
@@ -33,11 +35,7 @@ extern const LcdStyle lcdStyle480x640 = {   /* extern: const has internal linkag
 
     .launcher = {
         .cols      = 4,
-        /* Five rows, not three: the tile height is the viewport divided by this,
-         * so the default sheet's three would draw a 4-wide grid of tiles half
-         * again as tall as they are wide. Five is what keeps them square on a
-         * panel of this aspect. */
-        .rows      = 5,
+        .rows      = 3,
         .tileW     = 72,
         .tileH     = 64,
         .iconPx    = 36,
@@ -54,9 +52,11 @@ extern const LcdStyle lcdStyle480x640 = {   /* extern: const has internal linkag
     .navBar = {
         .h             = 28,
         .btnPx         = 24,
-        /* Shown, unlike the default. The boards that hide it have a hardware
-         * button to go back and home with; a bare touch panel has the gesture
-         * and nothing else, and a gesture is not discoverable. */
+        /* Asked for, unlike the default: the boards that hide the bar have a
+         * hardware button to go back and home with, and a bare touch panel has
+         * the gesture and nothing else. No chrome reads this yet — the bar is
+         * declared here and not built (as LcdApp::Config::navBar is), so today
+         * this board navigates by gesture like every other. */
         .defaultHidden = false,
     },
 

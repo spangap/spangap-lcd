@@ -152,6 +152,14 @@ protected:
      *  init decoupled from the app belongs in a separate plain Service. */
     virtual void appInit() {}
 
+    /** Whether this app has anything to be on this device. False installs no
+     *  tile and runs no boot wiring — the app is in the image and not in the
+     *  launcher. It is for hardware an app exists to show and this board does
+     *  not have: a radio monitor on a board with no radio is a tile that can
+     *  only ever open onto nothing. Build-time straddle choices belong in
+     *  straddle.yaml; this is for what only the board's own config knows. */
+    virtual bool available() const { return true; }
+
 private:
     Config          m_cfg;
     lv_obj_t*       m_root = nullptr;
@@ -182,6 +190,7 @@ int lcdInstall(LcdApp* app);
  *  boot-task wiring. Out-of-line so it can name lcdInstall (declared just
  *  above). */
 inline void LcdApp::onInit() {
+    if (!available()) return;
     lcdRun([](void* a) { lcdInstall(static_cast<LcdApp*>(a)); }, this);
     appInit();
 }

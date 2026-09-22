@@ -30,6 +30,8 @@ struct LcdStyle {
         uint32_t         bg;              /* base background (launcher) */
         FontSpec         fontSpec;        /* default label/clock/status font */
         const lv_font_t* font;            /* resolved (calibrate) */
+        FontSpec         monoSpec;        /* terminal/log/monitor face */
+        const lv_font_t* monoFont;        /* resolved (calibrate) */
         int              maxResidentApps; /* evict the LRU past this many roots */
     } core;
 

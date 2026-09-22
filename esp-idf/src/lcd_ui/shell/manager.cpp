@@ -216,7 +216,7 @@ void initChrome() {
      * all program content. PRESS_LOCK pins the press here as the finger slides
      * up; the handlers drive the drag by hand. */
     int barH = lcdScreenH() / 10;
-    int barW = 90;
+    int barW = lcdPx(90);
     lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_SCROLLABLE);
     s_homebar = lv_obj_create(lv_layer_top());
@@ -234,11 +234,11 @@ void initChrome() {
     lv_obj_t* pill = lv_obj_create(s_homebar);
     lv_obj_remove_style_all(pill);
     lv_obj_remove_flag(pill, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
-    lv_obj_set_size(pill, barW, 4);
-    lv_obj_align(pill, LV_ALIGN_BOTTOM_MID, 0, -5);
+    lv_obj_set_size(pill, barW, lcdPx(4));
+    lv_obj_align(pill, LV_ALIGN_BOTTOM_MID, 0, -lcdPx(5));
     lv_obj_set_style_bg_color(pill, lv_color_hex(0x808080), 0);
     lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(pill, 2, 0);
+    lv_obj_set_style_radius(pill, lcdPx(2), 0);
 
     s_bottomLine = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(s_bottomLine);
