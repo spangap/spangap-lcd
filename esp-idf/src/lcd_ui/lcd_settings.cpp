@@ -551,11 +551,12 @@ void onTextRow(lv_event_t* e) {
         lv_group_focus_obj(ta);
         lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_READY, nullptr);
     } else {
-        lv_obj_t* kb = lv_keyboard_create(ov);
-        if (tr->num || tr->ipv4) lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
-        lv_keyboard_set_textarea(kb, ta);
-        lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_READY,  nullptr);
-        lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_CANCEL, nullptr);
+        /* The panel's own keyboard: it types straight into the field, picks the
+         * number pad from the accepted characters set above, and hands Enter
+         * and its dismiss key to the field as READY / CANCEL. */
+        lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_READY,  nullptr);
+        lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_CANCEL, nullptr);
+        lcdKeyboardOpen(ta);
     }
 }
 void textRefDelete(lv_event_t* e) { free(lv_event_get_user_data(e)); }

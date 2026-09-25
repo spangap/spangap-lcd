@@ -620,12 +620,12 @@ void onFieldTap(lv_event_t* e) {
     lv_textarea_set_text(ta, f->value.c_str());
     s_kb.ta = ta;
 
-    lv_obj_t* kb = lv_keyboard_create(ov);
-    if (f->row->kind == LCD_ROW_INTEGER || f->row->kind == LCD_ROW_IPV4)
-        lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
-    lv_keyboard_set_textarea(kb, ta);
-    lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_READY,  nullptr);
-    lv_obj_add_event_cb(kb, kbEvent, LV_EVENT_CANCEL, nullptr);
+    /* The panel's own keyboard, as in lcd_settings.cpp's editor: typing lands
+     * in the field, the number pad follows the accepted characters, and Enter /
+     * dismiss reach the field as READY / CANCEL. */
+    lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_READY,  nullptr);
+    lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_CANCEL, nullptr);
+    lcdKeyboardOpen(ta);
 }
 
 void onFieldInline(lv_event_t* e) {          /* physical keyboard: edit in place */

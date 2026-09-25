@@ -4,8 +4,10 @@
  * Layout (stylesheet-driven): one vertically-scrolling flex-wrap grid of tiles
  * filling the screen below the status bar. Columns come from the panel width
  * (`minTilePx`); `launcher.rows` is the number of rows that must be reachable
- * without scrolling, so tiles divide the viewport evenly and anything past that
- * scrolls under a hairline scrollbar that rides inside the right-hand padding.
+ * without scrolling, so tiles divide the viewport evenly — never taller than
+ * they are wide, so a portrait display packs them from the top — and anything
+ * past that scrolls under a hairline scrollbar that rides inside the right-hand
+ * padding.
  * The grid scrolls by touch drag and by lcdScroll() edge-pan.
  *
  * Holding a tile still for 700 ms enters edit mode with that tile in hand: every
@@ -57,8 +59,8 @@ lv_point_t activePoint() {
 
 /* Derived grid: tiles size from the viewport, not the sheet. cols =
  * floor(usableW / minTile); tileW fills the row. tileH divides the viewport into
- * `launcher.rows` rows so that many always fit, and only falls back to the bare
- * icon+label height on a panel too short to hold them. Recomputed per tile add
+ * `launcher.rows` rows so that many always fit, capped at tileW, and only falls
+ * back to the bare icon+label height on a panel too short to hold them. Recomputed per tile add
  * so a wider panel or a bigger zoom simply reflows. */
 struct Grid { int tileW, tileH; };
 Grid gridFor() {
@@ -81,6 +83,12 @@ Grid gridFor() {
     int rows   = st.launcher.rows > 0 ? st.launcher.rows : 1;
     int availH = viewportH() - 2 * padT;
     int tileH  = (availH - (rows - 1) * padR) / rows;
+    /* No taller than wide. On a display held portrait the viewport is the long
+     * side, and dividing it into `rows` makes tiles far taller than they are
+     * wide — the icons float in the middle of each and the rows drift apart
+     * down the screen. Capped square, they pack from the top as on a phone;
+     * more of them fit before anything scrolls, which is the same promise. */
+    if (tileH > tileW) tileH = tileW;
     if (tileH < minH) tileH = minH;
 
     return { tileW, tileH };

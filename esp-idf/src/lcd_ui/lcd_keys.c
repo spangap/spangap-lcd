@@ -49,7 +49,7 @@
  * uses the same 450 ms — a double tap should mean a double tap everywhere. */
 #define LCD_KEYS_MULTICLICK_MS       450
 
-/* A KEY ROW IS A FIXED SLICE OF THE PANEL, ‰ of its height, and the keyboard is
+/* A KEY ROW IS A FIXED SLICE OF THE PANEL, ‰ of its short side, and the keyboard is
  * as tall as the map it is showing (lcd_keys_size_to_map): a key is the same
  * height under five rows of letters as under the number pad's four. */
 #define LCD_KEYS_ROW_H_PERMILLE      98
@@ -946,7 +946,14 @@ static void lcd_keys_size_to_map(lv_obj_t * obj)
     lcd_keygrid_t * btnm = (lcd_keygrid_t *)obj;
     if(btnm->row_cnt == 0) return;
 
-    int32_t vres = lv_display_get_vertical_resolution(lv_obj_get_display(obj));
+    /* The panel's SHORT side, not its height: a row is a share of the width a
+     * key has to live in as much as of the screen above it, and on a display
+     * held portrait the height is the long side — a tenth of it under a row of
+     * ten keys makes each one half again as tall as it is wide. */
+    lv_display_t * disp = lv_obj_get_display(obj);
+    int32_t vres = lv_display_get_vertical_resolution(disp);
+    int32_t hres = lv_display_get_horizontal_resolution(disp);
+    if(hres < vres) vres = hres;
     int32_t gap  = lv_obj_get_style_pad_row(obj, LV_PART_MAIN);
     int32_t pad  = lv_obj_get_style_pad_top(obj, LV_PART_MAIN) +
                    lv_obj_get_style_pad_bottom(obj, LV_PART_MAIN);

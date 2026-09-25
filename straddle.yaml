@@ -105,6 +105,9 @@ settings:
 # half-scale thumbnail (recents.cpp / LcdApp::_captureThumb).
 kconfig:
   - CONFIG_LV_USE_SNAPSHOT=y
+  # The on-screen keyboard is this component's own (lcd_keys, lcdKeyboardOpen);
+  # LVGL's stock one is compiled out, so no screen can ever put it up.
+  - "# CONFIG_LV_USE_KEYBOARD is not set"
   # NOTHING RESETS THE RGB DMA PER FRAME. ESP-IDF offers to, at every vertical
   # blank (LCD_RGB_RESTART_IN_VSYNC), so that a starved frame costs that frame
   # rather than every frame after it — a starved RGB panel starts in the wrong
