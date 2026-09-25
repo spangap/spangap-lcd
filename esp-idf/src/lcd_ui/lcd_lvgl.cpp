@@ -133,13 +133,13 @@ static void flushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     xSemaphoreTake(s_dmaDone, portMAX_DELAY);
     spiHelperBusUnlock();
 #else
-    /* RGB: no byte swap (the sixteen data lines carry the halfword as LVGL
+    /* RGB and DSI: no byte swap (the framebuffer holds the halfword as LVGL
      * wrote it), no bus to lock, and nothing asynchronous to wait for — the
-     * flush is a copy into the framebuffer the LCD DMA is already scanning out,
-     * which returns when the copy is done. The panel module owns that copy,
-     * because on a quarter-turned display it is also where the turn happens. */
+     * flush is a copy into the framebuffer the panel's DMA is already scanning
+     * out, which returns when the copy is done. The panel module owns that copy,
+     * because on a turned display it is also where the turn happens. */
     (void)w; (void)h; (void)panel;
-    lcdPanelBlitRgb(area, px);
+    lcdPanelBlit(area, px);
 #endif
     lv_display_flush_ready(disp);
 }
@@ -836,8 +836,8 @@ static void tickTimerRun(bool on) {
 bool lcdLvglInit(void) {
     esp_lcd_panel_io_handle_t io = nullptr;
     s_panel = lcdPanelInit(&io, &s_w, &s_h);
-    /* An RGB panel hands back no panel-io — it has no command channel — so the
-     * handle is only required of the transport that has one. */
+    /* A framebuffer panel hands back no panel-io — its flush is a copy, not a
+     * bus transfer — so the handle is only required of the SPI transport. */
 #if CONFIG_LCD_BUS_SPI
     const bool ioOk = (io != nullptr);
 #else
@@ -904,12 +904,12 @@ bool lcdLvglInit(void) {
     const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = onColorDone };
     esp_lcd_panel_io_register_event_callbacks(io, &cbs, s_disp);
 #else
-    /* RGB: the strip is not bounded by a bus transfer and not made of internal
-     * DMA RAM — the flush is a copy into the framebuffer, so the strip is
-     * ordinary PSRAM and its only cost is PSRAM. It is stated in lines rather
+    /* RGB and DSI: the strip is not bounded by a bus transfer and not made of
+     * internal DMA RAM — the flush is a copy into the framebuffer, so the strip
+     * is ordinary PSRAM and its only cost is PSRAM. It is stated in lines rather
      * than derived, because on a panel this size a byte budget divided by the
      * width is a number nobody can picture. */
-    int    lines = CONFIG_LCD_RGB_DRAW_LINES;
+    int    lines = LCD_FB_DRAW_LINES;
     size_t bufSz = (size_t)s_w * lines * sizeof(lv_color16_t);
     void*  buf   = heap_caps_malloc(bufSz, MALLOC_CAP_SPIRAM);
     if (!buf) { err("draw-buffer alloc failed (%u B PSRAM)\n", (unsigned)bufSz); return false; }

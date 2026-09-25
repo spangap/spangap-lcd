@@ -47,6 +47,11 @@ static int  dispW(void)   { return rotated() ? CONFIG_LCD_NATIVE_HEIGHT : CONFIG
 static int  dispH(void)   { return rotated() ? CONFIG_LCD_NATIVE_WIDTH  : CONFIG_LCD_NATIVE_HEIGHT; }
 
 static void backlightInit(void) {
+#if CONFIG_LCD_BL_EN_PIN >= 0
+    gpio_reset_pin((gpio_num_t)CONFIG_LCD_BL_EN_PIN);
+    gpio_set_direction((gpio_num_t)CONFIG_LCD_BL_EN_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)CONFIG_LCD_BL_EN_PIN, 0);
+#endif
     if (CONFIG_LCD_BL_PIN < 0) return;
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_MODE;
@@ -69,6 +74,9 @@ static void backlightInit(void) {
     c.hpoint     = 0;
     c.duty       = 0;                            /* start dark */
     c.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
+#if CONFIG_LCD_BL_ACTIVE_LOW
+    c.flags.output_invert = 1;
+#endif
     ledc_channel_config(&c);
     s_hasBacklight = true;
 }
@@ -77,6 +85,9 @@ static void backlightInit(void) {
  * this is a plain duty update. KEEP_ALIVE (clocked from RC_FAST) keeps a dimmed
  * screen dimmed across light sleep rather than freezing at a random duty phase. */
 void lcdPanelBacklight(uint8_t level) {
+#if CONFIG_LCD_BL_EN_PIN >= 0
+    gpio_set_level((gpio_num_t)CONFIG_LCD_BL_EN_PIN, level > 0);
+#endif
     if (!s_hasBacklight) return;
     /* Max duty is 255, NOT the 2^8 (=256) full-scale overflow. The overflow value is
      * a special LEDC latch, not a plain duty register, and it is NOT retained across

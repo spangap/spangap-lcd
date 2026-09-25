@@ -484,9 +484,13 @@ static void touchCtlBringup(void) {
                  * this chip is short of. */
                 s_sampler = spawnTask(touchSamplerTask, "lcdtouch", 4096, nullptr,
                                       6, 1, STACK_PSRAM);
-                gpio_set_intr_type((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN, GPIO_INTR_ANYEDGE);
-                gpio_isr_handler_add((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN, touchISR, nullptr);
-                gpio_intr_enable((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN);
+                /* No INT routed: CONFIG_LCD_TOUCH_POLL_MS is the only way the
+                 * sampler hears a finger, and there is no line to arm. */
+                if (CONFIG_LCD_TOUCH_INT_PIN >= 0) {
+                    gpio_set_intr_type((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN, GPIO_INTR_ANYEDGE);
+                    gpio_isr_handler_add((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN, touchISR, nullptr);
+                    gpio_intr_enable((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN);
+                }
                 pmOnLightSleepWake(touchSleepWake);   /* backstop for wake-on-touch */
                 return;
             }

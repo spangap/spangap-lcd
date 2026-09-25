@@ -107,17 +107,29 @@ build already routes there, or hop on with `lcdRun()`/`ON_LCD`. See
 
 The display is the component's own concern: a panel (bus, controller,
 backlight, orientation) configured entirely through Kconfig (`CONFIG_LCD_*`) and
-brought up by `lcd_panel.cpp` or `lcd_panel_rgb.cpp`. A board with a standard
-panel contributes no display code — it sets the pins in its `straddle.yaml`
-`kconfig:` block and supplies only the input HAL (below).
+brought up by `lcd_panel.cpp`, `lcd_panel_rgb.cpp` or `lcd_panel_dsi.cpp`. A
+board with a standard panel contributes no display code — it sets the pins in
+its `straddle.yaml` `kconfig:` block and supplies only the input HAL (below).
 
-**Two transports, `CONFIG_LCD_BUS_SPI` (default) or `CONFIG_LCD_BUS_RGB`.** An
-SPI panel is a controller with its own memory, written a strip at a time over a
-bus it may share. An RGB panel has no memory: the SoC's LCD_CAM peripheral
-refreshes the glass continuously out of a framebuffer in PSRAM, and what the
-Kconfig describes is a timing generator — porches, pulse widths, a pixel clock
-— rather than a bus. Exactly one of the two files compiles; everything above
-`lcdPanelInit` is shared.
+**Three transports, `CONFIG_LCD_BUS_SPI` (default), `CONFIG_LCD_BUS_RGB` or
+`CONFIG_LCD_BUS_DSI`.** An SPI panel is a controller with its own memory,
+written a strip at a time over a bus it may share. An RGB panel has no memory:
+the SoC's LCD_CAM peripheral refreshes the glass continuously out of a
+framebuffer in PSRAM, and what the Kconfig describes is a timing generator —
+porches, pulse widths, a pixel clock — rather than a bus. A DSI panel (ESP32-P4
+only) is the same kind of framebuffer panel on the MIPI-DSI link, in video mode:
+the DPI engine scans the framebuffer out over the data lanes. Exactly one of the
+three files compiles; everything above `lcdPanelInit` is shared, and the two
+framebuffer transports share the flush (`lcdPanelBlit`).
+
+**A DSI panel's controller registers are sent by this component, from the
+board's table.** The controller is configured over the same link, in command
+mode, before the video starts, and the configuration is a vendor table for the
+specific glass. The component owns the link and the board owns the glass, so the
+board registers the table with `lcdPanelSetInitSequence()` (`lcd_panel.h`) from
+a Service `onStart`, and `lcd_panel_dsi.cpp` sends it after the panel's reset.
+The DPI driver has no mirror, so every turn of the picture — 180 included — is
+done in the copy, and `LCD_MIRROR_X/Y` are not applied.
 
 **An RGB panel's controller registers are the board's job.** An ST7701S and its
 kin still want their gamma, power and mode registers written once before the
@@ -130,11 +142,13 @@ is also why there is no RGB entry in the controller choice.
 
 | Kconfig | Default | Meaning |
 |---|---|---|
-| `LCD_BUS_SPI` / `LCD_BUS_RGB` | SPI | Panel transport; picks which pin block below applies. |
+| `LCD_BUS_SPI` / `LCD_BUS_RGB` / `LCD_BUS_DSI` | SPI | Panel transport; picks which pin block below applies. DSI exists only on a chip with MIPI-DSI (the ESP32-P4). |
 | `LCD_SPI_HOST` | `2` | SPI peripheral (1=SPI1, 2=SPI2/FSPI, 3=SPI3); shares the bus with SD/LoRa via `spi_helper`. |
 | `LCD_SCK_PIN` / `LCD_MOSI_PIN` / `LCD_MISO_PIN` | `-1` | Shared-bus pins (MISO `-1` if unused). |
 | `LCD_CS_PIN` / `LCD_DC_PIN` / `LCD_RST_PIN` | `-1` | Panel chip-select / data-command / reset (`-1` if reset rides the power rail). |
 | `LCD_BL_PIN` | `-1` | Backlight pin, driven as LEDC PWM (`-1` if not host-controlled). |
+| `LCD_BL_ACTIVE_LOW` | `n` | The backlight dims as the PWM's duty rises — a PWM fed into the LED driver's feedback node. Inverted in the LEDC, so level 255 is still the brightest. |
+| `LCD_BL_EN_PIN` | `-1` | The LED driver's own enable line: high while the backlight level is above zero, low at zero. |
 | `LCD_PCLK_MHZ` | `40` SPI / `16` RGB | Pixel clock. On SPI the GPIO matrix caps the ESP32-S3 near 40 MHz; on RGB it is the refresh rate in disguise (`pclk / (htotal × vtotal)`) and the PSRAM bandwidth the panel takes from everything else. |
 | `LCD_CONTROLLER_ST7789` / `LCD_CONTROLLER_ILI9341` | ST7789 | Panel controller (SPI only). ST7789 is built into `esp_lcd`; ILI9341 pulls in `esp_lcd_ili9341`. |
 | `LCD_RGB_HSYNC_PIN` / `_VSYNC_PIN` / `_DE_PIN` / `_PCLK_PIN` | `-1` | RGB sync signals. |
@@ -144,6 +158,12 @@ is also why there is no RGB entry in the controller choice.
 | `LCD_RGB_PCLK_ACTIVE_NEG` | `n` | Which PCLK edge the glass latches on; wrong, the image is smeared rather than absent. |
 | `LCD_RGB_DRAW_LINES` | `80` | Height of the PSRAM strip LVGL renders per flush. One framebuffer, so a repaint large enough to race the scan-out can be seen arriving. |
 | `LCD_RGB_BOUNCE_LINES` | `0` | Two internal-RAM buffers between PSRAM and the panel, in lines (0 = DMA straight from PSRAM). **A panel of any size wants these.** Straight from PSRAM the DMA queues behind every cache miss the CPU takes, and esp_lcd — with no bounce buffer to sync instead — writes back the whole framebuffer's worth of cache lines on *every* flush; a starved RGB panel does not glitch and recover, its frame starts in the wrong place and stays there. Bouncing removes both: the DMA reads internal RAM, which nothing contends for, and the refill reads the framebuffer through the cache, so coherency is free and the sync is skipped. The cost is that refill — a CPU copy in an interrupt, at the rate the glass consumes it (23 MB/s on a 480x640 panel at 37 Hz) — plus two buffers of internal RAM. Must divide the framebuffer evenly. |
+| `LCD_DSI_LANES` / `LCD_DSI_LANE_MBPS` | `2` / `500` | DSI data lanes and the bit rate on each — the panel's numbers; a rate its receiver does not lock to shows nothing. |
+| `LCD_DSI_RST_PIN` | `-1` | The DSI panel's reset line, pulsed before its init table is sent. |
+| `LCD_DSI_PHY_LDO_CHAN` / `LCD_DSI_PHY_LDO_MV` | `3` / `2500` | The on-chip LDO feeding the D-PHY's supply pin (`-1` if the board powers it); without it the bus never comes up. |
+| `LCD_DSI_HSYNC_PULSE` / `_BACK` / `_FRONT` | `12` / `42` / `42` | DSI horizontal blanking, in pixel clocks (`LCD_PCLK_MHZ` is the DPI pixel clock). |
+| `LCD_DSI_VSYNC_PULSE` / `_BACK` / `_FRONT` | `8` / `2` / `60` | DSI vertical blanking, in lines. |
+| `LCD_DSI_DRAW_LINES` | `80` | Height of the PSRAM strip LVGL renders per flush, as `LCD_RGB_DRAW_LINES`. |
 | `LCD_NATIVE_WIDTH` / `LCD_NATIVE_HEIGHT` | `240` / `320` | Native pixels, pre-rotation. A panel cannot report its own glass size on either transport, so it is stated. |
 | `LCD_ROTATION` | `90` | The shipped value of `s.lcd.rotation` (below), which is what the panel actually reads: how the picture is held (0/90/180/270), with the same transform applied to raw touch. On an SPI panel it is the controller's swap_xy+mirror. An RGB panel scans the framebuffer out in the glass's own order, so 0 and 180 are free there and a quarter turn is transposed into the framebuffer strip by strip — one extra pass per repainted pixel and one draw buffer of PSRAM. |
 | `LCD_MIRROR_X` / `LCD_MIRROR_Y` | `n` | Correct a mirrored image when the panel's scan direction differs. |

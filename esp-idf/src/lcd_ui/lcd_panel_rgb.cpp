@@ -62,7 +62,7 @@ static void cliPanel(const char* args);   /* registered by the bring-up below */
  * the hardware has no rotation to ask for. 180° is the turn that costs nothing
  * — both mirrors, which the driver does implement. A QUARTER turn is a real
  * transform, and it is done here, in the strip copy: LVGL is told the turned
- * size, renders in it, and lcdPanelBlitRgb writes each strip into the
+ * size, renders in it, and lcdPanelBlit writes each strip into the
  * framebuffer turned (see it for the cost). The panel's own timings stay
  * native throughout — that is the glass, not the picture on it. */
 /* The turn in force, read from s.lcd.rotation at bring-up and fixed for the
@@ -87,6 +87,11 @@ static int dispH(void) { return s_turning ? panelW() : panelH(); }
  * re-running channel_config re-reserves the GPIO and logs a conflict each
  * time. */
 static void backlightInit(void) {
+#if CONFIG_LCD_BL_EN_PIN >= 0
+    gpio_reset_pin((gpio_num_t)CONFIG_LCD_BL_EN_PIN);
+    gpio_set_direction((gpio_num_t)CONFIG_LCD_BL_EN_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)CONFIG_LCD_BL_EN_PIN, 0);
+#endif
     if (CONFIG_LCD_BL_PIN < 0) return;
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_MODE;
@@ -104,11 +109,17 @@ static void backlightInit(void) {
     c.hpoint     = 0;
     c.duty       = 0;                            /* start dark */
     c.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
+#if CONFIG_LCD_BL_ACTIVE_LOW
+    c.flags.output_invert = 1;
+#endif
     ledc_channel_config(&c);
     s_hasBacklight = true;
 }
 
 void lcdPanelBacklight(uint8_t level) {
+#if CONFIG_LCD_BL_EN_PIN >= 0
+    gpio_set_level((gpio_num_t)CONFIG_LCD_BL_EN_PIN, level > 0);
+#endif
     if (!s_hasBacklight) return;
     /* 255, not 2^8: the full-scale overflow value is a latch rather than a duty
      * register and is not retained across a KEEP_ALIVE light sleep. */
@@ -326,7 +337,7 @@ void lcdPanelPatternClear(void) {
 
 static void blitTurned(const lv_area_t* area, const void* px);
 
-void lcdPanelBlitRgb(const lv_area_t* area, const void* px) {
+void lcdPanelBlit(const lv_area_t* area, const void* px) {
     if (s_patternUp) return;
     blitTurned(area, px);
 }

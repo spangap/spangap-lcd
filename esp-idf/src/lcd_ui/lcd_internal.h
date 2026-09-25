@@ -50,17 +50,24 @@ void        lcdPanelDisplayPower(bool on);
 /** Map a raw native touch point to display coordinates using CONFIG_LCD_ROTATION
  *  + mirror (the same transform applied to the pixels); out params are clamped. */
 void        lcdPanelOrientTouch(int rawX, int rawY, int* outX, int* outY);
-/** RGB transport only: one rendered strip into the scanned-out framebuffer,
- *  turned on the way if the display is held at a quarter turn (an RGB glass has
- *  no rotation of its own, so the copy is where it happens). `area` is in
- *  display coordinates. The SPI transport has no equivalent — its turn is the
- *  controller's, and its flush is a bus transfer lcd_lvgl.cpp drives itself. */
-void        lcdPanelBlitRgb(const lv_area_t* area, const void* px);
+/** Framebuffer transports (RGB, DSI) only: one rendered strip into the
+ *  scanned-out framebuffer, turned on the way if the display is held at an
+ *  angle (such a glass has no rotation of its own in the picture's path, so the
+ *  copy is where it happens). `area` is in display coordinates. The SPI
+ *  transport has no equivalent — its turn is the controller's, and its flush is
+ *  a bus transfer lcd_lvgl.cpp drives itself. */
+void        lcdPanelBlit(const lv_area_t* area, const void* px);
+/** The draw strip a framebuffer transport renders in, in lines of the display. */
+#if CONFIG_LCD_BUS_RGB
+#define LCD_FB_DRAW_LINES CONFIG_LCD_RGB_DRAW_LINES
+#elif CONFIG_LCD_BUS_DSI
+#define LCD_FB_DRAW_LINES CONFIG_LCD_DSI_DRAW_LINES
+#endif
 /** Whether one of the `panel` test patterns currently owns the glass. It is
- *  written straight into the framebuffer, under LVGL rather than in it — what
- *  those patterns test is the path LVGL's own pixels take — so while it is up
- *  every flush is dropped and the UI carries on unseen. Always false on the SPI
- *  transport, which has no such patterns. */
+ *  drawn under LVGL rather than in it — what those patterns test is the path
+ *  LVGL's own pixels take — so while it is up every flush is dropped and the UI
+ *  carries on unseen. Always false on the SPI transport, which has no such
+ *  patterns. */
 bool        lcdPanelPatternUp(void);
 /** Put the UI back and repaint it whole. The first press does this, wherever
  *  input comes from, so a pattern needs no way out of its own. */

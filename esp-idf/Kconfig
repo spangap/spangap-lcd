@@ -47,9 +47,10 @@ config LCD_FONT_MIN_VECTOR_PX
         small. Set to ~10 to dial the bitmap floor back in for tiny text.
 
 # ─── panel transport ────────────────────────────────────────────────────────
-# Which wires the pixels leave on. The two are different enough that they are
-# different files (lcd_panel.cpp / lcd_panel_rgb.cpp), each compiling to nothing
-# when the other is chosen; everything above lcdPanelInit is shared.
+# Which wires the pixels leave on. They are different enough that they are
+# different files (lcd_panel.cpp / lcd_panel_rgb.cpp / lcd_panel_dsi.cpp), each
+# compiling to nothing when another is chosen; everything above lcdPanelInit is
+# shared.
 choice LCD_BUS
     prompt "Panel transport"
     default LCD_BUS_SPI
@@ -57,12 +58,17 @@ choice LCD_BUS
         SPI: a controller with its own GRAM (ST7789, ILI9341), written a strip
         at a time over a bus it may share. RGB: a parallel panel with no memory
         of its own, refreshed continuously by the SoC out of a PSRAM
-        framebuffer, which is what a 480x640 panel on an ESP32-S3 is.
+        framebuffer, which is what a 480x640 panel on an ESP32-S3 is. DSI: the
+        same kind of framebuffer panel on the ESP32-P4's MIPI-DSI link, whose
+        controller is configured over that link's own command channel.
 
     config LCD_BUS_SPI
         bool "SPI (esp_lcd panel-io)"
     config LCD_BUS_RGB
         bool "RGB parallel, 16-bit"
+    config LCD_BUS_DSI
+        bool "MIPI-DSI, video mode"
+        depends on SOC_MIPI_DSI_SUPPORTED
 endchoice
 
 # ─── shared SPI bus ─────────────────────────────────────────────────────────
@@ -107,6 +113,22 @@ config LCD_RST_PIN
 config LCD_BL_PIN
     int "Backlight pin — LEDC PWM (-1 if none / not host-controlled)"
     default -1
+config LCD_BL_ACTIVE_LOW
+    bool "Backlight PWM dims as its duty rises"
+    default n
+    help
+        For a backlight whose brightness falls as the pin spends more time
+        high — a PWM fed into the LED driver's feedback node rather than its
+        enable, which is how a boost converter's current is trimmed. The
+        output is inverted in the LEDC, so level 255 is still the brightest.
+config LCD_BL_EN_PIN
+    int "Backlight driver enable pin (-1 if none)"
+    default -1
+    help
+        A line that switches the backlight's LED driver on and off, separate
+        from the brightness PWM. Driven high while the backlight level is above
+        zero and low at zero, so standby turns the driver off rather than
+        leaving it running at its dimmest.
 config LCD_PCLK_MHZ
     int "Pixel clock in MHz"
     default 40 if LCD_BUS_SPI
@@ -120,6 +142,9 @@ config LCD_PCLK_MHZ
         PSRAM, so this is also the bandwidth the rest of the device has to share
         with. Raising it past what the memory can feed shows as a torn or
         drifting image, not as a slow one.
+
+        On DSI it is the DPI engine's pixel clock, with the same meaning: the
+        frame rate is pclk / (htotal × vtotal).
 
 choice
     prompt "Panel controller"
@@ -304,6 +329,83 @@ config LCD_RGB_BOUNCE_LINES
         shows a band of noise. Start at 0 and raise it if the screen tears while
         the device writes its store.
 
+# ─── MIPI-DSI panel ─────────────────────────────────────────────────────────
+# Video mode: the SoC's DPI engine scans a PSRAM framebuffer out over the DSI
+# data lanes continuously, the way the RGB transport does over parallel lines.
+# Unlike RGB, the controller's registers are written over the same link, in
+# command mode, before the video starts — so this straddle writes them, from a
+# table the board registers (lcdPanelSetInitSequence, lcd_panel.h), because the
+# table is the specific glass and nothing generic can be said about it.
+config LCD_DSI_LANES
+    int "DSI data lanes"
+    depends on LCD_BUS_DSI
+    range 1 2
+    default 2
+config LCD_DSI_LANE_MBPS
+    int "Bit rate per data lane (Mbps)"
+    depends on LCD_BUS_DSI
+    default 500
+    help
+        The link's speed, which must carry the pixel stream: lanes × this has
+        to exceed the pixel clock × 16 (RGB565) with room for the protocol.
+        It is the panel's number — a rate its receiver does not lock to shows
+        nothing at all.
+config LCD_DSI_RST_PIN
+    int "Panel reset pin (-1 if none)"
+    depends on LCD_BUS_DSI
+    default -1
+config LCD_DSI_PHY_LDO_CHAN
+    int "On-chip LDO feeding the DSI PHY (-1 if the board powers it)"
+    depends on LCD_BUS_DSI
+    default 3
+    help
+        The ESP32-P4's MIPI D-PHY runs from its VDD_MIPI_DPHY pin, which boards
+        feed from one of the chip's own LDOs (channel 3 on Espressif's layouts).
+        With no supply the PHY never leaves its unpowered state and the bus
+        does not come up.
+config LCD_DSI_PHY_LDO_MV
+    int "DSI PHY supply (mV)"
+    depends on LCD_BUS_DSI
+    default 2500
+
+# Blanking, in pixel clocks (horizontal) and lines (vertical) — the DPI
+# engine's video timing, from the panel's data sheet like the RGB transport's.
+config LCD_DSI_HSYNC_PULSE
+    int "HSYNC pulse width (pclk)"
+    depends on LCD_BUS_DSI
+    default 12
+config LCD_DSI_HSYNC_BACK
+    int "Horizontal back porch (pclk)"
+    depends on LCD_BUS_DSI
+    default 42
+config LCD_DSI_HSYNC_FRONT
+    int "Horizontal front porch (pclk)"
+    depends on LCD_BUS_DSI
+    default 42
+config LCD_DSI_VSYNC_PULSE
+    int "VSYNC pulse width (lines)"
+    depends on LCD_BUS_DSI
+    default 8
+config LCD_DSI_VSYNC_BACK
+    int "Vertical back porch (lines)"
+    depends on LCD_BUS_DSI
+    default 2
+config LCD_DSI_VSYNC_FRONT
+    int "Vertical front porch (lines)"
+    depends on LCD_BUS_DSI
+    default 60
+
+config LCD_DSI_DRAW_LINES
+    int "Draw strip height in lines"
+    depends on LCD_BUS_DSI
+    default 80
+    range 8 400
+    help
+        How much of the display LVGL renders per flush, into a PSRAM strip the
+        flush then copies into the framebuffer — the same trade as the RGB
+        transport's strip: PSRAM (width × lines × 2 bytes) against the number
+        of times a repaint stops to copy.
+
 # ─── touch (standard I2C controllers) ───────────────────────────────────────
 # Brought up by the component (lcd_touch.cpp) the same way the panel is: a
 # board with one of these parts contributes no touch C code, only pins. Raw
@@ -449,9 +551,10 @@ choice
         direction differs the image comes out mirrored — use the Mirror X/Y
         toggles below to correct it.
 
-        An RGB panel has no such controller — the SoC scans the framebuffer out
-        in the order the glass reads it — so 0 and 180 are free (180 is both
-        mirrors) and a QUARTER turn is paid for in the flush, which transposes
+        An RGB or DSI panel has no such controller in the picture's path — the
+        SoC scans the framebuffer out in the order the glass reads it — so 0
+        and 180 are free (180 is both mirrors) and a QUARTER turn is paid for in
+        the flush, which transposes
         every strip on its way into the framebuffer. It costs one more pass over
         each repainted pixel and one draw buffer's worth of PSRAM. A board with
         no PSRAM to spare for that strip runs native and logs why.

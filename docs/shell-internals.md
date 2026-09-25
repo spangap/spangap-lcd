@@ -107,15 +107,18 @@ accounting.
 
 `lcd_panel.cpp` brings up the SPI bus, panel-IO, and controller (ST7789 built
 into `esp_lcd`, or ILI9341 via the managed component) entirely from
-`CONFIG_LCD_*`. `lcd_panel_rgb.cpp` is the other half of the
-`CONFIG_LCD_BUS_SPI`/`_RGB` choice — a timing generator over a PSRAM
+`CONFIG_LCD_*`. `lcd_panel_rgb.cpp` is the RGB half of the
+`CONFIG_LCD_BUS_SPI`/`_RGB`/`_DSI` choice — a timing generator over a PSRAM
 framebuffer, no panel-IO and no controller driver, the glass having been
-configured by the board before this runs — and exactly one of the two files
-compiles. Resolution can't be probed from a panel either way, so native size +
-rotation are config; an RGB panel scans its framebuffer out in the glass's own
-order, so a quarter turn there is the flush's work rather than a controller's —
-`lcdPanelBlitRgb` transposes each rendered strip into the framebuffer in 16x16
-tiles, which is what keeps a transpose off the cache's worst path. The same
+configured by the board before this runs. `lcd_panel_dsi.cpp` is the DSI half:
+the same framebuffer model on the P4's MIPI-DSI link, whose controller is
+configured over that link, from the table the board registered with
+`lcdPanelSetInitSequence()`, before the video stream starts. Exactly one of the
+three files compiles. Resolution can't be probed from a panel on any of them,
+so native size + rotation are config; a framebuffer panel scans out in the
+glass's own order, so a turn there is the flush's work rather than a
+controller's — `lcdPanelBlit` transposes each rendered strip in 16x16 tiles,
+which is what keeps a transpose off the cache's worst path. The same
 rotation/mirror transform is applied to raw touch
 (`lcdPanelOrientTouch`) so touch and pixels always agree. It also exposes the
 LEDC backlight (`lcdPanelBacklight`) and panel display on/off for standby
