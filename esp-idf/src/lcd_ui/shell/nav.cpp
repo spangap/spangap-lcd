@@ -33,12 +33,23 @@ void keyHook(lv_event_t* e) {
     shellNavigate(NavIntent::BACK);
 }
 
+/* The hooked widget is deleted out from under us (a dialog or screen closing
+ * while it holds focus): forget it. lv_obj_is_valid() is no defence — it walks
+ * the object's parent links, so asking it about freed memory is itself the
+ * crash (LoadProhibited on the next touch's focus change). */
+void hookGone(lv_event_t*) { s_hookObj = nullptr; }
+
 /* Move the key handler to whatever is now focused. */
 void onFocusChange(lv_group_t* g) {
-    if (s_hookObj && lv_obj_is_valid(s_hookObj))
+    if (s_hookObj) {
         lv_obj_remove_event_cb(s_hookObj, keyHook);
+        lv_obj_remove_event_cb(s_hookObj, hookGone);
+    }
     s_hookObj = lv_group_get_focused(g);
-    if (s_hookObj) lv_obj_add_event_cb(s_hookObj, keyHook, LV_EVENT_KEY, nullptr);
+    if (s_hookObj) {
+        lv_obj_add_event_cb(s_hookObj, keyHook, LV_EVENT_KEY, nullptr);
+        lv_obj_add_event_cb(s_hookObj, hookGone, LV_EVENT_DELETE, nullptr);
+    }
 }
 
 }  // namespace
