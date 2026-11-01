@@ -87,10 +87,8 @@ purely event-driven (no polling):
   It re-renders only when the shown value changes — once a minute for a
   minute-resolution format, every second only if the format includes seconds.
 - **Wi-Fi glyph** (right) — `LV_SYMBOL_WIFI` whose opacity tracks association
-  state and RSSI (`wifi.sta.state` / `wifi.sta.rssi`).
-- **Upstream dot** (right) — a small dot, green when the device has working
-  internet (`wifi.sta.up`), grey otherwise. Distinct from the Wi-Fi glyph, which
-  only reports association.
+  state and RSSI (`wifi.sta.state` / `wifi.sta.rssi`), and which turns green
+  when the device has working internet (`wifi.sta.up`).
 - **Battery** (right) — a battery glyph from `battery.percent`, red below ~12%;
   hidden entirely on a board that publishes no `battery.percent`.
 - **Straddle indicators** (right, left of the battery) — any straddle may add its

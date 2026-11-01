@@ -23,7 +23,6 @@ lv_obj_t* s_bar     = nullptr;
 lv_obj_t* s_clock   = nullptr;
 lv_obj_t* s_wifi    = nullptr;
 lv_obj_t* s_batt    = nullptr;
-lv_obj_t* s_up      = nullptr;   /* upstream-reachable glyph (wifi.sta.up) */
 lv_obj_t* s_cluster = nullptr;   /* right-hand flex row that holds the indicators */
 
 void updateClock(lv_timer_t* t) {
@@ -65,15 +64,11 @@ void updateWifi(const char*, const char*) {
     else if (rssi >= -85)          opa = LV_OPA_40;
     else                           opa = LV_OPA_30;
     lv_obj_set_style_text_opa(s_wifi, opa, 0);
-}
-
-/* Upstream reachability: lit (green) when the device has working internet
- * (wifi.sta.up == NET_EV_UPSTREAM_UP for subscribers), dim grey when only
- * associated / AP-only / down. Distinct from the wifi glyph, which only reports
- * association. A small recolored dot — cheap glyph, no new bitmap asset. */
-void updateUpstream(const char*, const char*) {
+    /* Green when the device has working internet (wifi.sta.up), the plain bar
+     * text colour when only associated / AP-only / down. */
     bool up = storageGetInt("wifi.sta.up", 0) != 0;
-    lv_obj_set_style_bg_color(s_up, lv_color_hex(up ? 0x36C06A : 0x404850), 0);
+    lv_obj_set_style_text_color(s_wifi,
+        up ? lv_color_hex(0x36C06A) : lv_color_hex(lcdStyle().statusBar.text), 0);
 }
 
 void updateBattery(const char*, const char*) {
@@ -113,7 +108,7 @@ void lcdStatusbarInit(void) {
     lv_label_set_text(s_clock, "");
     lv_obj_add_flag(s_clock, LV_OBJ_FLAG_HIDDEN);   /* shown once time is valid */
 
-    /* Right cluster (upstream, battery, wifi), right-aligned in a flex row so a
+    /* Right cluster (battery, wifi), right-aligned in a flex row so a
      * hidden element (e.g. battery on a board without one) collapses cleanly. */
     lv_obj_t* cluster = lv_obj_create(s_bar);
     s_cluster = cluster;
@@ -125,13 +120,6 @@ void lcdStatusbarInit(void) {
     lv_obj_set_flex_align(cluster, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(cluster, lcdPx(6), 0);
     lv_obj_remove_flag(cluster, LV_OBJ_FLAG_SCROLLABLE);
-
-    s_up = lv_obj_create(cluster);
-    lv_obj_remove_style_all(s_up);
-    lv_obj_set_size(s_up, lcdPx(6), lcdPx(6));
-    lv_obj_set_style_radius(s_up, lcdPx(3), 0);
-    lv_obj_set_style_bg_opa(s_up, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s_up, lv_color_hex(0x404850), 0);
 
     s_batt = lv_label_create(cluster);
     /* The face is set on every label here, not inherited: the bar strips its
@@ -154,8 +142,6 @@ void lcdStatusbarInit(void) {
 
     storageSubscribeChanges("wifi.sta", updateWifi);
     updateWifi(nullptr, nullptr);
-    storageSubscribeChanges("wifi.sta.up", updateUpstream);
-    updateUpstream(nullptr, nullptr);
     storageSubscribeChanges("battery.percent", updateBattery);
     updateBattery(nullptr, nullptr);
     storageSubscribeChanges("sys.time.valid", updateTimeVisible);
