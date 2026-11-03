@@ -67,6 +67,11 @@ void lcdSetBacklight(uint8_t level);
  *  and the wake is posted asynchronously). */
 bool lcdNotifyActivity(void);
 
+/** Milliseconds since the last user input on the device (touch, button,
+ *  trackball, a reported key, or the press that woke the screen); UINT32_MAX
+ *  when there has been none since boot. Lcd task. */
+uint32_t lcdIdleMs(void);
+
 /** Hide the current program layer and return to the launcher. Runs on the lcd
  *  task; safe to call from any task (it hops on). */
 void lcdGoHome(void);

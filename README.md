@@ -357,8 +357,10 @@ A board that reads its own keys (the built-in touch/button/trackball indevs
 report their own activity) tells the inactivity tracker about them with
 `lcdNotifyActivity()` — it resets the blank timer, wakes the screen if it is in
 standby, and returns `true` iff that call did the waking, so an on-lcd-task
-caller can swallow the waking keystroke. Two more board-facing knobs round out
-the cursor:
+caller can swallow the waking keystroke. Every input path converges there, so
+`lcdIdleMs()` — milliseconds since the last of them, or since the press that
+woke the screen; `UINT32_MAX` before any — tells an app whether somebody has
+been at the device lately. Two more board-facing knobs round out the cursor:
 
 - `lcdPointerSetVisibleMs(ms)` — how long the cursor stays drawn after pointer
   activity (`<0` = always visible). The component owns the cursor; the board

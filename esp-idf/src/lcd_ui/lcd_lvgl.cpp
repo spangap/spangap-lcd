@@ -541,6 +541,7 @@ static bool        s_mirrorHold = false;   /* applied hold (lcd task): stay awak
 static bool        s_screenOff  = false;   /* true == fully asleep: panel off, loop skips render */
 static void        tickTimerRun(bool on);  /* LVGL tick esp_timer; stopped while blanked (defined below) */
 static bool        s_fadingOut  = false;   /* backlight ramping down; still rendering to drive it */
+static int64_t     s_lastInputUs = -1;     /* last user input (esp_timer µs); -1 = none since boot */
 
 /* Backlight: s_blTarget is the configured on-level (s.lcd.backlight); s_blCur is
  * the live duty an lv_anim eases toward it (starts dark — backlightInit duty 0). */
@@ -735,6 +736,7 @@ void lcdScreenWake(void) {
      * it never reaches lcdActivity — this is the one input the general path
      * below does not see, and it is as much a person as any other. */
     humanDetected("screen");
+    s_lastInputUs = esp_timer_get_time();
     bool wasOff = s_screenOff;
     s_fadingOut = false;                          /* cancel a fade-out in progress */
     s_screenOff = false;
@@ -798,6 +800,7 @@ void lcdMirrorKeepAwake(bool on) {
  * per read after the first is a compare. */
 bool lcdActivity(void) {
     humanDetected("screen");
+    s_lastInputUs = esp_timer_get_time();
     dimLeave();                          /* a touch in the grace window is the answer */
     if (s_blankTimer) lv_timer_reset(s_blankTimer);
     else              armBlankTimer();   /* (re)arm if a setting change left it off */
@@ -805,6 +808,12 @@ bool lcdActivity(void) {
 }
 
 bool lcdScreenIsOff(void) { return s_screenOff; }
+
+uint32_t lcdIdleMs(void) {
+    if (s_lastInputUs < 0) return UINT32_MAX;
+    int64_t ms = (esp_timer_get_time() - s_lastInputUs) / 1000;
+    return ms > (int64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)ms;
+}
 
 /* The hardware keyboard, if any, is a CONSUMER concern (its quirks vary per
  * board): the consumer creates its own keypad indev, joins it to lcdInputGroup(),
