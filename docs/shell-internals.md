@@ -49,12 +49,10 @@ the manager bullet above, which are part of it rather than a layer over it.
 
 ## 2. The lcd task & threading (foundation)
 
-`lcd.cpp` spawns the **lcd task** ("lcd", prio 1, core 1 — core 0 hosts Wi-Fi —
-16 KB **PSRAM** stack). Priority 1, NOT 2: every application actor (storage,
-web, cli, log, fs) is prio 1 on core 1, and a long UI computation at prio 2
-starves them ALL — a runaway page render once froze storage/web/cli system-wide
-until reboot. At prio 1 the scheduler round-robins the lcd task with the
-actors, so the worst case is a laggy UI, never a wedged device. PSRAM stack is safe because the task **never does flash
+`lcd.cpp` spawns the **lcd task** ("lcd", prio 5, core 1 — core 0 hosts Wi-Fi —
+32 KB **PSRAM** stack), above the prio-1 application actors (storage, log, cli,
+fs), so a long UI computation holds them off until it yields; a board task that
+must keep cadence through a redraw runs above it. PSRAM stack is safe because the task **never does flash
 I/O**: it runs the canonical `itsPoll` loop whose notification accounting must
 stay intact, so a blocking FS round-trip would desync it. Icon bytes are read by
 a separate loader task (§7) and handed over with `lcdRun()`.
@@ -93,6 +91,33 @@ indevs via `lcdInputPoll()`. Three subtleties are load-bearing:
   pins 240 MHz (`pmBoost`) on the rising edge of `lv_anim_count_running() > 0`
   and releases on the falling edge — otherwise inertial flings run at the DFS
   floor.
+
+**Held keys are reconciled, not queued** (`lcd_held_keys.cpp`, API in the README's
+input-HAL section). `lcdKeyReport()` runs on the board's task and touches only
+atomics — a held bit, a "this press began claimed" (grabbed) bit, a per-key count
+of grabbed presses, the claim count — then sets a dirty flag and
+`xTaskNotifyGive`s the lcd task, so it never waits and nothing reported can be
+dropped. `lcdKeysService()`, first thing each loop pass after `itsPoll`, is a
+no-op unless that flag is set; otherwise it snapshots the subscriber table (eight
+slots, written by subscribing tasks under a spinlock) and works out per
+subscriber what it is owed: a press count it has not seen becomes a down (preceded
+by the up it never got, if the previous press is still marked keyed), and a keyed
+key that is no longer held, grabbed and claimed becomes an up. Unseen presses of a
+key with no claim left are skipped. Each edge goes out with
+`itsSendAuxByTaskHandle(…, timeout 0)`. The per-subscriber delivery state (keyed
+bits, presses seen, time of the first failed send) belongs to the lcd task alone; it is reset
+when a slot changes hands, kept when the same task resubscribes on another port,
+and a fresh subscriber starts with the current press counts as seen.
+
+A failed send ends that subscriber's pass; the edge stays owed, the dirty flag is
+re-set and a one-shot `esp_timer` ("lcdkeys") kicks the loop again in 20 ms. The
+first failed pass records `esp_timer_get_time()` and a fully delivered pass
+clears it. The limit is time, not a count of passes, because anything else
+that wakes the lcd task services the subscribers too: once 1 s has passed with
+no fully delivered pass, the next failed pass drops the subscriber from the
+table (only if its slot still holds the same subscription)
+with a `warn`, and its owed edges — an up included — are abandoned. Each press
+count seen for the first time calls `lcdActivity()`.
 
 **Bring-up handshake.** `lcdInit()` spawns the task and **blocks on a binary
 semaphore** until the task signals the panel controller is initialised and the

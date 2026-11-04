@@ -169,4 +169,7 @@ that gesture would have been for.
 Maintainer detail — the fork's divergence from LVGL's keyboard, the key
 handling, the flick geometry and the chooser's construction — is in
 `src/lcd_ui/lcd_keys.h` and `lcd_keys.c`, and the platform side (when it opens,
-what it opens over, how it is warmed at boot) in `lcd_keyboard.cpp`.
+what it opens over, how it is warmed at boot) in `lcd_keyboard.cpp`. The public
+`include/lcd_keys.h` of the same name is a different thing: held keys a board's
+own keyboard reports down and up, described under "Held keys" in the
+[README](../README.md#the-input-hal).

@@ -119,6 +119,10 @@ void        lcdInactivitySetTimeout(int seconds);
 /** Register user input: re-arms the inactivity timer. Always returns false (waking
  *  from standby is the board's job, via sys.standby); kept bool for callers. */
 bool        lcdActivity(void);
+/** Deliver the held-key edges each subscriber is owed (lcd_held_keys.cpp).
+ *  Called every lcd-loop pass; a cheap no-op unless a key was reported,
+ *  claimed or subscribed since the last pass. */
+void        lcdKeysService(void);
 /** Reconcile the applied mirror-hold to the desired state set by lcdMirrorKeepAwake.
  *  Called every lcd-loop pass so a dropped keepAwake poke (lcdRun is best-effort)
  *  cannot leave the panel held awake with the blank timer suspended. Cheap no-op

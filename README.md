@@ -48,6 +48,7 @@ is [docs/keyboard.md](docs/keyboard.md).
 | **Settings** — the one settings tree: `lcdSettingsContribute`, the `lcdSetting*` row builders, and the descriptor runtime behind actions/forms/collections | [docs/settings.md](docs/settings.md) | [docs/settings-internals.md](docs/settings-internals.md) |
 | **Terminal** — the virtualized text view and the libvterm-backed VT100 terminal | [docs/terminal.md](docs/terminal.md) | [docs/terminal-internals.md](docs/terminal-internals.md) |
 | **Keyboard** — the on-screen keyboard: the layouts, the three modifiers, the flick and the long-press chooser | [docs/keyboard.md](docs/keyboard.md) | `src/lcd_ui/lcd_keys.h`, `lcd_keyboard.cpp` |
+| **Held keys** — named keys (push-to-talk, Space) a board reports down and up, fanned out to subscribing tasks as ITS aux messages | [Held keys](#the-input-hal), under the input HAL below | `include/lcd_keys.h`, `src/lcd_ui/lcd_held_keys.cpp`, [docs/shell-internals.md §2](docs/shell-internals.md) |
 
 The shared foundation that every function sits on — the display bring-up, the
 input HAL, auto-init, icons, fonts, and the display-power keys — is described
@@ -352,6 +353,60 @@ read it:
   Enter on the first of two password fields hands the keyboard to the second
   (`lcdKeyboardOpen` on the next field), because they are mid-answer and being
   made to tap again is the surprise there.
+
+**Held keys.** A typed key is an event; a held key matters for how long it is
+down — a push-to-talk key keys a transmitter for exactly that long. A board whose
+keyboard can see key-up reports such keys by name, and the tasks that act on
+them receive every down/up edge as an ITS aux message
+([lcd_keys.h](esp-idf/include/lcd_keys.h); not to be confused with
+`src/lcd_ui/lcd_keys.h`, the on-screen keyboard widget):
+
+```
+board     lcdKeyDeclare(LCD_KEY_PTT)          once per key, at keyboard bring-up
+board     lcdKeyReport(LCD_KEY_PTT, down)     every edge, any task, never waits
+              ▼  wakes the lcd task, which fans the edge out
+consumer  itsOnAux(port, cb); lcdKeySubscribe(port); lcdKeyClaim(key, true)
+consumer  cb(sender, lcd_key_edge_t{key, down})   one aux per edge
+```
+
+The named keys are `LCD_KEY_PTT` (a dedicated talk key) and `LCD_KEY_SPACE` (the
+space bar, held). The board owns the keyboard and the consumers own the meaning;
+this layer only names the keys and fans the edges out. A board with no key-up
+declares nothing, and a consumer that finds `!lcdKeyDeclared(key)` offers an
+on-screen hold button instead; a board whose keyboard falls back to a mode
+without key-up for a key calls `lcdKeyUndeclare(key)` (after reporting a held
+press up). `lcdKeyDown(key)` answers "held now" from any task, and
+`lcdKeyClaimed(key)` whether some consumer has the key claimed — a board that
+holds a key down for the user (a latching toggle) releases it once that is
+false.
+
+**Edges flow only while a key is claimed.** A named key can also be an ordinary
+typing key (Space is), so a consumer takes it with `lcdKeyClaim(key, true)` and
+hands it back with `lcdKeyClaim(key, false)`; claims count, so independent
+claimants nest, and this holds for every named key. On a down `lcdKeyReport`
+returns true when the key is claimed, and the board swallows that press instead
+of typing it; on the up it returns whether that press was claimed. A press
+belongs to the claim it began under: one that began unclaimed was typed and stays
+the board's for as long as it is held, even if a claim arrives meanwhile, and it
+never reaches a subscriber. Releasing the last claim on a key whose claimed press
+is still held delivers its up at once, so no subscriber is left keyed.
+
+**Subscribers.** `lcdKeySubscribe(port)` subscribes the calling task (one
+subscription per task, eight in all); subscribing again moves it to the new port
+and keeps its delivery state, so a key it holds down still gets its up there.
+It returns false when the table is full or the lcd task is not running.
+`lcdKeyUnsubscribe()` stops delivery. The subscriber list lives in the lcd task,
+which delivers on its own loop (`lcdKeysService`, see
+[shell-internals §2](docs/shell-internals.md)): edges are not queued but worked
+out from per-key state, so a press that came and went before the lcd task looked
+still arrives as a down and an up, and a subscriber that joins mid-press gets
+nothing until the next press. A send that fails because the subscriber's inbox
+is full is owed and retried every 20 ms; a subscriber that has refused edges
+for a second with no fully delivered pass in between is dropped with a warning
+(`key subscriber on aux port N not taking edges; dropped`) and gets nothing more
+— not even the up for a down it already has — until it subscribes again. Each
+first sighting of a claimed press counts as user activity for the inactivity
+timer.
 
 A board that reads its own keys (the built-in touch/button/trackball indevs
 report their own activity) tells the inactivity tracker about them with
@@ -659,6 +714,8 @@ engine (several bit in [lcd_input_box.cpp](esp-idf/src/lcd_ui/lcd_input_box.cpp)
 
 ## What it does NOT own
 
-- The touch/cursor/button hardware reads — the consuming board's input HAL.
+- The touch/cursor/button/keyboard hardware reads — the consuming board's input
+  HAL and its own keypad indev. The component names held keys; the board decides
+  which physical key each one is.
 - The browser SPA — [spangap-web](../spangap-web).
 - Per-app UI content — each app/pane is owned by the straddle that installs it.
