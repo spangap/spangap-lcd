@@ -64,6 +64,12 @@ bool lcdKeyDeclared(uint8_t key);
  *  on the user's behalf (a latching toggle) releases it when this goes false. */
 bool lcdKeyClaimed(uint8_t key);
 
+/** Board: call `cb(key, claimed)` each time `key` becomes claimed or stops
+ *  being claimed, on the claiming task; `cb` must not wait. A board whose scan
+ *  depends on the claim (one that keeps watching a claimed key while the screen
+ *  is off) uses it to wake that scan. One watcher; NULL removes it. */
+void lcdKeyOnClaimChange(void (*cb)(uint8_t key, bool claimed));
+
 /** Board: `key` went down or up. Callable from any task, never waits. On a
  *  down, returns true when the key is claimed — the board then swallows the
  *  press instead of typing it. On an up, returns whether that press was

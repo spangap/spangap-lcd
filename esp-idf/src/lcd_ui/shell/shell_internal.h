@@ -71,6 +71,8 @@ bool shellRecentsVisible(void);
 void shellLauncherInit(lv_obj_t* screen);
 /** Add a tile for an installed app to the end of the grid. */
 void shellLauncherAddTile(LcdApp* app);
+/** Redraw `app`'s tile badge from LcdApp::_badge*(); a no-op until its tile exists. */
+void shellLauncherBadgeChanged(LcdApp* app);
 /** The launcher's root container (a lower sibling of program layers). */
 lv_obj_t* shellLauncherRoot(void);
 

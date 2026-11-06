@@ -48,6 +48,17 @@ void LcdApp::setStatusIcon(int /*area*/, const char* /*iconBasename*/, int /*sta
     /* M2 wires the status-bar app-icon renderer (plan §5.3). Stub until then. */
 }
 void LcdApp::setRecentsSubtitle(const char* s) { m_recentsSubtitle = s ? s : ""; }
+void LcdApp::setBadge(const char* text, uint32_t rgb) {
+    std::string t = text ? text : "";
+    if (m_badgeOn && m_badgeText == t && m_badgeColor == rgb) return;
+    m_badgeOn = true; m_badgeText = t; m_badgeColor = rgb;
+    shellLauncherBadgeChanged(this);
+}
+void LcdApp::clearBadge() {
+    if (!m_badgeOn) return;
+    m_badgeOn = false; m_badgeText.clear();
+    shellLauncherBadgeChanged(this);
+}
 
 /* ---- recents thumbnail ---- */
 

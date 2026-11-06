@@ -106,6 +106,12 @@ public:
     void        setStatusIcon(int area, const char* iconBasename, int state);
     /** One line shown on this app's recents card (e.g. current contact). */
     void        setRecentsSubtitle(const char* s);
+    /** Badge this app's launcher tile at the icon's top-right corner: a pill
+     *  holding `text` on `rgb`, or a plain dot in `rgb` when `text` is empty.
+     *  Kept on the app, so a badge set before the tile exists shows once it
+     *  does. clearBadge() takes it off. Lcd task. */
+    void        setBadge(const char* text, uint32_t rgb);
+    void        clearBadge();
 
     /* ---- Resource ledger (the enable_recycle_resource replacement) ----
      * Timers and animations live in LVGL globals with no owner, so a closed app
@@ -125,6 +131,9 @@ public:
     void          _setRoot(lv_obj_t* r) { m_root = r; }
     void          _setShownFrom(ShowFrom f) { m_shownFrom = f; }
     const std::string& _recentsSubtitle() const { return m_recentsSubtitle; }
+    bool               _badgeOn() const    { return m_badgeOn; }
+    const std::string& _badgeText() const  { return m_badgeText; }
+    uint32_t           _badgeColor() const { return m_badgeColor; }
     /** Recents thumbnail: a PSRAM snapshot of this app's screen, captured by the
      *  manager the moment the app leaves the foreground (while still drawn) and
      *  shown half-scale on its recents card. Null until first captured (the card
@@ -165,7 +174,10 @@ private:
     lv_obj_t*       m_root = nullptr;
     int             m_id   = -1;
     std::string     m_recentsSubtitle;
-    ShowFrom        m_shownFrom  = ShowFrom::LAUNCHER;
+    bool            m_badgeOn    = false;
+    std::string     m_badgeText;
+    uint32_t        m_badgeColor = 0;
+    ShowFrom       m_shownFrom  = ShowFrom::LAUNCHER;
     bool            m_fullscreen = false;
     bool            m_arrows     = false;
     lcd_scroll_fn_t m_scrollFn   = nullptr;

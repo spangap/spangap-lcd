@@ -51,6 +51,7 @@ std::atomic<uint32_t> s_grabbed{0};             /* bit k: the current press bega
 std::atomic<uint32_t> s_presses[LCD_KEY_COUNT]; /* grabbed presses so far */
 std::atomic<int32_t>  s_claims[LCD_KEY_COUNT];
 std::atomic<bool>     s_dirty{false};           /* the lcd task has reconciling to do */
+std::atomic<void (*)(uint8_t, bool)> s_claimWatch{nullptr};   /* the board's claim watcher */
 
 struct Sub {                  /* guarded by s_subMux */
     TaskHandle_t task;
@@ -171,12 +172,23 @@ void lcdKeyUnsubscribe(void) {
     if (found) kick();
 }
 
+void lcdKeyOnClaimChange(void (*cb)(uint8_t key, bool claimed)) {
+    s_claimWatch.store(cb);
+}
+
 void lcdKeyClaim(uint8_t key, bool claim) {
     if (!validKey(key)) return;
-    if (claim) { s_claims[key].fetch_add(1); return; }
+    void (*watch)(uint8_t, bool) = s_claimWatch.load();
+    if (claim) {
+        if (s_claims[key].fetch_add(1) == 0 && watch) watch(key, true);
+        return;
+    }
     int32_t c = s_claims[key].load();
     while (c > 0 && !s_claims[key].compare_exchange_weak(c, c - 1)) {}
-    if (c == 1) kick();   /* the last claim went: a held grabbed press is owed its up */
+    if (c == 1) {
+        kick();   /* the last claim went: a held grabbed press is owed its up */
+        if (watch) watch(key, false);
+    }
 }
 
 }  // extern "C"

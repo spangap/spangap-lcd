@@ -43,7 +43,7 @@ lv_obj_t* s_root = nullptr;  /* launcher container (lower sibling of programs) *
 lv_obj_t* s_grid = nullptr;  /* the scrolling tile grid */
 lv_obj_t* s_drag = nullptr;  /* the tile currently held by a finger, or null */
 
-struct Tile { LcdApp* app; lv_obj_t* tile; lv_obj_t* img; std::string basename; };
+struct Tile { LcdApp* app; lv_obj_t* tile; lv_obj_t* img; std::string basename; lv_obj_t* badge = nullptr; };
 std::vector<Tile> s_tiles;   /* install order, never reordered — see applyOrder() */
 
 int viewportW() { return lcdScreenW(); }
@@ -445,6 +445,44 @@ void onTileClick(lv_event_t* e) {
  * mode as well, so it is never a hunt for the right thing to tap. */
 void onGridClick(lv_event_t*) { if (s_wiggle) wiggleToggle(); }
 
+/* The badge is a child of the icon image, inside its top-right corner, so it
+ * tilts with the icon in edit mode and never takes part in the tile's flex. */
+void applyBadge(Tile& t) {
+    if (!t.img || !t.app) return;
+    if (!t.app->_badgeOn()) {
+        if (t.badge) { lv_obj_delete(t.badge); t.badge = nullptr; }
+        return;
+    }
+    const LcdStyle& st = lcdStyle();
+    const std::string& text = t.app->_badgeText();
+    if (!t.badge) {
+        t.badge = lv_obj_create(t.img);
+        lv_obj_remove_style_all(t.badge);
+        lv_obj_remove_flag(t.badge, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(t.badge, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_bg_opa(t.badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(t.badge, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(t.badge, lcdPx(1), 0);
+        lv_obj_set_style_border_color(t.badge, lv_color_hex(st.statusBar.bg), 0);
+        lv_obj_align(t.badge, LV_ALIGN_TOP_RIGHT, 0, 0);
+    }
+    lv_obj_set_style_bg_color(t.badge, lv_color_hex(t.app->_badgeColor()), 0);
+    lv_obj_clean(t.badge);
+    if (text.empty()) {
+        int d = std::max(lcdPx(8), iconPx() / 5);
+        lv_obj_set_style_pad_all(t.badge, 0, 0);
+        lv_obj_set_size(t.badge, d, d);
+    } else {
+        lv_obj_set_size(t.badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_hor(t.badge, lcdPx(4), 0);
+        lv_obj_set_style_pad_ver(t.badge, 0, 0);
+        lv_obj_t* l = lv_label_create(t.badge);
+        lv_label_set_text(l, text.c_str());
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        if (st.launcher.labelFont) lv_obj_set_style_text_font(l, st.launcher.labelFont, 0);
+    }
+}
+
 }  // namespace
 
 lv_obj_t* shellLauncherRoot(void) { return s_root; }
@@ -528,8 +566,13 @@ void shellLauncherAddTile(LcdApp* app) {
     info("add tile '%s' (icon '%s')\n", app->cfg().name ? app->cfg().name : "", base);
     s_tiles.push_back({ app, tile, img, base });
     applyOrder();   /* the new tile lands where the key wants it, not just last */
+    applyBadge(s_tiles.back());
 
     lcdIconRequest(base, iconPx());   /* -> lcdLauncherIconLoaded */
+}
+
+void shellLauncherBadgeChanged(LcdApp* app) {
+    for (auto& t : s_tiles) if (t.app == app) applyBadge(t);
 }
 
 void lcdLauncherIconLoaded(const char* basename, int px) {
