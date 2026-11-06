@@ -33,6 +33,13 @@ typedef struct {
  *  from a Service onStart. Only the DSI transport reads it. */
 void lcdPanelSetInitSequence(const lcd_init_cmd_t* cmds, size_t count);
 
+/** Take the backlight over: for a lamp that is not a PWM pin — an LED driver
+ *  on I2C, say — so CONFIG_LCD_BL_PIN cannot describe it. `set` then receives
+ *  every level the screen goes to, 0..255 with 0 meaning dark, on the lcd task
+ *  (the boot reveal, the wake fade, the dim step, the fade to dark), in place of
+ *  the LEDC duty. Call before the panel comes up — from a Service onStart. */
+void lcdPanelSetBacklightDriver(void (*set)(uint8_t level));
+
 #ifdef __cplusplus
 }
 #endif

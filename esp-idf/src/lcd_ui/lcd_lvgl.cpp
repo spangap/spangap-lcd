@@ -9,6 +9,7 @@
  */
 #include "lcd_internal.h"
 #include "lcd_input.h"
+#include "lcd_panel.h"    /* lcdPanelSetBacklightDriver */
 
 #include "log.h"
 #include "spangap.h"      /* humanDetected — input on the screen is somebody being there */
@@ -555,13 +556,18 @@ static lv_timer_t* s_revealCap  = nullptr; /* hard cap so boot always reveals */
 
 /* A board with a lamp of its own to keep in step with the screen (lcdBacklightOnChange). */
 static void (*s_blFollow)(uint8_t) = nullptr;
+/* A board whose screen lamp is not a PWM pin (lcdPanelSetBacklightDriver). */
+static void (*s_blDriver)(uint8_t) = nullptr;
+
+void lcdPanelSetBacklightDriver(void (*set)(uint8_t level)) { s_blDriver = set; }
 
 /* The single place the panel duty is applied, so a follower is told about every
  * change — the boot reveal, the wake fade, the dim step, the fade to dark. */
 static void blApply(int32_t v) {
     if (v < 0)   v = 0;
     if (v > 255) v = 255;
-    lcdPanelBacklight((uint8_t)v);
+    if (s_blDriver) s_blDriver((uint8_t)v);
+    else            lcdPanelBacklight((uint8_t)v);
     s_blCur = v;
     if (s_blFollow) s_blFollow((uint8_t)v);
 }

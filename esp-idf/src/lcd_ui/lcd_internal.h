@@ -13,6 +13,7 @@
 #include "lcd.h"
 #include "lcd_input.h"
 #include "esp_lcd_types.h"
+#include "esp_lcd_panel_dev.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -43,6 +44,11 @@ int         lcdRotationSetting(void);
  *  (post-rotation) display size. Installs the shared GPIO ISR service. nullptr
  *  on failure. */
 esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut, int* hOut);
+/** lcd_panel_nv3031b.cpp: the NV3031B quad-SPI controller behind the esp_lcd
+ *  panel ops, on an io lcdPanelInit created in quad mode. */
+esp_err_t   lcdNewPanelNv3031b(esp_lcd_panel_io_handle_t io,
+                               const esp_lcd_panel_dev_config_t* cfg,
+                               esp_lcd_panel_handle_t* out);
 /** Backlight 0..255 (0 = off) via CONFIG_LCD_BL_PIN (LEDC). No-op if no BL pin. */
 void        lcdPanelBacklight(uint8_t level);
 /** Panel display on/off for the inactivity standby (GRAM retained → instant wake). */

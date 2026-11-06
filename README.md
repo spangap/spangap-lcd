@@ -151,7 +151,8 @@ is also why there is no RGB entry in the controller choice.
 | `LCD_BL_ACTIVE_LOW` | `n` | The backlight dims as the PWM's duty rises — a PWM fed into the LED driver's feedback node. Inverted in the LEDC, so level 255 is still the brightest. |
 | `LCD_BL_EN_PIN` | `-1` | The LED driver's own enable line: high while the backlight level is above zero, low at zero. |
 | `LCD_PCLK_MHZ` | `40` SPI / `16` RGB | Pixel clock. On SPI the GPIO matrix caps the ESP32-S3 near 40 MHz; on RGB it is the refresh rate in disguise (`pclk / (htotal × vtotal)`) and the PSRAM bandwidth the panel takes from everything else. |
-| `LCD_CONTROLLER_ST7789` / `LCD_CONTROLLER_ILI9341` | ST7789 | Panel controller (SPI only). ST7789 is built into `esp_lcd`; ILI9341 pulls in `esp_lcd_ili9341`. |
+| `LCD_SPI_QUAD` / `LCD_QSPI_D2_PIN` / `LCD_QSPI_D3_PIN` | `n` / `-1` | Quad SPI: MOSI and MISO become D0/D1, these two D2/D3, and there is no D/C line — the 32-bit command word carries the controller's opcode. |
+| `LCD_CONTROLLER_ST7789` / `_ILI9341` / `_NV3031B` | ST7789 | Panel controller (SPI only). ST7789 is built into `esp_lcd`; ILI9341 pulls in `esp_lcd_ili9341`; NV3031B (quad SPI only) is this component's own `lcd_panel_nv3031b.cpp`. |
 | `LCD_RGB_HSYNC_PIN` / `_VSYNC_PIN` / `_DE_PIN` / `_PCLK_PIN` | `-1` | RGB sync signals. |
 | `LCD_RGB_B0..B4` / `G0..G5` / `R0..R4_PIN` | `-1` | The sixteen RGB565 data lines, named as the panel names them. |
 | `LCD_RGB_HSYNC_PULSE` / `_BACK` / `_FRONT` | `8` / `50` / `10` | Horizontal blanking, in pixel clocks — from the panel's data sheet. |
@@ -488,6 +489,12 @@ and calls `lcdScreenSleep()` / `lcdScreenWake()` (backlight off + panel display
 off, GRAM retained for an instant fade-in wake) and powers its own input
 down/up. The board's button sets/clears the same key, so timeout and button
 share one path.
+
+**A backlight that is not a pin is the board's.** An LED driver on I2C (the
+L2 Pro's LP5814) has no LEDC duty to set, so the board hands spangap-lcd a
+setter with `lcdPanelSetBacklightDriver()` (`lcd_panel.h`) from a Service
+`onStart`: every level the screen goes to, 0..255, then reaches it on the lcd
+task in place of the LEDC write, and `LCD_BL_PIN` stays `-1`.
 
 **A second lamp can ride along.** `lcdBacklightOnChange(cb)` hands a board every
 duty the panel backlight takes — boot reveal, wake fade, dim step, fade to dark —

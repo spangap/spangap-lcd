@@ -131,8 +131,12 @@ accounting.
 ## 3. Display & LVGL bring-up (foundation)
 
 `lcd_panel.cpp` brings up the SPI bus, panel-IO, and controller (ST7789 built
-into `esp_lcd`, or ILI9341 via the managed component) entirely from
-`CONFIG_LCD_*`. `lcd_panel_rgb.cpp` is the RGB half of the
+into `esp_lcd`, ILI9341 via the managed component, or the quad-SPI NV3031B
+through `lcd_panel_nv3031b.cpp`) entirely from `CONFIG_LCD_*`. In quad mode the
+panel-IO takes 32-bit commands with no D/C line: the NV3031B driver frames each
+command as `02 00 <cmd> 00` and each pixel write as `32 00 2C 00`, and its
+mirror bits are taken against the controller's reversed scan so the generic
+rotation table lands upright. `lcd_panel_rgb.cpp` is the RGB half of the
 `CONFIG_LCD_BUS_SPI`/`_RGB`/`_DSI` choice — a timing generator over a PSRAM
 framebuffer, no panel-IO and no controller driver, the glass having been
 configured by the board before this runs. `lcd_panel_dsi.cpp` is the DSI half:

@@ -2,7 +2,7 @@
  * lcd_panel.cpp — generic SPI panel bring-up from Kconfig (CONFIG_LCD_*).
  *
  * Owns the display a board used to wire by hand: the shared SPI bus, the esp_lcd
- * panel-io, the controller (ST7789 / ILI9341), the LEDC backlight, and the
+ * panel-io, the controller (ST7789 / ILI9341 / NV3031B), the LEDC backlight, and the
  * orientation. A board with a standard SPI panel sets the CONFIG_LCD_* pins in
  * its sdkconfig.defaults and contributes no display code. The same rotation
  * applied to the pixels here is exported (lcdPanelOrientTouch) so a board's raw
@@ -118,20 +118,34 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
     bus.sclk_io_num     = CONFIG_LCD_SCK_PIN;
     bus.mosi_io_num     = CONFIG_LCD_MOSI_PIN;
     bus.miso_io_num     = CONFIG_LCD_MISO_PIN;
+#if CONFIG_LCD_SPI_QUAD
+    bus.quadwp_io_num   = CONFIG_LCD_QSPI_D2_PIN;
+    bus.quadhd_io_num   = CONFIG_LCD_QSPI_D3_PIN;
+#else
     bus.quadwp_io_num   = -1;
     bus.quadhd_io_num   = -1;
+#endif
     bus.max_transfer_sz = SPANGAP_SPI_MAX_TRANSFER;   /* a strip must fit it */
     spiHelperInitBus(host, &bus);
 
     esp_lcd_panel_io_handle_t io = nullptr;
     esp_lcd_panel_io_spi_config_t io_cfg = {};
     io_cfg.cs_gpio_num       = CONFIG_LCD_CS_PIN;
-    io_cfg.dc_gpio_num       = CONFIG_LCD_DC_PIN;
     io_cfg.pclk_hz           = (unsigned)CONFIG_LCD_PCLK_MHZ * 1000 * 1000;
-    io_cfg.lcd_cmd_bits      = 8;
     io_cfg.lcd_param_bits    = 8;
-    io_cfg.spi_mode          = 0;
     io_cfg.trans_queue_depth = 10;
+#if CONFIG_LCD_SPI_QUAD
+    /* No D/C line: the 32-bit command word carries the controller's opcode
+     * ahead of the command (lcd_panel_nv3031b.cpp frames it). */
+    io_cfg.dc_gpio_num       = -1;
+    io_cfg.lcd_cmd_bits      = 32;
+    io_cfg.spi_mode          = 3;
+    io_cfg.flags.quad_mode   = 1;
+#else
+    io_cfg.dc_gpio_num       = CONFIG_LCD_DC_PIN;
+    io_cfg.lcd_cmd_bits      = 8;
+    io_cfg.spi_mode          = 0;
+#endif
     if (esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)(intptr_t)host,
                                  &io_cfg, &io) != ESP_OK) {
         err("panel-io init failed\n");
@@ -145,6 +159,8 @@ esp_lcd_panel_handle_t lcdPanelInit(esp_lcd_panel_io_handle_t* ioOut, int* wOut,
     esp_err_t perr;
 #if CONFIG_LCD_CONTROLLER_ILI9341
     perr = esp_lcd_new_panel_ili9341(io, &pcfg, &s_panel);
+#elif CONFIG_LCD_CONTROLLER_NV3031B
+    perr = lcdNewPanelNv3031b(io, &pcfg, &s_panel);
 #else
     perr = esp_lcd_new_panel_st7789(io, &pcfg, &s_panel);
 #endif
