@@ -67,6 +67,12 @@ void lcdSetBacklight(uint8_t level);
  *  and the wake is posted asynchronously). */
 bool lcdNotifyActivity(void);
 
+/** Hold the screen awake on behalf of `who` (any stable name; one hold per name,
+ *  repeats are no-ops). Taking a hold wakes the screen from standby and
+ *  suspends the inactivity timeout; it resumes once the last hold is released.
+ *  The operator can still put the screen to sleep by hand. Lcd task. */
+void lcdHoldAwake(const char* who, bool on);
+
 /** Milliseconds since the last user input on the device (touch, button,
  *  trackball, a reported key, or the press that woke the screen); UINT32_MAX
  *  when there has been none since boot. Lcd task. */
@@ -263,6 +269,12 @@ void lcdKeyboardOpenKeys(lv_obj_t* sink, lv_obj_t* anchor);
  *  to be answerable on a touch-only board. lcdInputBoxCreate does it for its
  *  own field; a program building a plain textarea calls this. Lcd task. */
 void lcdKeyboardAttach(lv_obj_t* ta);
+
+/** Mark `ta` as a field that holds MESSAGES, which start sentences: the
+ *  on-screen keyboard arms shift for the first letter whenever it stands empty.
+ *  Every other field is typed as it is meant — a hostname, a password, an
+ *  address. lcdInputBoxCreate marks its own field. Lcd task. */
+void lcdKeyboardSentences(lv_obj_t* ta);
 
 /** Whether the on-screen keyboard is up. Lcd task. */
 bool lcdKeyboardIsOpen(void);

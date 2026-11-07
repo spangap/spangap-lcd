@@ -9,6 +9,7 @@
  * this layer only names the keys and fans the edges out. The subscriber list
  * lives on the lcd task.
  *
+ *   board     lcdKeySetLabel(LCD_KEY_PTT, "Mic")    optional: the key's printed name
  *   board     lcdKeyDeclare(LCD_KEY_PTT)            once, at keyboard bring-up
  *   board     lcdKeyReport(LCD_KEY_PTT, down)       on every edge, any task
  *                 ▼  (wakes the lcd task, which fans out)
@@ -59,6 +60,13 @@ void lcdKeyUndeclare(uint8_t key);
 
 /** Whether the board reports `key`. */
 bool lcdKeyDeclared(uint8_t key);
+
+/** Board: the name printed on the physical key ("Mic", "U/B"), for prompts
+ *  that tell the user which key to hold. `label` must outlive the program. */
+void lcdKeySetLabel(uint8_t key, const char* label);
+
+/** The board's name for `key`; "Talk" / "Space" where the board set none. */
+const char* lcdKeyLabel(uint8_t key);
 
 /** Whether some consumer has `key` claimed now. A board that holds a key down
  *  on the user's behalf (a latching toggle) releases it when this goes false. */

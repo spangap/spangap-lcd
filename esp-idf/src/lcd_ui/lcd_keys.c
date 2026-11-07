@@ -98,6 +98,7 @@ static void lcd_keys_alt_close(lv_obj_t * obj, bool commit);
 
 static void lcd_keys_spend(lv_obj_t * obj, lcd_keys_shift_t shift_at_press,
                            bool fn_at_press, bool ctrl_at_press);
+static void lcd_keys_rearm(lv_obj_t * obj);
 
 static bool lcd_keys_end_sentence(lv_obj_t * ta);
 
@@ -459,14 +460,13 @@ void lcd_keys_set_textarea(lv_obj_t * obj, lv_obj_t * ta)
     }
 }
 
-void lcd_keys_arm_shift(lv_obj_t * obj)
+void lcd_keys_set_sentence(lv_obj_t * obj, bool on)
 {
     LV_ASSERT_OBJ(obj, MY_CLASS);
     lcd_keys_t * keyboard = (lcd_keys_t *)obj;
-    /* A lock outranks it: caps is a state the operator chose and this is a
-     * guess about a sentence. */
-    if(keyboard->shift != LCD_KEYS_SHIFT_OFF) return;
-    lcd_keys_set_shift(obj, LCD_KEYS_SHIFT_ONCE);
+    keyboard->sentence = on;
+    keyboard->shift_refused = 0;
+    lcd_keys_rearm(obj);
 }
 
 void lcd_keys_set_alt_font(lv_obj_t * obj, const lv_font_t * font)
@@ -501,6 +501,7 @@ void lcd_keys_set_mode(lv_obj_t * obj, lcd_keys_mode_t mode)
 
     keyboard->mode = mode;
     keyboard->shift = shift;
+    keyboard->shift_auto = 0;
     keyboard->fn = 0;
     keyboard->ctrl = 0;
     lcd_keys_update_map(obj);
@@ -561,6 +562,20 @@ bool lcd_keys_get_popovers(const lv_obj_t * obj)
  * Other functions
  *====================*/
 
+/* An entry ends — READY or CANCEL. The keyboard is told first and the field
+ * after, and the field is TAKEN BEFORE the keyboard hears it: whoever owns the
+ * keyboard puts it away on either, which unbinds the field, and reading
+ * keyboard->ta afterwards would find nothing to tell. Answering may also delete
+ * the field outright, hence the validity check. */
+static void lcd_keys_finish(lv_obj_t * obj, lv_event_code_t code)
+{
+    lcd_keys_t * keyboard = (lcd_keys_t *)obj;
+    lv_obj_t * ta = keyboard->ta;
+    lv_result_t res = lv_obj_send_event(obj, code, NULL);
+    if(res != LV_RESULT_OK) return;
+    if(ta && lv_obj_is_valid(ta)) lv_obj_send_event(ta, code, NULL);
+}
+
 void lcd_keys_def_event_cb(lv_event_t * e)
 {
     lv_obj_t * obj = lv_event_get_current_target(e);
@@ -589,14 +604,26 @@ void lcd_keys_def_event_cb(lv_event_t * e)
     const bool fn_at_press = keyboard->fn;
     const bool ctrl_at_press = keyboard->ctrl;
 
+    /* What shift does to THIS key. The operator's shift reaches every key; one
+     * the keyboard armed for a sentence capitalises a letter and nothing else,
+     * so a message that opens with a digit, or a backspace, gets the plain key. */
+    const bool shifted = shift_at_press != LCD_KEYS_SHIFT_OFF &&
+                         (!keyboard->shift_auto ||
+                          (txt[0] >= 'A' && txt[0] <= 'Z' && txt[1] == '\0'));
+
     /* The modifiers, recognised by the map cell they are rather than by the
      * legend they wear. Shift arms for one key, and only a DOUBLE tap locks it
      * — locking is a gesture of its own, not a stop on the way round. fn arms
-     * for one key and has no lock at all. */
+     * for one key and has no lock at all. Shift by hand is the operator's from
+     * then on; turning it off is refusing the capital, which an emptied field
+     * then stops offering again. */
     if(txt == kb_shift_lbl) {
-        lcd_keys_set_shift(obj, dbl ? LCD_KEYS_SHIFT_LOCK :
-                                shift_at_press == LCD_KEYS_SHIFT_OFF ? LCD_KEYS_SHIFT_ONCE
-                                                                     : LCD_KEYS_SHIFT_OFF);
+        lcd_keys_shift_t to = dbl ? LCD_KEYS_SHIFT_LOCK :
+                              shift_at_press == LCD_KEYS_SHIFT_OFF ? LCD_KEYS_SHIFT_ONCE
+                                                                   : LCD_KEYS_SHIFT_OFF;
+        keyboard->shift_auto = 0;
+        keyboard->shift_refused = to == LCD_KEYS_SHIFT_OFF;
+        lcd_keys_set_shift(obj, to);
         return;
     }
     if(txt == kb_fn_lbl) {
@@ -612,9 +639,7 @@ void lcd_keys_def_event_cb(lv_event_t * e)
      * and the back-to-letters key are the same keyboard symbol, and only the
      * struck-through bit tells them apart on screen. */
     if(txt == kb_hide_lbl) {
-        lv_result_t res = lv_obj_send_event(obj, LV_EVENT_CANCEL, NULL);
-        if(res != LV_RESULT_OK) return;
-        if(keyboard->ta) lv_obj_send_event(keyboard->ta, LV_EVENT_CANCEL, NULL);
+        lcd_keys_finish(obj, LV_EVENT_CANCEL);
         return;
     }
     if(txt == kb_num_lbl) {
@@ -648,23 +673,11 @@ void lcd_keys_def_event_cb(lv_event_t * e)
         return;
     }
     else if(lv_strcmp(txt, LV_SYMBOL_CLOSE) == 0 || lv_strcmp(txt, LV_SYMBOL_KEYBOARD) == 0) {
-        lv_result_t res = lv_obj_send_event(obj, LV_EVENT_CANCEL, NULL);
-        if(res != LV_RESULT_OK) return;
-
-        if(keyboard->ta) {
-            res = lv_obj_send_event(keyboard->ta, LV_EVENT_CANCEL, NULL);
-            if(res != LV_RESULT_OK) return;
-        }
+        lcd_keys_finish(obj, LV_EVENT_CANCEL);
         return;
     }
     else if(lv_strcmp(txt, LV_SYMBOL_OK) == 0) {
-        lv_result_t res = lv_obj_send_event(obj, LV_EVENT_READY, NULL);
-        if(res != LV_RESULT_OK) return;
-
-        if(keyboard->ta) {
-            res = lv_obj_send_event(keyboard->ta, LV_EVENT_READY, NULL);
-            if(res != LV_RESULT_OK) return;
-        }
+        lcd_keys_finish(obj, LV_EVENT_READY);
         return;
     }
 
@@ -678,7 +691,7 @@ void lcd_keys_def_event_cb(lv_event_t * e)
         /*Shift turns rubbing out into deleting forward, as it does on a keyboard
          *with keys. The cap says nothing about it: the key is still backspace.*/
         else if(lv_strcmp(txt, LV_SYMBOL_BACKSPACE) == 0)
-            key = shift_at_press != LCD_KEYS_SHIFT_OFF ? LV_KEY_DEL : LV_KEY_BACKSPACE;
+            key = shifted ? LV_KEY_DEL : LV_KEY_BACKSPACE;
         else if(lv_strcmp(txt, LV_SYMBOL_LEFT) == 0)      key = LV_KEY_LEFT;
         else if(lv_strcmp(txt, LV_SYMBOL_RIGHT) == 0)     key = LV_KEY_RIGHT;
         else if(lv_strcmp(txt, LV_SYMBOL_UP) == 0)        key = LV_KEY_UP;
@@ -687,7 +700,7 @@ void lcd_keys_def_event_cb(lv_event_t * e)
         else if(lv_strcmp(txt, "tab") == 0)               key = '\t';
         else {
             /*Every character these layouts can produce is one ASCII byte*/
-            key = (uint8_t)lcd_keys_output(obj, txt, btn_id, shift_at_press != LCD_KEYS_SHIFT_OFF,
+            key = (uint8_t)lcd_keys_output(obj, txt, btn_id, shifted,
                                            fn_at_press, out, sizeof(out))[0];
         }
         /*ctrl is a BIT ON THE KEY, not a character of its own — lcd.h's
@@ -707,16 +720,14 @@ void lcd_keys_def_event_cb(lv_event_t * e)
         return;
     }
 
+    bool sentence_ended = false;
     if(lv_strcmp(txt, "Enter") == 0 || lv_strcmp(txt, LV_SYMBOL_NEW_LINE) == 0) {
         if(lv_textarea_get_one_line(keyboard->ta)) {
             /* Enter finishes a one-line field, as it does on a keyboard with
              * keys. The keyboard goes first (READY on us) and the field is told
              * after: answering may well rebuild the screen it was standing
              * over, and it must not do that with the keys still up. */
-            lv_obj_t * ta = keyboard->ta;
-            lv_result_t res = lv_obj_send_event(obj, LV_EVENT_READY, NULL);
-            if(res != LV_RESULT_OK) return;
-            if(lv_obj_is_valid(ta)) lv_obj_send_event(ta, LV_EVENT_READY, NULL);
+            lcd_keys_finish(obj, LV_EVENT_READY);
             return;
         }
         lv_textarea_add_char(keyboard->ta, '\n');
@@ -736,7 +747,7 @@ void lcd_keys_def_event_cb(lv_event_t * e)
     else if(lv_strcmp(txt, LV_SYMBOL_BACKSPACE) == 0) {
         /*Shift makes it delete forward instead — the same key, doing what the
          *key beside it would do on a keyboard that had room for one.*/
-        if(shift_at_press != LCD_KEYS_SHIFT_OFF) lv_textarea_delete_char_forward(keyboard->ta);
+        if(shifted) lv_textarea_delete_char_forward(keyboard->ta);
         else lv_textarea_delete_char(keyboard->ta);
     }
     else if(lv_strcmp(txt, "tab") == 0) {
@@ -771,20 +782,26 @@ void lcd_keys_def_event_cb(lv_event_t * e)
         }
     }
     /* SPACE TWICE, QUICKLY, ENDS THE SENTENCE: the space just typed becomes
-     * ". " and shift arms itself for the letter that starts the next one. Only
-     * where a word actually ended — anywhere else two spaces are two spaces. */
+     * ". " and, in a field that starts sentences, shift arms itself for the
+     * letter that starts the next one. Only where a word actually ended —
+     * anywhere else two spaces are two spaces. */
     else if(dbl && txt[0] == ' ' && txt[1] == '\0' && lcd_keys_end_sentence(keyboard->ta)) {
-        lcd_keys_set_shift(obj, LCD_KEYS_SHIFT_ONCE);
+        sentence_ended = keyboard->sentence;
     }
     else {
         char out[8];
         lv_textarea_add_text(keyboard->ta,
                              lcd_keys_output(obj, txt, btn_id,
-                                             shift_at_press != LCD_KEYS_SHIFT_OFF, fn_at_press,
+                                             shifted, fn_at_press,
                                              out, sizeof(out)));
     }
 
     lcd_keys_spend(obj, shift_at_press, fn_at_press, ctrl_at_press);
+    if(sentence_ended && keyboard->shift == LCD_KEYS_SHIFT_OFF) {
+        lcd_keys_set_shift(obj, LCD_KEYS_SHIFT_ONCE);
+        keyboard->shift_auto = 1;
+    }
+    lcd_keys_rearm(obj);
 }
 
 const char * const * lcd_keys_get_map_array(const lv_obj_t * kb)
@@ -1063,6 +1080,23 @@ static void lcd_keys_spend(lv_obj_t * obj, lcd_keys_shift_t shift_at_press,
     }
     if(fn_at_press && keyboard->fn) lcd_keys_set_fn(obj, false);
     if(ctrl_at_press && keyboard->ctrl) lcd_keys_set_ctrl(obj, false);
+}
+
+/**
+ * In a field that starts sentences, an empty field arms shift for its first
+ * letter — unless the operator has turned shift off in it, or it is already up.
+ * @param obj pointer to a keyboard object
+ */
+static void lcd_keys_rearm(lv_obj_t * obj)
+{
+    lcd_keys_t * keyboard = (lcd_keys_t *)obj;
+    if(!keyboard->sentence || keyboard->shift_refused) return;
+    if(keyboard->shift != LCD_KEYS_SHIFT_OFF) return;
+    if(keyboard->ta == NULL || !lv_obj_is_valid(keyboard->ta)) return;
+    const char * t = lv_textarea_get_text(keyboard->ta);
+    if(t && t[0]) return;
+    lcd_keys_set_shift(obj, LCD_KEYS_SHIFT_ONCE);
+    keyboard->shift_auto = 1;
 }
 
 /**

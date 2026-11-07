@@ -114,6 +114,16 @@ bool lcdKeyDeclared(uint8_t key) {
     return validKey(key) && (s_declared.load() & (1u << key));
 }
 
+static const char* s_labels[LCD_KEY_COUNT] = { "Talk", "Space" };
+
+void lcdKeySetLabel(uint8_t key, const char* label) {
+    if (validKey(key) && label) s_labels[key] = label;
+}
+
+const char* lcdKeyLabel(uint8_t key) {
+    return validKey(key) ? s_labels[key] : "";
+}
+
 bool lcdKeyClaimed(uint8_t key) {
     return validKey(key) && s_claims[key].load() > 0;
 }

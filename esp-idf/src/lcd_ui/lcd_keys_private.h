@@ -24,9 +24,8 @@ extern "C" {
  **********************/
 
 /** Where the shift key stands. ONCE is spent by the next key, whatever it is;
- *  LOCK is only left by pressing shift again. Pressing shift walks
- *  OFF → ONCE → LOCK → OFF, so the double press an operator makes to lock is
- *  simply two steps of that walk and needs no timer. */
+ *  LOCK is only left by pressing shift again. A tap toggles OFF and ONCE, a
+ *  double tap locks. */
 typedef enum {
     LCD_KEYS_SHIFT_OFF,
     LCD_KEYS_SHIFT_ONCE,
@@ -70,6 +69,11 @@ struct _lcd_keys_t {
     uint32_t last_tick;         /**< When the last key went down, for the double tap */
     uint32_t last_btn;          /**< …and which one it was */
     uint8_t shift : 2;          /**< Sticky shift state (lcd_keys_shift_t) */
+    uint8_t shift_auto : 1;     /**< The ONCE standing was armed by the keyboard, not
+                                 *   the operator: it capitalises A-Z and nothing else */
+    uint8_t sentence : 1;       /**< The field starts sentences (lcd_keys_set_sentence) */
+    uint8_t shift_refused : 1;  /**< The operator turned shift off in this field:
+                                 *   an emptied field no longer re-arms it */
     uint8_t fn : 1;             /**< fn is armed for the next key. Never latches */
     uint8_t ctrl : 1;           /**< ctrl is armed for the next key. Never latches */
     uint8_t popovers : 1;       /**< Show button titles in popovers on press */

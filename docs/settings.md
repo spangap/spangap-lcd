@@ -233,6 +233,14 @@ puts a button in front of it:
   a page says "not this", and the handler carries it forward untouched. A text field's `placeholder_key` shows a hint the device
   publishes — the MAC it would use if the field is left blank.
 
+  A text field with `split_at` / `split_to` ends at that character: the
+  textarea's insert hook keeps what comes before it, and — deferred out of the
+  insert, since it closes the editor the typing is in — the field is committed
+  and the caret moves to the sibling `split_to` with the rest of the text in
+  it: inline, by focusing that field's textarea (whose defocus commits this
+  one); on the on-screen-keyboard path, by committing this editor and opening
+  the sibling's.
+
 A **collection** (`lcd_collection_t`) renders the array at its `key` as banded
 rows — two alternating dark greys, so a block of the device's own data is
 visibly not more furniture — each carrying a title, an optional subtitle, a

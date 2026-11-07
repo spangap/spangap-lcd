@@ -38,6 +38,7 @@
 #include "log.h"
 
 #include <cJSON.h>
+#include <memory>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -588,8 +589,10 @@ void kbEvent(lv_event_t* e) {
     else if (c == LV_EVENT_CANCEL) kbClose(false);
 }
 
-void onFieldTap(lv_event_t* e) {
-    auto* f = static_cast<FormField*>(lv_event_get_user_data(e));
+void onFieldSplitInsert(lv_event_t* e);   /* fwd: a split field's typing */
+
+/** Open the on-screen-keyboard editor over one form field, holding `text`. */
+void fieldEditOpen(FormField* f, const std::string& text) {
     s_kb.f = f;
 
     lv_obj_t* ov = lv_obj_create(lv_layer_top());
@@ -617,7 +620,7 @@ void onFieldTap(lv_event_t* e) {
             ta, storageGetStr(f->row->placeholder_key, "").c_str());
     else if (f->row->placeholder)
         lv_textarea_set_placeholder_text(ta, f->row->placeholder);
-    lv_textarea_set_text(ta, f->value.c_str());
+    lv_textarea_set_text(ta, text.c_str());
     s_kb.ta = ta;
 
     /* The panel's own keyboard, as in lcd_settings.cpp's editor: typing lands
@@ -625,7 +628,66 @@ void onFieldTap(lv_event_t* e) {
      * dismiss reach the field as READY / CANCEL. */
     lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_READY,  nullptr);
     lv_obj_add_event_cb(ta, kbEvent, LV_EVENT_CANCEL, nullptr);
+    if (f->row->split_at && *f->row->split_at)
+        lv_obj_add_event_cb(ta, onFieldSplitInsert, LV_EVENT_INSERT, f);
     lcdKeyboardOpen(ta);
+}
+
+void onFieldTap(lv_event_t* e) {
+    auto* f = static_cast<FormField*>(lv_event_get_user_data(e));
+    fieldEditOpen(f, f->value);
+}
+
+/* -- split fields --
+ * A field that ends at a character ("host" before ':') hands what follows it to
+ * a sibling ("port") and the caret with it. The textarea's own insert hook
+ * keeps the part before the character and drops the rest; moving on is
+ * deferred, because it closes the editor the typing is still inside. */
+struct SplitMove { FormCtx* form; size_t idx; std::string rest; };
+
+FormField* formFieldNamed(const char* name) {
+    if (!s_form || !name) return nullptr;
+    for (auto& f : s_form->fields)
+        if (f.row->field && strcmp(f.row->field, name) == 0) return &f;
+    return nullptr;
+}
+
+void splitMoveAsync(void* p) {
+    auto* m = static_cast<SplitMove*>(p);
+    std::unique_ptr<SplitMove> own(m);
+    if (!s_form || s_form != m->form || m->idx >= s_form->fields.size()) return;
+    FormField& from = s_form->fields[m->idx];
+    FormField* to = formFieldNamed(from.row->split_to);
+    if (!to) return;
+    if (from.valLbl) {
+        /* The on-screen-keyboard editor: commit this field, then edit the next. */
+        if (s_kb.f == &from) {
+            kbClose(true);
+            if (s_kb.f) return;              /* refused; the notice is up */
+        }
+        fieldEditOpen(to, m->rest);
+    } else if (to->widget) {
+        /* Inline: focusing the next field defocuses this one, which commits it. */
+        lv_textarea_set_text(to->widget, m->rest.c_str());
+        if (lcdInputGroup()) lv_group_focus_obj(to->widget);
+    }
+}
+
+void onFieldSplitInsert(lv_event_t* e) {
+    auto* f = static_cast<FormField*>(lv_event_get_user_data(e));
+    const char* ins = static_cast<const char*>(lv_event_get_param(e));
+    if (!ins || !s_form || s_form->fields.empty()) return;
+    if (f < s_form->fields.data() || f >= s_form->fields.data() + s_form->fields.size())
+        return;
+    const char* at = strstr(ins, f->row->split_at);
+    if (!at) return;
+    /* What lands here must outlive this call: the textarea inserts it after. */
+    static std::string keep;
+    keep.assign(ins, at - ins);
+    lv_textarea_set_insert_replace(lv_event_get_target_obj(e), keep.c_str());
+    size_t idx = f - s_form->fields.data();
+    lv_async_call(splitMoveAsync,
+                  new SplitMove{ s_form, idx, std::string(at + strlen(f->row->split_at)) });
 }
 
 void onFieldInline(lv_event_t* e) {          /* physical keyboard: edit in place */
@@ -910,6 +972,8 @@ void buildFormField(lv_obj_t* parent, FormField& f, bool underHeading) {
                 f.widget = ta;
                 lv_obj_add_event_cb(ta, onFieldInline, LV_EVENT_READY,     &f);
                 lv_obj_add_event_cb(ta, onFieldInline, LV_EVENT_DEFOCUSED, &f);
+                if (r->split_at && *r->split_at)
+                    lv_obj_add_event_cb(ta, onFieldSplitInsert, LV_EVENT_INSERT, &f);
             } else {
                 lv_obj_t* val = lv_label_create(row);
                 lv_obj_set_style_text_color(val, lv_color_hex(0xb0b8c0), 0);

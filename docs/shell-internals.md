@@ -342,9 +342,13 @@ and a dim nobody notices asks nothing; halving only takes over for a screen
 already below it, so the step is always downward. Reaching 0 would read as asleep
 and defeat the question outright.
 Every path that takes the screen elsewhere — `lcdScreenSleep`, `lcdScreenWake`, a
-mirror viewer's keep-awake hold — clears the grace timer first, so it can never
-fire against a screen that has already moved on. `sys.standby` is the only
-lever either direction: a mirror viewer's keep-awake hold (`lcdMirrorApplyHold`)
+keep-awake hold — clears the grace timer first, so it can never
+fire against a screen that has already moved on. A hold is either a mirror
+viewer's (`lcdMirrorApplyHold`) or a program's (`lcdHoldAwake`, one per holder
+name — a call in progress, say); while any is held the blank timer is never
+armed, and the last one released re-arms it. Only the timeout is suspended: the
+operator can still put the screen to sleep by hand. `sys.standby` is the only
+lever either direction: taking a hold
 also leaves standby by clearing that key rather than calling `lcdScreenWake()`
 itself, so the board's view of standby never drifts from the panel's — storage
 dedups a write that repeats the current value, so a key left set behind the

@@ -48,8 +48,10 @@
 #include "lcd_internal.h"
 #include "lcd_keys.h"       /* our own keyboard widget (a fork of lv_keyboard) */
 
+#include <algorithm>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -71,6 +73,20 @@ struct {
 } s_kb;
 
 void kbTargetGoneCb(lv_event_t* e);
+
+/* The fields that hold messages (lcdKeyboardSentences). A handful at most, so a
+ * list; each takes itself out as it is deleted. */
+std::vector<lv_obj_t*> s_sentenceFields;
+
+void kbSentenceGoneCb(lv_event_t* e) {
+    lv_obj_t* ta = lv_event_get_target_obj(e);
+    s_sentenceFields.erase(std::remove(s_sentenceFields.begin(), s_sentenceFields.end(), ta),
+                           s_sentenceFields.end());
+}
+
+bool kbIsSentenceField(lv_obj_t* ta) {
+    return std::find(s_sentenceFields.begin(), s_sentenceFields.end(), ta) != s_sentenceFields.end();
+}
 
 /* The top-level object `o` belongs to: the child of the screen, or of the layer
  * a dialog was put on. That is the thing to move — moving the screen itself
@@ -199,6 +215,7 @@ void kbOpen(lv_obj_t* target, lv_obj_t* anchor, bool asSink) {
     if (asSink) {
         lcd_keys_set_key_sink(s_kb.keys, target);
         lcd_keys_set_mode(s_kb.keys, LCD_KEYS_MODE_TEXT_LOWER);
+        lcd_keys_set_sentence(s_kb.keys, false);
     } else {
         lcd_keys_set_key_sink(s_kb.keys, nullptr);
         lcd_keys_set_textarea(s_kb.keys, target);
@@ -211,12 +228,12 @@ void kbOpen(lv_obj_t* target, lv_obj_t* anchor, bool asSink) {
         lcd_keys_set_mode(s_kb.keys, numeric ? LCD_KEYS_MODE_NUMBER
                                              : LCD_KEYS_MODE_TEXT_LOWER);
 
-        /* A TEXT FIELD OPENED EMPTY STARTS A SENTENCE, so shift is armed for
-         * its first letter — and the keyboard SAYS so, shift standing blue,
-         * where a field that quietly upper-cased the letter could only be
-         * argued with by typing it and going back. One tap refuses it. */
-        const char* cur = lv_textarea_get_text(target);
-        if(!numeric && (!cur || !cur[0])) lcd_keys_arm_shift(s_kb.keys);
+        /* Only a field that holds MESSAGES starts sentences; a hostname, a
+         * password or an address is typed as it is meant. In one that does,
+         * shift is armed whenever it stands empty, and the keyboard SAYS so —
+         * shift standing blue, where a field that quietly upper-cased the
+         * letter could only be argued with by typing it and going back. */
+        lcd_keys_set_sentence(s_kb.keys, !numeric && kbIsSentenceField(target));
     }
 
     s_kb.target = target;
@@ -328,4 +345,10 @@ void lcdKeyboardClose(void) { kbClose(); }
 void lcdKeyboardAttach(lv_obj_t* ta) {
     if (!ta) return;
     lv_obj_add_event_cb(ta, kbTapCb, LV_EVENT_CLICKED, nullptr);
+}
+
+void lcdKeyboardSentences(lv_obj_t* ta) {
+    if (!ta || kbIsSentenceField(ta)) return;
+    s_sentenceFields.push_back(ta);
+    lv_obj_add_event_cb(ta, kbSentenceGoneCb, LV_EVENT_DELETE, nullptr);
 }

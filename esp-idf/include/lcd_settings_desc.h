@@ -122,6 +122,12 @@ typedef struct lcd_row_t {
      * carries one right-aligns, so the entry and its word read as one thing. */
     const char* unit           = nullptr;
     bool        short_         = false;     /* a third of the usual field width */
+    /* A text field that ends at a character: typing `split_at` (or entering text
+     * holding one) keeps what is before it here and carries the rest into the
+     * sibling field `split_to`, where the caret goes — "host:port" typed into a
+     * host field. The character itself is never stored. Form fields only. */
+    const char* split_at       = nullptr;
+    const char* split_to       = nullptr;
     const char* dflt           = nullptr;   /* form prefill; may template. Never seeded */
     const struct lcd_action_t* act      = nullptr;   /* button */
     const struct lcd_collection_t* coll = nullptr;   /* list */

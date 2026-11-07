@@ -88,9 +88,9 @@
  * same place. The bottom row holds still across both: away in one corner, enter
  * in the other, and the key that changes the layout just inside enter.
  *
- * SPACE TWICE, QUICKLY, ENDS THE SENTENCE — ". " and shift armed for the letter
- * that starts the next one, as a phone keyboard does. Only where a word
- * actually ended.
+ * SPACE TWICE, QUICKLY, ENDS THE SENTENCE — ". " and, in a field that starts
+ * sentences (lcd_keys_set_sentence), shift armed for the letter that starts the
+ * next one, as a phone keyboard does. Only where a word actually ended.
  *
  * What is around it — which field the keys are pointed at, lifting the screen
  * clear of them, the crossed-out keyboard putting them away — is not here: that
@@ -202,18 +202,22 @@ void lcd_keys_set_textarea(lv_obj_t * kb, lv_obj_t * ta);
 void lcd_keys_set_key_sink(lv_obj_t * kb, lv_obj_t * sink);
 
 /**
- * Arm shift for one key, as pressing it once would. For whoever knows that a
- * capital belongs next — a field being opened empty, a sentence just ended.
+ * Say whether the field being typed into STARTS SENTENCES — a message being
+ * composed, not a hostname, a password or an address. Set per field, after
+ * pointing the keys at it; off is the default every other field gets.
  *
- * The point of saying it HERE rather than capitalising the letter as it lands is
- * that the keyboard shows the state: shift goes blue, and one tap on it refuses
- * the capital. A field that quietly upper-cases its first letter can only be
- * argued with after the fact. Ignored while caps is locked, which is a state the
- * operator chose over a guess about a sentence.
+ * In such a field shift arms itself for the first letter whenever the field is
+ * empty — on opening, and again when the only character is rubbed out — and for
+ * the letter after a sentence ended with a double space. The keyboard SHOWS
+ * that: shift goes blue, and one tap on it refuses the capital, which also
+ * stops an emptied field arming it again until the next field. A shift the
+ * keyboard armed capitalises A-Z only; a digit, a symbol or backspace under it
+ * is the plain key, and spends it.
  *
  * @param kb        pointer to a keyboard object
+ * @param on        the field starts sentences
  */
-void lcd_keys_arm_shift(lv_obj_t * kb);
+void lcd_keys_set_sentence(lv_obj_t * kb, bool on);
 
 /**
  * The face the long-press chooser draws its characters in, which also sets how

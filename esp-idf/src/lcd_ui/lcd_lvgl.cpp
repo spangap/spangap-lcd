@@ -24,7 +24,8 @@
 #include "freertos/queue.h"
 
 #include <algorithm>          /* std::clamp */
-#include <vector>             /* the tracked-dialog list */
+#include <vector>             /* the tracked-dialog list, the awake holders */
+#include <string>
 #include <cstdint>
 
 /* Draw-strip byte budget, SPI transport only (the RGB strip is stated in lines
@@ -539,6 +540,7 @@ static bool        s_dimmed     = false;     /* in the grace window */
 static int         s_blankMs    = 0;       /* <=0 = never time out */
 static volatile bool s_mirrorWant = false; /* desired hold (set from any task; authoritative) */
 static bool        s_mirrorHold = false;   /* applied hold (lcd task): stay awake, no blank */
+static std::vector<std::string> s_awakeHolders;   /* lcdHoldAwake's holders (lcd task) */
 static bool        s_screenOff  = false;   /* true == fully asleep: panel off, loop skips render */
 static void        tickTimerRun(bool on);  /* LVGL tick esp_timer; stopped while blanked (defined below) */
 static bool        s_fadingOut  = false;   /* backlight ramping down; still rendering to drive it */
@@ -703,11 +705,14 @@ static void dimLeave(void) {
     if (!s_screenOff && !s_fadingOut) backlightFadeTo(s_blTarget, 200);
 }
 
+/* Something holds the panel awake: a connected remote viewer
+ * (lcdMirrorKeepAwake) or a program (lcdHoldAwake). */
+static bool awakeHeld(void) { return s_mirrorHold || !s_awakeHolders.empty(); }
+
 static void armBlankTimer(void) {
     if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
-    /* A connected remote viewer holds the panel awake: never arm the blank timer
-     * until it disconnects (lcdMirrorKeepAwake). */
-    if (s_mirrorHold || s_blankMs <= 0 || s_screenOff) return;
+    /* Held awake: never arm the blank timer until the last hold lets go. */
+    if (awakeHeld() || s_blankMs <= 0 || s_screenOff) return;
     s_blankTimer = lv_timer_create([](lv_timer_t*) { s_blankTimer = nullptr; dimEnter(); },
                                    (uint32_t)s_blankMs, nullptr);
     lv_timer_set_repeat_count(s_blankTimer, 1);   /* one-shot: fires once, self-deletes */
@@ -766,28 +771,43 @@ void lcdInactivitySetTimeout(int seconds) {
  * lcdRun's send timeout) can never strand the panel awake with the blank timer
  * suspended. The loop re-runs this within the status-clock cadence and restores the
  * configured timeout. Cheap: a volatile compare that early-returns when settled. */
+/* A hold was taken: wake, undim, and stop the countdown. Leave standby the one
+ * way anything leaves it: by clearing the key the board owns. Calling
+ * lcdScreenWake() here instead would light the panel behind the board's back —
+ * sys.standby would stay set (its input still powered down, its wake source
+ * still armed), and the blank timer's later `sys.standby = 1` would be a
+ * no-change write that storage dedups away, so no subscriber ever sees it and
+ * the screen never blanks again. */
+static void holdTaken(void) {
+    storageSet("sys.standby", 0);
+    if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
+    dimLeave();
+}
+
 void lcdMirrorApplyHold(void) {
     bool want = s_mirrorWant;
     if (want == s_mirrorHold) return;
     s_mirrorHold = want;
-    if (want) {
-        /* Leave standby the one way anything leaves it: by clearing the key the
-         * board owns. Calling lcdScreenWake() here instead would light the panel
-         * behind the board's back — sys.standby would stay set (its input still
-         * powered down, its wake source still armed), and the blank timer's later
-         * `sys.standby = 1` would be a no-change write that storage dedups away,
-         * so no subscriber ever sees it and the screen never blanks again. */
-        storageSet("sys.standby", 0);
-        if (s_blankTimer) { lv_timer_delete(s_blankTimer); s_blankTimer = nullptr; }
-        dimLeave();                     /* a viewer connecting is somebody being there */
-    } else {
-        armBlankTimer();                /* restore the configured timeout */
-    }
+    if (want) holdTaken();              /* a viewer connecting is somebody being there */
+    else      armBlankTimer();          /* restore the configured timeout, unless still held */
 }
 
 void lcdMirrorKeepAwake(bool on) {
     s_mirrorWant = on;                   /* authoritative; the lcd loop reconciles this */
     lcdRun([](void*) { lcdMirrorApplyHold(); });   /* prompt apply; a dropped run self-heals */
+}
+
+void lcdHoldAwake(const char* who, bool on) {
+    if (!who) return;
+    auto it = std::find(s_awakeHolders.begin(), s_awakeHolders.end(), who);
+    if (on == (it != s_awakeHolders.end())) return;
+    if (on) {
+        s_awakeHolders.emplace_back(who);
+        holdTaken();
+    } else {
+        s_awakeHolders.erase(it);
+        armBlankTimer();
+    }
 }
 
 /* Register user input: re-arm the inactivity timer, and record that somebody is

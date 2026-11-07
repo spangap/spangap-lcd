@@ -109,7 +109,7 @@ void growNow(lv_obj_t* ta, InputCtx* c) {
  * the letter itself as it lands — silent, but there is no other surface to say
  * it on. Where typing comes off the panel, the capital IS the on-screen
  * keyboard's shift: armed for one letter, standing blue, and one tap on it
- * refuses the capital before it is typed (lcd_keys_arm_shift, from
+ * refuses the capital before it is typed (lcd_keys_set_sentence, from
  * lcd_keyboard.cpp as the field opens). Doing BOTH would put back the very thing
  * the blue shift is there to fix — an operator who turns shift off and gets a
  * capital anyway — so while the panel keyboard is pointed at this box, the box
@@ -243,6 +243,7 @@ lv_obj_t* lcdInputBoxCreate(lv_obj_t* parent, int minLines, int maxLines) {
     lv_obj_set_user_data(ta, c);
     lv_obj_add_event_cb(ta, boxEvent, LV_EVENT_ALL, nullptr);
     lv_obj_add_event_cb(ta, keyPreCb, (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), nullptr);
+    lcdKeyboardSentences(ta);                         /* a message: capitals on the panel's keys too */
     growNow(ta, c);                                   /* start at minLines */
     return ta;
 }

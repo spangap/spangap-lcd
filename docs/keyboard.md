@@ -139,12 +139,17 @@ pad, with no letters to leave it for.
 
 ## What it does without being asked
 
-- **A capital starts an empty field, and follows a `. `** — as a phone keyboard
-  does. Under this keyboard that *is* its shift key: armed and standing blue, so
-  one tap refuses it. A field that quietly upper-cased its first letter could
-  only be argued with after the fact.
-- **Space twice, quickly, ends the sentence** — `. ` and shift armed for the
-  letter that starts the next one. Only where a word precedes it.
+- **In a message, a capital starts an empty field and follows a `. `** — as a
+  phone keyboard does. Under this keyboard that *is* its shift key: armed and
+  standing blue, so one tap refuses it. A field that quietly upper-cased its
+  first letter could only be argued with after the fact. It arms again whenever
+  the field is rubbed out back to empty, unless shift was turned off by hand in
+  that field. A shift armed this way capitalises A–Z only: a digit, a symbol or
+  backspace under it is the plain key. Only message fields do this
+  (`lcdKeyboardSentences`, which `lcdInputBoxCreate` calls for its own field) —
+  a hostname, a password or an address is typed as it is meant.
+- **Space twice, quickly, ends the sentence** — `. `, and in a message shift
+  armed for the letter that starts the next one. Only where a word precedes it.
 - **Enter in a one-line field submits and puts the keys away**, which is the
   Enter a device with keys would have sent. In a multi-line field it is a
   newline and the keys stay — unless that field submits on Enter, which some do.
