@@ -425,8 +425,8 @@ void lcdIconRequest(const char* base, int px);
 bool lcdIconReady(const char* base, int px);
 
 /** The cached descriptor for (base, px), or nullptr until it lands. The pointer
- *  is stable for the cache's lifetime — hand it to lv_image_set_src(). A UI-zoom
- *  icon-cache reset invalidates it, so re-source on your next rebuild. */
+ *  is stable for the device's uptime — the cache never drops an entry — so hand
+ *  it to lv_image_set_src() and keep it. */
 const lv_image_dsc_t* lcdIconDsc(const char* base, int px);
 
 /* Bundled LVGL bitmap fonts a program may set directly on its own widgets with

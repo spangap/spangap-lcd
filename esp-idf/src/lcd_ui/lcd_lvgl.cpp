@@ -20,6 +20,8 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h" /* esp_ptr_external_ram — where a dead image source lies */
+#include "shell_internal.h"   /* the running apps, to say whose tree a widget is in */
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 
@@ -27,6 +29,8 @@
 #include <vector>             /* the tracked-dialog list, the awake holders */
 #include <string>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 /* Draw-strip byte budget, SPI transport only (the RGB strip is stated in lines
  * — see the bring-up). Each flush is one SPI transfer, so a strip must fit
@@ -868,6 +872,99 @@ static void tickTimerRun(bool on) {
     }
 }
 
+/* ---- who is holding a dead image ----
+ * LVGL refuses to draw an image whose source does not start with the image
+ * magic, and says so by address alone: "image src 0x3c7802f8 invalid magic".
+ * That source is a widget still pointing at memory that has been handed back,
+ * and the address says nothing about which widget. So when LVGL reports one,
+ * every image on the display (canvases included — a canvas is an image) is
+ * searched for that source, and each holder is described: what it is, whether
+ * it is on screen, the nearest label beside it, and which app's tree it sits
+ * in. Once per address: the refusal repeats every frame the widget is redrawn.
+ * Lcd task — LVGL only logs from inside its own calls. */
+namespace {
+
+struct DeadSrcHunt { const void* src; int found; };
+
+/* The text of the nearest label: among the widget's own siblings first, then
+ * its parent's, a few levels up — the caption a person would read beside it. */
+std::string nearbyLabel(lv_obj_t* obj) {
+    for (lv_obj_t* p = lv_obj_get_parent(obj); p && obj; obj = p, p = lv_obj_get_parent(p)) {
+        for (uint32_t i = 0, n = lv_obj_get_child_count(p); i < n; i++) {
+            lv_obj_t* c = lv_obj_get_child(p, (int32_t)i);
+            if (!lv_obj_check_type(c, &lv_label_class)) continue;
+            const char* t = lv_label_get_text(c);
+            if (t && *t) return std::string(t).substr(0, 40);
+        }
+    }
+    return "";
+}
+
+/* The app whose root layer this widget lives under, or "" for the shell's own. */
+const char* ownerApp(lv_obj_t* obj) {
+    for (lv_obj_t* p = obj; p; p = lv_obj_get_parent(p))
+        for (LcdApp* a : shellApps())
+            if (a->root() == p) return a->cfg().name ? a->cfg().name : "?";
+    return "";
+}
+
+lv_obj_tree_walk_res_t deadSrcVisit(lv_obj_t* obj, void* ud) {
+    auto* h = static_cast<DeadSrcHunt*>(ud);
+    if (!lv_obj_has_class(obj, &lv_image_class) || lv_image_get_src(obj) != h->src)
+        return LV_OBJ_TREE_WALK_NEXT;
+    h->found++;
+    bool hidden = false;
+    for (lv_obj_t* p = obj; p; p = lv_obj_get_parent(p))
+        if (lv_obj_has_flag(p, LV_OBJ_FLAG_HIDDEN)) { hidden = true; break; }
+    lv_area_t a;
+    lv_obj_get_coords(obj, &a);
+    const char* app = ownerApp(obj);
+    warn("lvgl: dead src %p held by %s %p (%s, %ld,%ld %ldx%ld) app '%s' near '%s'\n",
+         h->src, lv_obj_check_type(obj, &lv_canvas_class) ? "canvas" : "image", obj,
+         hidden ? "hidden" : "shown", (long)a.x1, (long)a.y1,
+         (long)lv_area_get_width(&a), (long)lv_area_get_height(&a),
+         *app ? app : "(shell)", nearbyLabel(obj).c_str());
+    return LV_OBJ_TREE_WALK_NEXT;
+}
+
+void lvglDeadImageSrc(const char* buf) {
+    if (!strstr(buf, "invalid magic")) return;
+    const char* at = strstr(buf, "image src ");
+    if (!at) return;
+    const void* src = (const void*)strtoul(at + 10, nullptr, 16);
+    static const void* s_last = nullptr;
+    if (!src || src == s_last) return;
+    s_last = src;
+
+    /* What sits at the address now — a freed block's allocator bookkeeping, or
+     * whatever reused it. Only read where it is RAM at all. */
+    if (esp_ptr_external_ram(src) || esp_ptr_internal(src)) {
+        const uint8_t* b = static_cast<const uint8_t*>(src);
+        warn("lvgl: dead src %p (%s) holds %02x %02x %02x %02x %02x %02x %02x %02x "
+             "%02x %02x %02x %02x %02x %02x %02x %02x\n", src,
+             esp_ptr_external_ram(src) ? "psram" : "internal",
+             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+             b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+    }
+
+    LcdApp* fg = shellForeground();
+    ShellScreen scr = shellScreen();
+    warn("lvgl: dead src %p while %s, foreground '%s'\n", src,
+         scr == ShellScreen::APP ? "in an app" : scr == ShellScreen::RECENTS ? "in the switcher"
+                                                                             : "at the launcher",
+         fg && fg->cfg().name ? fg->cfg().name : "");
+
+    DeadSrcHunt h{ src, 0 };
+    lv_obj_t* roots[] = { lv_screen_active(), lv_display_get_layer_bottom(s_disp),
+                          lv_display_get_layer_top(s_disp), lv_display_get_layer_sys(s_disp) };
+    for (lv_obj_t* r : roots) if (r) lv_obj_tree_walk(r, deadSrcVisit, &h);
+    /* No widget holds it: the source was a draw call's own (a snapshot, a
+     * canvas layer), not a widget's. */
+    if (!h.found) warn("lvgl: dead src %p is held by no image widget\n", src);
+}
+
+}  // namespace
+
 bool lcdLvglInit(void) {
     esp_lcd_panel_io_handle_t io = nullptr;
     s_panel = lcdPanelInit(&io, &s_w, &s_h);
@@ -893,7 +990,7 @@ bool lcdLvglInit(void) {
         /* buf carries LVGL's own "[Warn] file:line\t" prefix + newline; pass it
          * through, mapped to our severity. */
         switch (level) {
-            case LV_LOG_LEVEL_ERROR: ESP_LOGE("lvgl", "%s", buf); break;
+            case LV_LOG_LEVEL_ERROR: ESP_LOGE("lvgl", "%s", buf); lvglDeadImageSrc(buf); break;
             case LV_LOG_LEVEL_WARN:  ESP_LOGW("lvgl", "%s", buf); break;
             case LV_LOG_LEVEL_INFO:  ESP_LOGI("lvgl", "%s", buf); break;
             default:                 ESP_LOGD("lvgl", "%s", buf); break;

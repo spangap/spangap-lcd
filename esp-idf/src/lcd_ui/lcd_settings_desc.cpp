@@ -530,6 +530,16 @@ void formApplyValue(FormField& f) {
     }
 }
 
+/** Whether a form field's gate lets it show. A gate written as a template
+ *  ("{dhcp}") names a SIBLING FIELD and is answered from the local buffer; a
+ *  bare key names storage. */
+bool formFieldOn(const FormField& f) {
+    if (!f.row->when_key || !*f.row->when_key) return true;
+    return strchr(f.row->when_key, '{')
+        ? truthy(substWith(f.row->when_key, formLookup))
+        : truthy(storageGetStr(f.row->when_key, ""));
+}
+
 void formRefresh() {
     if (!s_form) return;
     for (auto& f : s_form->fields) {
@@ -542,11 +552,7 @@ void formRefresh() {
             if (v != f.value) { f.value = v; formApplyValue(f); }
         }
         if (f.row->when_key && *f.row->when_key && f.rowObj) {
-            /* A gate written as a template ("{dhcp}") names a SIBLING FIELD and
-             * is answered from the local buffer; a bare key names storage. */
-            bool on = strchr(f.row->when_key, '{')
-                ? truthy(substWith(f.row->when_key, formLookup))
-                : truthy(storageGetStr(f.row->when_key, ""));
+            bool on = formFieldOn(f);
             if (on) lv_obj_remove_flag(f.rowObj, LV_OBJ_FLAG_HIDDEN);
             else    lv_obj_add_flag   (f.rowObj, LV_OBJ_FLAG_HIDDEN);
             if (f.rowObj2) {   /* a timezone field's second row gates with it */
@@ -583,10 +589,15 @@ void kbClose(bool commit) {
     s_kb.f = nullptr;
 }
 
+/* Enter and the keyboard's hide key both keep what was typed: putting the
+ * keyboard away is not how anything is discarded (lcd_keyboard.cpp), and this
+ * only reaches the form's buffer — nothing is stored until the form's own Save.
+ * A secret field reads as dots whether or not it took the edit, so a hide key
+ * that dropped it would leave Save sending the old value with no sign of it. The
+ * escape (lcdModalTrack, below) is the one way out that does not commit. */
 void kbEvent(lv_event_t* e) {
     lv_event_code_t c = lv_event_get_code(e);
-    if      (c == LV_EVENT_READY)  kbClose(true);
-    else if (c == LV_EVENT_CANCEL) kbClose(false);
+    if (c == LV_EVENT_READY || c == LV_EVENT_CANCEL) kbClose(true);
 }
 
 void onFieldSplitInsert(lv_event_t* e);   /* fwd: a split field's typing */
@@ -1000,9 +1011,13 @@ void buildFormField(lv_obj_t* parent, FormField& f, bool underHeading) {
 void onFormSubmit(lv_event_t*) {
     if (!s_form) return;
     cJSON* obj = cJSON_CreateObject();
+    /* A field its gate hides is not in force and goes out empty, whatever its
+     * buffer holds — a default it was given, or what was typed before the gate
+     * closed. Empty is an erase to the owning task, so clearing the field that
+     * opens the gate clears the ones behind it too (no IP: no netmask either). */
     for (auto& f : s_form->fields) {
         if (!f.row->field || !*f.row->field) continue;
-        cJSON_AddStringToObject(obj, f.row->field, f.value.c_str());
+        cJSON_AddStringToObject(obj, f.row->field, formFieldOn(f) ? f.value.c_str() : "");
     }
     /* An item editor carries the identity it is committing AGAINST, separately
      * from the fields — so editing the id field itself is an ordinary edit and

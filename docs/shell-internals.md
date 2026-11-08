@@ -592,15 +592,25 @@ the picker's caption says it will happen.
 - **PSRAM-stack tasks must not `printf`** — use `info()`/`warn()`/etc. LVGL's
   own diagnostics are covered: `lv_log_register_print_cb` routes them into the
   logger tagged `lvgl` (`lcd_lvgl.cpp`), level-mapped, never printf.
+- **A dead image source is named, not just reported.** LVGL refuses an image
+  whose source lacks the image magic (`image src 0x… invalid magic`) — a widget
+  still pointing at freed memory — and gives only the address. The log callback
+  answers that one error by walking the active screen and the three layers for
+  every image (canvases included) sourcing that address, and logs each holder:
+  image or canvas, shown or hidden, its coordinates, the nearest label beside
+  it, and the app whose root it sits under; plus the shell screen, the
+  foreground app, and the 16 bytes now at the address. "Held by no image
+  widget" means the source was a draw call's own (a snapshot, a canvas layer).
+  Once per address, since the refusal repeats every frame.
 - **Enabling `LV_USE_FREETYPE` alone does not link FreeType** — LVGL's
   `esp.cmake` never links it; the `target_link_libraries(lvgl PRIVATE
   freetype)` glue in `CMakeLists.txt` is required (§9). Symptom of losing it:
   `lv_freetype.c` can't find `ft2build.h`.
-- **Don't call `lcdFontsReset()`/`lcdIconsReset()` while widgets still hold the
-  results** — a label styled with a freed `lv_font_t*` or an `lv_image` sourcing
-  a freed descriptor crashes on the next redraw. The launcher rebuild shows the
-  safe order: delete the widgets first, reset, rebuild (and it skips the icon
-  reset while recents may still show a descriptor).
+- **Don't call `lcdFontsReset()` while widgets still hold the results** — a
+  label styled with a freed `lv_font_t*` crashes on the next redraw. The
+  launcher rebuild shows the safe order: delete the widgets first, reset,
+  rebuild. Icons have no reset: the cache never drops an entry, so an
+  `lcdIconDsc()` pointer is good for the device's uptime.
 - **`nsvgParse` mutates its input** — never hand it the spanfs mmap window;
   copy the SVG out first (§7).
 - **A stylesheet sheet must be `extern const`** — a namespace-scope `const` has

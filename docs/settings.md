@@ -219,6 +219,12 @@ puts a button in front of it:
   the only dialog with inputs — a pane row writes its key the instant you touch
   it, and a set of fields that must be judged together cannot.
 
+  A field may carry a `when_key` gate; written as a template (`"{ip}"`) it names
+  a sibling field and follows the buffer as it is typed. A field its gate hides
+  is not in force: it submits empty whatever it holds, its `default:` included,
+  so clearing the field that opens the gate erases the ones behind it. Both
+  surfaces submit the same way.
+
   A form's rows are compact ones (three quarters of a pane row's height) at a
   step below the pane's body size, and everything under the title — fields, the
   rejection line, and the buttons — is in one scroll container. The buttons are

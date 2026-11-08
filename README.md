@@ -198,7 +198,8 @@ same shape — see the T-Deck's poll task and its replayed tap.
 When a touch controller is selected, the component publishes the probe result
 as the `lcd.touch` ephemeral (for a board's Hardware pane), gates its reads
 while `sys.standby` is truthy (or wakes the device on one, where
-`s.lcd.wake_on_touch` says so), offers the FT5x06's detect threshold as a
+`s.lcd.wake_on_touch` says so), discards whatever is on the glass at each wake
+until it has lifted, offers the FT5x06's detect threshold as a
 Display slider (`s.lcd.touch_sens`, below — the GT911 keeps its thresholds in a
 checksummed config table and gets no row), and serves the `lcd.multi_touch`
 request key — an ephemeral a consumer (e.g. maps) sets truthy while it wants
@@ -531,7 +532,7 @@ All keys are owned by this component. `s.*` settings sync to the browser.
 | `s.lcd.inactivity_timeout` | `30` | Seconds of no input before the backlight drops right down; `sys.standby` follows 10 s later. `0` = never. |
 | `s.lcd.date_format` | `"%d %b %Y, %H:%M"` | `strftime` format for the status-bar clock (live). |
 | `s.lcd.launcher_order` | `""` | The launcher's tile order, a comma-separated list of app names — written by dragging an icon in the grid's edit mode, editable by hand, re-sorts live. An app it doesn't name takes its place from the build's `LCD_LAUNCHER_ORDER`, and only then from install order. |
-| `s.lcd.wake_on_touch` | board (`LCD_WAKE_ON_TOUCH_DEFAULT`) | Whether the glass wakes the device from standby, as the board's button does. Seeded only where there is touch to wake with (this controller's or a board HAL's); read fresh at each standby, which is when the INT is armed as a light-sleep wake source. The waking finger is swallowed — it wakes and does nothing else. |
+| `s.lcd.wake_on_touch` | board (`LCD_WAKE_ON_TOUCH_DEFAULT`) | Whether the glass wakes the device from standby, as the board's button does. Seeded only where there is touch to wake with (this controller's or a board HAL's); read fresh at each standby, which is when the INT is armed as a light-sleep wake source. The waking finger is swallowed — it wakes and does nothing else — and with the key off, a touch made in standby is discarded when something else wakes the device. |
 | `s.lcd.touch_sens` | `50` | How light a touch registers, 0..100 (higher = lighter), applied live. FT5x06 only — it is that part's `ID_G_THGROUP` threshold, mapped `120 - sens`, so 50 is the value its driver writes at init. Seeded and offered only where that controller is selected. |
 | `sys.standby` | — | Ephemeral. Set by the component on inactivity, set/cleared by the board's button; the board acts on it. |
 

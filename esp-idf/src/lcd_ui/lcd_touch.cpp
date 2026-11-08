@@ -47,7 +47,8 @@
  * In standby (sys.standby truthy) reads are gated off — the INT still fires,
  * the sample is discarded — so a resting finger cannot hold the device awake;
  * waking is the board's button, unless `s.lcd.wake_on_touch` says the glass
- * wakes it too (see the block over touchWakeArm).
+ * wakes it too (see the block over touchWakeArm). Nothing touched in the dark
+ * reaches the UI, however the device wakes (see s_wakeAbsorb).
  */
 #include "lcd_internal.h"
 #include "cli.h"            /* the `touch` bring-up command */
@@ -151,9 +152,13 @@ static uint32_t           s_ptReads   = 0;   /* …that came back with a finger 
  * scanning current is paid for as long as the rail is up, whatever this says. */
 static bool                   s_wakeArmed = false;
 static int                    s_wakeLevel = 0;   /* INT level that means "finger" (see touchWakeArm) */
-/* The finger that woke the device is swallowed until it lifts — waking is all
- * it does, exactly as a board's wake press is absorbed rather than clicking
- * what the dark screen happened to be showing. */
+/* Every wake opens with the glass absorbed until it has read empty for kLiftReads
+ * reads together, whatever did the waking. A finger that woke the device wakes
+ * and does nothing else, exactly as a board's wake press is absorbed rather than
+ * clicking what the dark screen happened to be showing; a finger already resting
+ * when a button wakes it is no different; and a GT911 holds the first touch it
+ * saw for as long as nobody reads it, so the first read after a dark spell can
+ * return a touch that lifted long ago. */
 static bool                   s_wakeAbsorb = false;
 
 static bool wakeOnTouch(void) { return storageGetInt("s.lcd.wake_on_touch", 0) != 0; }
@@ -305,8 +310,9 @@ static void touchSamplerTask(void*) {
     int  emptyReads = 0;      /* reads with no finger in a row; see kLiftReads */
     int16_t xs[LCD_TOUCH_MAXPTS], ys[LCD_TOUCH_MAXPTS];
     for (;;) {
-        const bool byInt = ulTaskNotifyTake(pdTRUE,
-                                            down ? pdMS_TO_TICKS(kTrackMs) : idleWait()) > 0;
+        const bool byInt = ulTaskNotifyTake(pdTRUE, (down || s_wakeAbsorb)
+                                                        ? pdMS_TO_TICKS(kTrackMs)
+                                                        : idleWait()) > 0;
         int n = 0;
 
         if (s_asleep) {
@@ -328,7 +334,6 @@ static void touchSamplerTask(void*) {
             if (s_wakeArmed)
                 gpio_intr_enable((gpio_num_t)CONFIG_LCD_TOUCH_INT_PIN);  /* the wake ISR silenced it */
             if (!touchSample(xs, ys, &n) || n == 0) continue;
-            s_wakeAbsorb = true;
             storageSet("sys.standby", 0);       /* the board takes it from here */
             continue;
         }
@@ -340,11 +345,14 @@ static void touchSamplerTask(void*) {
          * debug` turns it on. */
         if (n > 0) dbg("%s: %d pt, raw %d,%d\n", byInt ? "int" : "poll", n, xs[0], ys[0]);
 
-        /* The finger that woke the device: it wakes and does nothing else, so
-         * it is watched (to know when it lifts) but never reported. */
+        /* Just woken: whatever is on the glass, or still held from the dark, is
+         * watched (to know when it lifts) but never reported. */
         if (s_wakeAbsorb) {
-            down = n > 0;
-            if (n == 0) s_wakeAbsorb = false;
+            emptyReads = n > 0 ? 0 : emptyReads + 1;
+            if (emptyReads >= kLiftReads) {
+                s_wakeAbsorb = false;
+                emptyReads = 0;
+            }
             continue;
         }
 
@@ -650,8 +658,16 @@ void lcdTouchCtlInit(void) {
      * source; the key is read here, at the transition, so a change made while
      * the screen was on is in force the moment it goes off. */
     storageSubscribeChanges("sys.standby", ON_CHANGE {
-        s_asleep = atoi(val) != 0;
+        const bool asleep = atoi(val) != 0;
+        const bool waking = s_asleep && !asleep;
+        /* Set while the sampler still sees s_asleep, so no read lands between
+         * the gate opening and the absorb closing. */
+        s_wakeAbsorb = waking;
+        if (waking && s_edges) xQueueReset(s_edges);
+        s_asleep = asleep;
         touchWakeArm(s_asleep && wakeOnTouch());
+        /* Its idle wait may be the INT alone, and the absorb needs reads to end. */
+        if (waking && s_sampler) xTaskNotifyGive(s_sampler);
     });
     touchCtlBringup();
     cliRegisterCmd("touch", cliTouch);
